@@ -3,3 +3,4 @@ default_version = '@CARGO_VERSION@'
 module_pathname = '$libdir/timescaledb_vector'
 relocatable = false
 superuser = true
+requires = 'vector'
