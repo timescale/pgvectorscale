@@ -45,7 +45,7 @@ The TimescaleDB Vecotr project is still in the initial planning stage as we deci
 🔨 Testing
 See above for prerequisites and installation instructions.
 
-You can run tests against a postgres version pg12, pg13, pg14, or pg15 using
+You can run tests against a postgres version pg15 using
 
 cargo pgx test ${postgres_version}
 🐯 About TimescaleDB
