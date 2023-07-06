@@ -1,0 +1,27 @@
+[package]
+name = "timescaledb_vector"
+version = "0.0.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["pg15"]
+pg15 = ["pgrx/pg15", "pgrx-tests/pg15" ]
+pg_test = []
+
+[dependencies]
+pgrx = "=0.9.7"
+
+[dev-dependencies]
+pgrx-tests = "=0.9.7"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
