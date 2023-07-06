@@ -9,7 +9,10 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 ```
 and build tools, the postgres headers, in the preferred manner for your system. You may also need to install OpenSSl. For Ubuntu you can follow the postgres install instructions then run
 
+```shell
 sudo apt-get install make gcc pkg-config clang postgresql-server-dev-15 libssl-dev
+```
+
 Next you need cargo-pgx, which can be installed with
 ```shell
 cargo install --locked cargo-pgrx
@@ -46,8 +49,9 @@ The TimescaleDB Vecotr project is still in the initial planning stage as we deci
 See above for prerequisites and installation instructions.
 
 You can run tests against a postgres version pg15 using
-
-cargo pgx test ${postgres_version}
+```shell
+cargo pgrx test ${postgres_version}
+```
 🐯 About TimescaleDB
 TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 million of metrics per second, supports native compression, handles high cardinality, and offers native time-series capabilities, such as data retention policies, continuous aggregate views, downsampling, data gap-filling and interpolation.
 
