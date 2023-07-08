@@ -3,6 +3,7 @@ use pgrx::prelude::*;
 pgrx::pg_module_magic!();
 
 mod access_method;
+mod util;
 
 #[allow(non_snake_case)]
 #[pg_guard]
