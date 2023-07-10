@@ -56,6 +56,10 @@ impl WritablePage {
         &self.buffer
     }
 
+    pub fn get_free_space(&self) -> usize {
+        unsafe { pg_sys::PageGetFreeSpace(self.page) }
+    }
+
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
     pub unsafe fn commit(mut self) {

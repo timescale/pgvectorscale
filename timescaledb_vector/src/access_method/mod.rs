@@ -2,6 +2,7 @@ use pgrx::*;
 
 mod build;
 mod cost_estimate;
+mod model;
 pub mod options;
 mod scan;
 mod vacuum;
