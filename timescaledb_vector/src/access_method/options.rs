@@ -98,7 +98,7 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options() -> spi::Result<()> {
         Spi::run(&format!(
-            "CREATE TABLE test(encoding vector);
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING tsv(encoding)
@@ -116,7 +116,7 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options_defaults() -> spi::Result<()> {
         Spi::run(&format!(
-            "CREATE TABLE test(encoding vector);
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING tsv(encoding);",

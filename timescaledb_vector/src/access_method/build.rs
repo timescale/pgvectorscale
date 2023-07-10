@@ -1,35 +1,47 @@
-use pgrx::pg_sys::{BufferGetBlock, BufferGetBlockNumber, Pointer};
+use pgrx::pg_sys::{BufferGetBlock, BufferGetBlockNumber, Item, Pointer};
 use pgrx::*;
 
+use crate::access_method::model::PgVector;
 use crate::util::page;
+use crate::util::tape::Tape;
 use crate::util::*;
+
+use super::model;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
-struct TsvMetaPage {
+#[derive(Clone)]
+pub struct TsvMetaPage {
     /// random magic number for identifying the index
     magic_number: u32,
     /// version number for future-proofing
     version: u32,
     /// number of dimensions in the vector
-    num_dimensions: u32,
+    pub num_dimensions: u32,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
-    num_neighbors: u32,
+    pub num_neighbors: u32,
 }
 
-struct BuildState {
+struct BuildState<'a> {
     memcxt: PgMemoryContexts,
+    index_ralation: &'a PgRelation,
+    meta_page: TsvMetaPage,
     ntuples: usize,
+    tape: Tape,
 }
 
-impl BuildState {
-    fn new() -> Self {
+impl<'a> BuildState<'a> {
+    fn new(index_relation: &'a PgRelation, meta_page: TsvMetaPage) -> Self {
+        let mut tape = unsafe { Tape::new((**index_relation).as_ptr()) };
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
+            index_ralation: index_relation,
             ntuples: 0,
+            meta_page: meta_page,
+            tape: tape,
         }
     }
 }
@@ -47,7 +59,11 @@ unsafe fn page_get_meta(page: pg_sys::Page, buffer: pg_sys::Buffer, new: bool) -
 
 /// Write out a new meta page.
 /// Has to be done as the first write to a new relation.
-unsafe fn write_meta_page(index: pg_sys::Relation, num_dimensions: u32, num_neighbors: u32) {
+unsafe fn write_meta_page(
+    index: pg_sys::Relation,
+    num_dimensions: u32,
+    num_neighbors: u32,
+) -> TsvMetaPage {
     let page = page::WritablePage::new(index);
     let meta = page_get_meta(*page, *(*(page.get_buffer())), true);
     (*meta).magic_number = TSV_MAGIC_NUMBER;
@@ -60,7 +76,9 @@ unsafe fn write_meta_page(index: pg_sys::Relation, num_dimensions: u32, num_neig
     let page_start = (*page) as Pointer;
     (*header).pd_lower = meta_end.offset_from(page_start) as _;
 
+    let mp = (*meta).clone();
     page.commit();
+    mp
 }
 
 #[pg_guard]
@@ -71,9 +89,12 @@ pub extern "C" fn ambuild(
 ) -> *mut pg_sys::IndexBuildResult {
     let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
-    unsafe { write_meta_page(indexrel, 1538, 50) };
 
-    let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation);
+    let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
+    assert!(dimensions > 0 && dimensions < 2000);
+    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, 50) };
+
+    let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
     result.heap_tuples = ntuples as f64;
@@ -105,8 +126,9 @@ fn do_heap_scan<'a>(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
+    meta_page: TsvMetaPage,
 ) -> usize {
-    let mut state = BuildState::new();
+    let mut state = BuildState::new(index_relation, meta_page);
 
     unsafe {
         pg_sys::IndexBuildHeapScan(
@@ -149,6 +171,12 @@ unsafe extern "C" fn build_callback_internal(
 
     state.ntuples = state.ntuples + 1;
     let values = std::slice::from_raw_parts(values, 1);
+
+    let vector = (*PgVector::from_datum(values[0])).to_slice();
+    let ip = ItemPointer::with_item_pointer_data(ctid);
+
+    let node = model::Node::new(vector, ip, &state.meta_page);
+    let index_pointer: ItemPointer = node.write(&mut state.tape);
 
     old_context.set_as_current();
     state.memcxt.reset();
