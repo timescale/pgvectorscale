@@ -8,7 +8,7 @@ use std::ops::Deref;
 use pgrx::*;
 
 use pgrx::pg_sys::{
-    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber, ForkNumber_MAIN_FORKNUM,
+    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber_MAIN_FORKNUM,
     InvalidBlockNumber, ReadBufferMode_RBM_NORMAL, Relation,
 };
 

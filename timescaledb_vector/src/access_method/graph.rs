@@ -1,8 +1,8 @@
 use std::{cmp::Ordering, collections::HashSet};
 
-use crate::util::{
-    ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
-};
+use pgrx::PgRelation;
+
+use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
     build::TsvMetaPage,
@@ -67,7 +67,13 @@ impl ListSearchResult {
         }
     }
 
-    fn new<G>(search_list_size: usize, graph: &G, init_ids: Vec<ItemPointer>, query: &[f32]) -> Self
+    fn new<G>(
+        index: &PgRelation,
+        search_list_size: usize,
+        graph: &G,
+        init_ids: Vec<ItemPointer>,
+        query: &[f32],
+    ) -> Self
     where
         G: Graph + ?Sized,
     {
@@ -77,27 +83,33 @@ impl ListSearchResult {
             inserted: HashSet::with_capacity(search_list_size),
         };
         for index_pointer in init_ids {
-            res.insert(graph, index_pointer, query);
+            res.insert(index, graph, index_pointer, query);
         }
         res
     }
 
-    fn insert<G>(&mut self, graph: &G, index_pointer: ItemPointer, query: &[f32])
-    where
+    fn insert<G>(
+        &mut self,
+        index: &PgRelation,
+        graph: &G,
+        index_pointer: ItemPointer,
+        query: &[f32],
+    ) where
         G: Graph + ?Sized,
     {
         //no point reprocessing a point. Distance calcs are expensive.
-        if !self.inserted.insert(index_pointer.clone()) {
+        if !self.inserted.insert(index_pointer) {
             return;
         }
 
-        let node = graph.read(index_pointer);
-        let vec = node.node.vector.as_slice();
+        let data_node = graph.read(index, index_pointer);
+        let node = data_node.get_archived_node();
+        let vec = node.vector.as_slice();
         let distance = distance(vec, query);
 
         let neighbor = ListSearchNeighbor::new(
             index_pointer,
-            node.node.heap_item_pointer.deserialize_item_pointer(),
+            node.heap_item_pointer.deserialize_item_pointer(),
             distance,
         );
         self._insert_neighbor(neighbor);
@@ -125,7 +137,7 @@ impl ListSearchResult {
         match neighbor {
             Some(n) => {
                 (*n).visited = true;
-                Some((n.index_pointer.clone(), n.distance))
+                Some((n.index_pointer, n.distance))
             }
             None => None,
         }
@@ -137,7 +149,7 @@ impl ListSearchResult {
 
     fn get_k_index_pointers(&self, k: usize) -> Vec<ItemPointer> {
         let mut k_closets = Vec::<ItemPointer>::with_capacity(k);
-        for i in (0..k) {
+        for i in 0..k {
             let item = self.get_closets_index_pointer(i);
             match item {
                 Some(pointer) => k_closets.push(pointer),
@@ -153,39 +165,55 @@ impl ListSearchResult {
 }
 
 pub trait Graph {
-    fn read<'b, 'd>(&'b self, index_pointer: ItemPointer) -> ReadableNode<'d>;
+    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode;
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>>;
-    fn get_neighbors(&self, neighbors_of: ItemPointer) -> Option<Vec<NeighborWithDistance>>;
-    fn get_meta_page(&self) -> &TsvMetaPage;
+    fn get_neighbors(
+        &self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+    ) -> Option<Vec<NeighborWithDistance>>;
+    fn get_meta_page(&self, index: &PgRelation) -> &TsvMetaPage;
 
+    /// greedy search looks for the closest neighbors to a query vector
+    /// You may think that this needs the "K" parameter but it does not,
+    /// instead it uses a search_list_size parameter (>K).
+    ///
+    /// The basic logic is you do a greedy search until you've evaluated the
+    /// neighbors of the `search_list_size` closest nodes.
+    ///
+    /// To get the K closest neighbors, you then get the first K items in the ListSearchResult
+    /// return items.
+    ///
+    /// Note: there may be a streaming implementation of this possible if we don't limit the size
+    /// of the ListSearchResult, and use  ListSearchResult as the state. Then you don't output item
+    /// i until you've visited all item up until i+window (e.g. i+10).
     fn greedy_search(
         &mut self,
+        index: &PgRelation,
         query: &[f32],
-        k: usize,
         search_list_size: usize,
     ) -> (ListSearchResult, Option<HashSet<NeighborWithDistance>>)
     where
         Self: Graph,
     {
-        assert!(k <= search_list_size);
-
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
             return (ListSearchResult::empty(search_list_size), None);
         }
-        let mut l = ListSearchResult::new(search_list_size, self, init_ids.unwrap(), query);
+        let mut l = ListSearchResult::new(index, search_list_size, self, init_ids.unwrap(), query);
 
         //OPT: Only build v when needed.
         let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(search_list_size);
         while let Some((index_pointer, distance)) = l.visit_closest() {
-            let neighbors = self.get_neighbors(index_pointer);
+            let neighbors = self.get_neighbors(index, index_pointer);
             if let None = neighbors {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
 
             for neighbor_index_pointer in neighbors.unwrap() {
                 l.insert(
+                    index,
                     self,
                     neighbor_index_pointer.get_index_pointer_to_neigbor(),
                     query,
@@ -204,13 +232,14 @@ pub trait Graph {
     /// if we save the factors or the distances and add incrementally. Not sure.
     fn prune_neighbors(
         &mut self,
+        index: &PgRelation,
         index_pointer: ItemPointer,
         new_neigbors: Vec<NeighborWithDistance>,
     ) -> Vec<NeighborWithDistance> {
         //TODO make configurable?
         let max_alpha = 1.2;
         //get a unique candidate pool
-        let mut candidates = match self.get_neighbors(index_pointer) {
+        let mut candidates = match self.get_neighbors(index, index_pointer) {
             Some(v) => v.clone(),
             None => vec![], //new point has no entry in the map yet
         };
@@ -224,7 +253,7 @@ pub trait Graph {
             }
         }
         //remove myself
-        if !hash.insert(index_pointer.clone()) {
+        if !hash.insert(index_pointer) {
             //prevent self-loops
             let index = candidates
                 .iter()
@@ -238,17 +267,18 @@ pub trait Graph {
 
         //sort by distance
         candidates.sort();
-        let mut results =
-            Vec::<NeighborWithDistance>::with_capacity(self.get_meta_page().num_neighbors as _);
+        let mut results = Vec::<NeighborWithDistance>::with_capacity(
+            self.get_meta_page(index).num_neighbors as _,
+        );
 
         let mut max_factors: Vec<f32> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.get_meta_page().num_neighbors as _ {
+        while alpha <= max_alpha && results.len() < self.get_meta_page(index).num_neighbors as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.get_meta_page().num_neighbors as _ {
+                if results.len() >= self.get_meta_page(index).num_neighbors as _ {
                     return results;
                 }
                 if max_factors[i] > alpha {
@@ -264,9 +294,9 @@ pub trait Graph {
                 let existing_neighbor = neighbor;
 
                 //TODO make lazy
-                let existing_neighbor_node =
-                    self.read(existing_neighbor.get_index_pointer_to_neigbor());
-                let existing_neighbor_vec = existing_neighbor_node.node.vector.as_slice();
+                let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neigbor());
+                let existing_neighbor_node = data_node.get_archived_node();
+                let existing_neighbor_vec = existing_neighbor_node.vector.as_slice();
 
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
@@ -275,9 +305,10 @@ pub trait Graph {
                         continue;
                     }
 
-                    let candidate_node =
-                        self.read(candidate_neighbor.get_index_pointer_to_neigbor());
-                    let candidate_vec = candidate_node.node.vector.as_slice();
+                    let data_node =
+                        self.read(index, candidate_neighbor.get_index_pointer_to_neigbor());
+                    let candidate_node = data_node.get_archived_node();
+                    let candidate_vec = candidate_node.vector.as_slice();
                     let distance_between_candidate_and_existing_neighbor =
                         distance(existing_neighbor_vec, candidate_vec);
                     let distance_between_candidate_and_point = candidate_neighbor.get_distance();
