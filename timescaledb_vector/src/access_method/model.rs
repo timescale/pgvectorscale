@@ -11,7 +11,10 @@ use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::util::tape::Tape;
-use crate::util::{ArchivedItemPointer, ItemPointer, ReadableBuffer, WritableBuffer};
+use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
+
+use super::build::TsvMetaPage;
+use super::graph::Graph;
 
 //Ported from pg_vector code
 #[repr(C)]
@@ -39,10 +42,10 @@ impl PgVector {
 #[derive(Archive, Deserialize, Serialize)]
 #[archive(check_bytes)]
 pub struct Node {
-    vector: Vec<f32>,
+    pub vector: Vec<f32>,
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_distances: Vec<f64>, //TODO distance is f64 right?
-    heap_item_pointer: ItemPointer,
+    neighbor_distances: Vec<Distance>,
+    pub heap_item_pointer: HeapPointer,
     deleted: bool,
 }
 
@@ -79,14 +82,18 @@ impl Node {
             vector: vector.to_vec(),
             //always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
             neighbor_index_pointers: (0..num_neighbors).map(|_| ItemPointer::new(0, 0)).collect(),
-            neighbor_distances: (0..num_neighbors).map(|_| f64::NAN).collect(),
+            neighbor_distances: (0..num_neighbors).map(|_| Distance::NAN).collect(),
             heap_item_pointer: heap_item_pointer,
             deleted: false,
         }
     }
 
     fn num_neighbors(&self) -> usize {
-        if let Some(index) = self.neighbor_distances.iter().position(|x| *x == f64::NAN) {
+        if let Some(index) = self
+            .neighbor_distances
+            .iter()
+            .position(|x| *x == Distance::NAN)
+        {
             index + 1
         } else {
             self.neighbor_distances.len()
@@ -127,13 +134,13 @@ impl ArchivedNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    fn neighbor_distances(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<f64>> {
+    fn neighbor_distances(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<Distance>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_distances) }
     }
 
-    fn apply_to_neightbors<F>(&self, mut f: F)
+    pub fn apply_to_neightbors<F>(&self, mut f: F)
     where
-        F: FnMut(f64, &ArchivedItemPointer),
+        F: FnMut(Distance, &ArchivedItemPointer),
     {
         let mut terminate = false;
         for (dist, n) in self
@@ -153,150 +160,52 @@ impl ArchivedNode {
     }
 }
 
-struct Neighbor {
-    id: ItemPointer,
-    distance: f32,
-    visited: bool,
-}
-
-impl PartialOrd for Neighbor {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
-    }
-}
-
-impl PartialEq for Neighbor {
-    fn eq(&self, other: &Self) -> bool {
-        self.id == other.id
-    }
-}
-
-impl Neighbor {
-    pub fn new(index_pointer: ItemPointer, distance: f32) -> Self {
-        Self {
-            id: index_pointer,
-            distance: distance,
-            visited: false,
-        }
-    }
-}
-
-//TODO: use slow L2 for now. Make pluggable and simd
-fn distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
-
-    let norm: f32 = a
-        .iter()
-        .zip(b.iter())
-        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
-        .sum();
-    assert!(norm >= 0.);
-    norm.sqrt()
-}
-
-struct ListSearchResult {
-    search_list_size: usize,
-    best_candidate: Vec<Neighbor>, //keep sorted by distanced
-    inserted: HashSet<ItemPointer>,
-}
-
-impl ListSearchResult {
-    fn new(
-        search_list_size: usize,
-        builder: &NodeBuilder,
-        init_ids: Vec<ItemPointer>,
-        query: &[f32],
-    ) -> Self {
-        let mut res = Self {
-            search_list_size: search_list_size,
-            best_candidate: Vec::with_capacity(search_list_size),
-            inserted: HashSet::with_capacity(search_list_size),
-        };
-        for index_pointer in init_ids {
-            res.insert(builder, &index_pointer, query);
-        }
-        res
-    }
-
-    fn insert(&mut self, builder: &NodeBuilder, index_pointer: &ItemPointer, query: &[f32]) {
-        //no point reprocessing a point. Distance calcs are expensive.
-        if !self.inserted.insert(index_pointer.clone()) {
-            return;
-        }
-
-        let node = builder.read(index_pointer);
-        let vec = node.node.vector.as_slice();
-        let distance = distance(vec, query);
-
-        let neighbor = Neighbor::new(index_pointer.clone(), distance);
-        self._insert_neighbor(neighbor);
-    }
-
-    /// Internal function
-    fn _insert_neighbor(&mut self, n: Neighbor) {
-        if self.best_candidate.len() >= self.search_list_size {
-            let last = self.best_candidate.last().unwrap();
-            if n >= *last {
-                //n is too far in the list to be the best candidate.
-                return;
-            }
-            self.best_candidate.pop();
-        }
-
-        //insert while preserving sort order.
-        let idx = self.best_candidate.partition_point(|x| *x < n);
-        self.best_candidate.insert(idx, n)
-    }
-
-    fn visit_closest(&mut self) -> Option<(ItemPointer, f32)> {
-        //OPT: should we optimize this not to do a linear search each time?
-        let neighbor = self.best_candidate.iter_mut().find(|n| !n.visited);
-        match neighbor {
-            Some(n) => {
-                (*n).visited = true;
-                Some((n.id.clone(), n.distance))
-            }
-            None => None,
-        }
-    }
-
-    fn get_closets_nth(&self, index: usize) -> Option<ItemPointer> {
-        let neighbor = self.best_candidate.get(index);
-        match neighbor {
-            Some(n) => Some(n.id.clone()),
-            None => None,
-        }
-    }
-}
-
+//TODO is this right?
+pub type Distance = f32;
 #[derive(Clone)]
-struct NodeBuilderNeighbor {
+pub struct NeighborWithDistance {
     id: ItemPointer,
-    distance: f32,
+    distance: Distance,
 }
 
-impl PartialOrd for NodeBuilderNeighbor {
+impl NeighborWithDistance {
+    pub fn new(neighbor_index_pointer: ItemPointer, distance: Distance) -> Self {
+        Self {
+            id: neighbor_index_pointer,
+            distance: distance,
+        }
+    }
+
+    pub fn get_index_pointer_to_neigbor(&self) -> ItemPointer {
+        return self.id;
+    }
+    pub fn get_distance(&self) -> Distance {
+        return self.distance;
+    }
+}
+
+impl PartialOrd for NeighborWithDistance {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.distance.partial_cmp(&other.distance)
     }
 }
 
-impl Ord for NodeBuilderNeighbor {
+impl Ord for NeighborWithDistance {
     fn cmp(&self, other: &Self) -> Ordering {
         self.distance.total_cmp(&other.distance)
     }
 }
 
-impl PartialEq for NodeBuilderNeighbor {
+impl PartialEq for NeighborWithDistance {
     fn eq(&self, other: &Self) -> bool {
         self.id == other.id
     }
 }
 
 //promise that PartialEq is reflexive
-impl Eq for NodeBuilderNeighbor {}
+impl Eq for NeighborWithDistance {}
 
-impl std::hash::Hash for NodeBuilderNeighbor {
+impl std::hash::Hash for NeighborWithDistance {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.id.hash(state);
     }
@@ -305,7 +214,7 @@ impl std::hash::Hash for NodeBuilderNeighbor {
 pub struct NodeBuilder<'a> {
     index: &'a PgRelation,
     //maps node's pointer to the representation on disk
-    map: std::collections::HashMap<ItemPointer, Vec<NodeBuilderNeighbor>>,
+    map: std::collections::HashMap<ItemPointer, Vec<NeighborWithDistance>>,
     first: Option<ItemPointer>,
     meta_page: super::build::TsvMetaPage,
 }
@@ -324,7 +233,7 @@ impl<'a> NodeBuilder<'a> {
         if self.map.len() == 0 {
             self.map.insert(
                 index_pointer.clone(),
-                Vec::<NodeBuilderNeighbor>::with_capacity(self.meta_page.num_neighbors as _),
+                Vec::<NeighborWithDistance>::with_capacity(self.meta_page.num_neighbors as _),
             );
             return;
         }
@@ -348,176 +257,20 @@ impl<'a> NodeBuilder<'a> {
     fn update_back_pointer(&mut self, from: &ItemPointer, to: &ItemPointer, distance: f32) {
         let current_links = self.map.get_mut(&from).unwrap();
         if current_links.len() + 1 < self.meta_page.num_neighbors as _ {
-            current_links.push(NodeBuilderNeighbor {
+            current_links.push(NeighborWithDistance {
                 id: to.clone(),
                 distance: distance,
             })
         } else {
             let new_list = self.prune_neighbors(
                 from.clone(),
-                vec![NodeBuilderNeighbor {
+                vec![NeighborWithDistance {
                     id: to.clone(),
                     distance: distance,
                 }],
             );
             self.map.insert(from.clone(), new_list);
         }
-    }
-
-    /// Prune neigbors by prefering neighbors closer to the point in question
-    /// than to other neighbors of the point.
-    ///
-    /// TODO: this is the ann-disk implementation. There may be better implementations
-    /// if we save the factors or the distances and add incrementally. Not sure.
-    fn prune_neighbors(
-        &mut self,
-        index_pointer: ItemPointer,
-        new_neigbors: Vec<NodeBuilderNeighbor>,
-    ) -> Vec<NodeBuilderNeighbor> {
-        //TODO make configurable?
-        let max_alpha = 1.2;
-        //get a unique candidate pool
-        let mut candidates = match self.map.get(&index_pointer) {
-            Some(v) => v.clone(),
-            None => vec![], //new point has no entry in the map yet
-        };
-        let mut hash: HashSet<ItemPointer> = candidates.iter().map(|c| c.id.clone()).collect();
-        for n in new_neigbors {
-            if hash.insert(n.id.clone()) {
-                candidates.push(n);
-            }
-        }
-        //remove myself
-        if !hash.insert(index_pointer.clone()) {
-            //prevent self-loops
-            let index = candidates
-                .iter()
-                .position(|x| x.id == index_pointer)
-                .unwrap();
-            candidates.remove(index);
-        }
-        //TODO remove deleted nodes
-
-        //TODO diskann has something called max_occlusion_size/max_candidate_size(default:750). Do we need to implement?
-
-        //sort by distance
-        candidates.sort();
-        let mut results =
-            Vec::<NodeBuilderNeighbor>::with_capacity(self.meta_page.num_neighbors as _);
-
-        let mut max_factors: Vec<f32> = vec![0.0; candidates.len()];
-
-        let mut alpha = 1.0;
-        //first we add nodes that "pass" a small alpha. Then, if there
-        //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.meta_page.num_neighbors as _ {
-            for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.meta_page.num_neighbors as _ {
-                    return results;
-                }
-                if max_factors[i] > alpha {
-                    continue;
-                }
-
-                //don't consider again
-                max_factors[i] = f32::MAX;
-                results.push(neighbor.clone());
-
-                //we've now added this to the results so it's going to be a neighbor
-                //rename for clarity.
-                let existing_neighbor = neighbor;
-
-                //TODO make lazy
-                let existing_neighbor_node = self.read(&existing_neighbor.id);
-                let existing_neighbor_vec = existing_neighbor_node.node.vector.as_slice();
-
-                //go thru the other candidates (tail of the list)
-                for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
-                    //has it been completely excluded?
-                    if max_factors[j] > max_alpha {
-                        continue;
-                    }
-
-                    let candidate_node = self.read(&candidate_neighbor.id);
-                    let candidate_vec = candidate_node.node.vector.as_slice();
-                    let distance_between_candidate_and_existing_neighbor =
-                        distance(existing_neighbor_vec, candidate_vec);
-                    let distance_between_candidate_and_point = candidate_neighbor.distance;
-                    //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
-                    let factor = if distance_between_candidate_and_existing_neighbor == 0.0 {
-                        f32::MAX //avoid division by 0
-                    } else {
-                        distance_between_candidate_and_point
-                            / distance_between_candidate_and_existing_neighbor
-                    };
-                    max_factors[j] = max_factors[j].max(factor)
-                }
-            }
-            alpha = alpha * 1.2
-        }
-        results
-    }
-
-    pub fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        //TODO make this based on centroid. For now, just first node.
-        //returns a vector for generality
-        match &self.first {
-            Some(item) => Some(vec![item.clone()]),
-            None => match self.map.keys().next() {
-                Some(item) => {
-                    self.first = Some(item.clone());
-                    Some(vec![item.clone()])
-                }
-                None => None,
-            },
-        }
-    }
-
-    fn read<'b, 'c, 'd>(&'b self, index_pointer: &'c ItemPointer) -> ReadableNode<'d> {
-        unsafe { Node::read(self.index, index_pointer) }
-    }
-
-    fn greedy_search(
-        &mut self,
-        query: &[f32],
-        k: usize,
-        search_list_size: usize,
-    ) -> (Vec<ItemPointer>, Option<HashSet<NodeBuilderNeighbor>>) {
-        assert!(k <= search_list_size);
-
-        let init_ids = self.get_init_ids();
-        if let None = init_ids {
-            //no nodes in the graph
-            return (vec![], None);
-        }
-        let mut l = ListSearchResult::new(search_list_size, self, init_ids.unwrap(), query);
-
-        //OPT: Only build v when needed.
-        let mut v: HashSet<_> = HashSet::<NodeBuilderNeighbor>::with_capacity(search_list_size);
-        while let Some((index_pointer, distance)) = l.visit_closest() {
-            let neighbors = self.map.get(&index_pointer);
-            if let None = neighbors {
-                panic!("Nodes in the list search results that aren't in the builder");
-            }
-
-            for neighbor_index_pointer in neighbors.unwrap() {
-                l.insert(self, &neighbor_index_pointer.id, query)
-            }
-            v.insert(NodeBuilderNeighbor {
-                id: index_pointer,
-                distance: distance,
-            });
-        }
-
-        let mut k_closets = Vec::<ItemPointer>::with_capacity(k);
-        for i in (0..k) {
-            let item = l.get_closets_nth(i);
-            match item {
-                Some(pointer) => k_closets.push(pointer),
-                None => break,
-            }
-        }
-        (k_closets, Some(v))
     }
 
     pub unsafe fn write(&self) {
@@ -533,7 +286,7 @@ impl<'a> NodeBuilder<'a> {
                 a_index_pointer.offset = new_neighbor.id.offset;
 
                 let mut a_distance = archived.as_mut().neighbor_distances().index_pin(i);
-                *a_distance = new_neighbor.distance as f64;
+                *a_distance = new_neighbor.distance as Distance;
             }
             //set the marker that the list ended
             if neighbors.len() < self.meta_page.num_neighbors as _ {
@@ -541,10 +294,43 @@ impl<'a> NodeBuilder<'a> {
                 let archived = node.get_archived_node();
                 let mut past_last_distance =
                     archived.neighbor_distances().index_pin(neighbors.len());
-                *past_last_distance = f64::NAN;
+                *past_last_distance = Distance::NAN;
             }
             node.commit()
         }
+    }
+}
+
+impl<'a> Graph for NodeBuilder<'a> {
+    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
+        //TODO make this based on centroid. For now, just first node.
+        //returns a vector for generality
+        match &self.first {
+            Some(item) => Some(vec![item.clone()]),
+            None => match self.map.keys().next() {
+                Some(item) => {
+                    self.first = Some(item.clone());
+                    Some(vec![item.clone()])
+                }
+                None => None,
+            },
+        }
+    }
+
+    fn read<'b, 'd>(&'b self, index_pointer: ItemPointer) -> ReadableNode<'d> {
+        unsafe { Node::read(self.index, &index_pointer) }
+    }
+
+    fn get_neighbors(&self, neighbors_of: ItemPointer) -> Option<Vec<NeighborWithDistance>> {
+        let neighbors = self.map.get(&neighbors_of);
+        match neighbors {
+            Some(n) => Some(n.iter().map(|v| v.clone()).collect()),
+            None => None,
+        }
+    }
+
+    fn get_meta_page(&self) -> &TsvMetaPage {
+        &self.meta_page
     }
 }
 
@@ -573,7 +359,7 @@ unsafe fn print_graph_from_disk_visitor(
     map.insert(index_pointer, copy);
 
     node.node.apply_to_neightbors(|dist, neighbor_pointer| {
-        let p = neighbor_pointer.deserialize(&mut rkyv::Infallible).unwrap();
+        let p = neighbor_pointer.deserialize_item_pointer();
         if !map.contains_key(&p) {
             print_graph_from_disk_visitor(index, p, map, sb, level + 1);
         }
