@@ -84,6 +84,12 @@ unsafe fn write_meta_page(
     mp
 }
 
+pub unsafe fn read_meta_page(index: PgRelation) -> TsvMetaPage {
+    let page = page::ReadablePage::read(index.as_ptr(), 0);
+    let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
+    (*meta).clone()
+}
+
 #[pg_guard]
 pub extern "C" fn ambuild(
     heaprel: pg_sys::Relation,
@@ -144,13 +150,13 @@ fn do_heap_scan<'a>(
     }
 
     unsafe { state.node_builder.write() };
-    print_graph_from_disk(
+    /*print_graph_from_disk(
         index_relation,
         ItemPointer {
             block_number: 1,
             offset: 1,
         },
-    );
+    );*/
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
@@ -213,7 +219,12 @@ mod tests {
             CREATE INDEX idxtest
                   ON test
                USING tsv(embedding)
-                WITH (placeholder=30);",
+                WITH (placeholder=30);
+
+            set enable_seqscan =0;
+            select * from test order by embedding <=> '[0,0,0]';
+            explain analyze select * from test order by embedding <=> '[0,0,0]';
+                ",
         ))?;
         Ok(())
     }

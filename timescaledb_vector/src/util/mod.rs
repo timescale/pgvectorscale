@@ -11,13 +11,18 @@ use self::{
     ports::{PageGetItem, PageGetItemId},
 };
 
-#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone)]
+#[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
 #[archive(check_bytes)]
 pub struct ItemPointer {
     pub block_number: pgrx::pg_sys::BlockNumber,
     pub offset: pgrx::pg_sys::OffsetNumber,
 }
 
+impl ArchivedItemPointer {
+    pub fn deserialize_item_pointer(&self) -> ItemPointer {
+        self.deserialize(&mut rkyv::Infallible).unwrap()
+    }
+}
 /*
 
 TODO change not to have a liftime here.
@@ -78,6 +83,10 @@ impl ItemPointer {
         Self::new(ip, off)
     }
 
+    pub fn to_item_pointer_data(&self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
+        pgrx::item_pointer_set_all(ctid, self.block_number, self.offset)
+    }
+
     pub unsafe fn read_bytes<'b, 'a>(&'b self, index: Relation) -> ReadableBuffer<'a> {
         let page = ReadablePage::read(index, self.block_number);
         let item_id = PageGetItemId(*page, self.offset);
@@ -101,3 +110,6 @@ impl ItemPointer {
         }
     }
 }
+
+pub type IndexPointer = ItemPointer;
+pub type HeapPointer = ItemPointer;

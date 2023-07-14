@@ -2,6 +2,8 @@ use pgrx::*;
 
 mod build;
 mod cost_estimate;
+mod disk_index_graph;
+mod graph;
 mod model;
 pub mod options;
 mod scan;
