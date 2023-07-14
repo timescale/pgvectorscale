@@ -1,12 +1,13 @@
-use pgrx::pg_sys::{BufferGetBlock, BufferGetBlockNumber, Item, Pointer};
+use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
 
-use crate::access_method::model::{print_graph_from_disk, PgVector};
+use crate::access_method::model::PgVector;
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
 
-use super::model::{self, NodeBuilder};
+use super::builder_graph::BuilderGraph;
+use super::model::{self};
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
@@ -25,26 +26,24 @@ pub struct TsvMetaPage {
     pub num_neighbors: u32,
 }
 
-struct BuildState<'a> {
+struct BuildState {
     memcxt: PgMemoryContexts,
-    index_ralation: &'a PgRelation,
     meta_page: TsvMetaPage,
     ntuples: usize,
     tape: Tape,
-    node_builder: NodeBuilder<'a>,
+    node_builder: BuilderGraph,
 }
 
-impl<'a> BuildState<'a> {
-    fn new(index_relation: &'a PgRelation, meta_page: TsvMetaPage) -> Self {
-        let mut tape = unsafe { Tape::new((**index_relation).as_ptr()) };
+impl BuildState {
+    fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
+        let tape = unsafe { Tape::new((**index_relation).as_ptr()) };
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
-            index_ralation: index_relation,
             ntuples: 0,
             meta_page: meta_page.clone(),
             tape: tape,
-            node_builder: NodeBuilder::new(index_relation, meta_page),
+            node_builder: BuilderGraph::new(meta_page),
         }
     }
 }
@@ -84,7 +83,7 @@ unsafe fn write_meta_page(
     mp
 }
 
-pub unsafe fn read_meta_page(index: PgRelation) -> TsvMetaPage {
+pub unsafe fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
     let page = page::ReadablePage::read(index.as_ptr(), 0);
     let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
     (*meta).clone()
@@ -114,10 +113,10 @@ pub extern "C" fn ambuild(
 
 #[pg_guard]
 pub unsafe extern "C" fn aminsert(
-    index_relation: pg_sys::Relation,
-    values: *mut pg_sys::Datum,
+    _index_relation: pg_sys::Relation,
+    _values: *mut pg_sys::Datum,
     _isnull: *mut bool,
-    heap_tid: pg_sys::ItemPointer,
+    _heap_tid: pg_sys::ItemPointer,
     _heap_relation: pg_sys::Relation,
     _check_unique: pg_sys::IndexUniqueCheck,
     _index_unchanged: bool,
@@ -149,7 +148,7 @@ fn do_heap_scan<'a>(
         );
     }
 
-    unsafe { state.node_builder.write() };
+    unsafe { state.node_builder.write(index_relation) };
     /*print_graph_from_disk(
         index_relation,
         ItemPointer {
@@ -165,18 +164,20 @@ fn do_heap_scan<'a>(
 
 #[pg_guard]
 unsafe extern "C" fn build_callback(
-    _index: pg_sys::Relation,
+    index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
     values: *mut pg_sys::Datum,
     _isnull: *mut bool,
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
-    build_callback_internal(*ctid, values, state);
+    let index_relation = unsafe { PgRelation::from_pg(index) };
+    build_callback_internal(index_relation, *ctid, values, state);
 }
 
 #[inline(always)]
-unsafe extern "C" fn build_callback_internal(
+unsafe fn build_callback_internal(
+    index: PgRelation,
     ctid: pg_sys::ItemPointerData,
     values: *mut pg_sys::Datum,
     state: *mut std::os::raw::c_void,
@@ -197,8 +198,8 @@ unsafe extern "C" fn build_callback_internal(
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
     let node = model::Node::new(vector, heap_pointer, &state.meta_page);
-    let index_pointer: ItemPointer = node.write(&mut state.tape);
-    state.node_builder.insert(&index_pointer, vector);
+    let index_pointer: IndexPointer = node.write(&mut state.tape);
+    state.node_builder.insert(&index, index_pointer, vector);
 
     old_context.set_as_current();
     state.memcxt.reset();

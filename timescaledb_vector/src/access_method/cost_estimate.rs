@@ -22,7 +22,7 @@ pub unsafe extern "C" fn amcostestimate(
         return;
     }
     let path_ref = path.as_ref().expect("path argument is NULL");
-    let indexinfo = path_ref
+    /*let indexinfo = path_ref
         .indexinfo
         .as_ref()
         .expect("indexinfo in path is NULL");
@@ -32,7 +32,7 @@ pub unsafe extern "C" fn amcostestimate(
             pg_sys::AccessShareLock as pg_sys::LOCKMODE,
         )
     };
-    /*let heap_relation = index_relation
+    let heap_relation = index_relation
     .heap_relation()
     .expect("failed to get heap relation for index");*/
 

@@ -1,7 +1,7 @@
 //! A Page is a Postgres abstraction for a slice of memory you can write to
 //! It is usually 8kb and has a special layout. See https://www.postgresql.org/docs/current/storage-page-layout.html
 
-use pg_sys::{Buffer, Page, Relation};
+use pg_sys::{Page, Relation};
 use pgrx::{
     pg_sys::{BlockNumber, BufferGetPage},
     *,
@@ -126,10 +126,6 @@ impl ReadablePage {
 
     pub fn get_buffer(&self) -> &LockedBufferShare {
         &self.buffer
-    }
-
-    pub fn get_free_space(&self) -> usize {
-        unsafe { pg_sys::PageGetFreeSpace(self.page) }
     }
 }
 

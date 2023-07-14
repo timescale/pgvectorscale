@@ -2,7 +2,7 @@ use pgrx::*;
 
 use crate::{
     access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
-    util::{buffer::LockedBufferShare, ItemPointer, ReadableBuffer},
+    util::{buffer::LockedBufferShare, ItemPointer},
 };
 
 use super::graph::ListSearchResult;
@@ -84,7 +84,7 @@ pub extern "C" fn ambeginscan(
 #[pg_guard]
 pub extern "C" fn amrescan(
     scan: pg_sys::IndexScanDesc,
-    keys: pg_sys::ScanKey,
+    _keys: pg_sys::ScanKey,
     nkeys: ::std::os::raw::c_int,
     orderbys: pg_sys::ScanKey,
     norderbys: ::std::os::raw::c_int,
@@ -111,14 +111,13 @@ pub extern "C" fn amrescan(
     let query = unsafe { (*vec).to_slice() };
 
     //TODO: use real init id
-    let mut graph = DiskIndexGraph::new(indexrel.clone(), vec![ItemPointer::new(1, 1)]);
+    let mut graph = DiskIndexGraph::new(&indexrel, vec![ItemPointer::new(1, 1)]);
 
-    //TODO need to set search_list_size and k correctly
+    //TODO need to set search_list_size correctly
     //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = 100;
     use super::graph::Graph;
-    //no point setting k < search_list_size;
-    let (lsr, _) = graph.greedy_search(query, search_list_size, search_list_size);
+    let (lsr, _) = graph.greedy_search(&indexrel, query, search_list_size);
     let res = TSVResponseIterator::new(indexrel, lsr);
 
     state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
