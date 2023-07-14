@@ -3,7 +3,7 @@
 //! Thus, we don't follow rust naming conventions.
 
 use memoffset::*;
-use pgrx::pg_sys::Pointer;
+use pgrx::pg_sys::{ItemId, OffsetNumber, Pointer};
 
 /// Given a valid Page pointer, return address of the "Special Pointer" (custom info at end of page)
 ///
@@ -40,4 +40,24 @@ pub unsafe fn PageGetContents(page: pgrx::pg_sys::Page) -> *mut std::os::raw::c_
     //return (char *) page + MAXALIGN(SizeOfPageHeaderData);
     page.cast::<std::os::raw::c_char>()
         .add(pgrx::pg_sys::MAXALIGN(SizeOfPageHeaderData))
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn PageGetItem(page: pgrx::pg_sys::Page, item_id: ItemId) -> *mut std::os::raw::c_char {
+    //Assert(page);
+    //Assert(ItemIdHasStorage(itemId));
+
+    //return (Item) (((char *) page) + ItemIdGetOffset(itemId));
+    assert!(!page.is_null());
+    assert!((*item_id).lp_len() != 0);
+
+    page.cast::<std::os::raw::c_char>()
+        .add((*item_id).lp_off() as _)
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn PageGetItemId(page: pgrx::pg_sys::Page, offset: OffsetNumber) -> ItemId {
+    //return &((PageHeader) page)->pd_linp[offsetNumber - 1];
+    let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
+    (*header).pd_linp.as_mut_ptr().add((offset - 1) as _)
 }
