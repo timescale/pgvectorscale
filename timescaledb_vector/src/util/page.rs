@@ -2,10 +2,13 @@
 //! It is usually 8kb and has a special layout. See https://www.postgresql.org/docs/current/storage-page-layout.html
 
 use pg_sys::{Buffer, Page, Relation};
-use pgrx::*;
+use pgrx::{
+    pg_sys::{BlockNumber, BufferGetPage},
+    *,
+};
 use std::ops::Deref;
 
-use super::buffer::LockedBufferExclusive;
+use super::buffer::{LockedBufferExclusive, LockedBufferShare};
 pub struct WritablePage {
     buffer: LockedBufferExclusive,
     page: Page,
@@ -52,8 +55,24 @@ impl WritablePage {
         }
     }
 
+    pub unsafe fn modify(index: Relation, block: BlockNumber) -> Self {
+        let buffer = LockedBufferExclusive::read(index, block);
+        let state = pg_sys::GenericXLogStart(index);
+        let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
+        Self {
+            buffer: buffer,
+            page: page,
+            state: state,
+            committed: false,
+        }
+    }
+
     pub fn get_buffer(&self) -> &LockedBufferExclusive {
         &self.buffer
+    }
+
+    pub fn get_block_number(&self) -> BlockNumber {
+        self.buffer.get_block_number()
     }
 
     pub fn get_free_space(&self) -> usize {
@@ -62,9 +81,11 @@ impl WritablePage {
 
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
-    pub unsafe fn commit(mut self) {
-        pg_sys::MarkBufferDirty(*self.buffer);
-        pg_sys::GenericXLogFinish(self.state);
+    pub fn commit(mut self) {
+        unsafe {
+            pg_sys::MarkBufferDirty(*self.buffer);
+            pg_sys::GenericXLogFinish(self.state);
+        }
         self.committed = true;
     }
 }
@@ -81,6 +102,38 @@ impl Drop for WritablePage {
 }
 
 impl Deref for WritablePage {
+    type Target = Page;
+    fn deref(&self) -> &Self::Target {
+        &self.page
+    }
+}
+
+pub struct ReadablePage {
+    buffer: LockedBufferShare,
+    page: Page,
+}
+
+impl ReadablePage {
+    /// new creates a totally new page on a relation by extending the relation
+    pub unsafe fn read(index: Relation, block: BlockNumber) -> Self {
+        let buffer = LockedBufferShare::read(index, block);
+        let page = BufferGetPage(*buffer);
+        Self {
+            buffer: buffer,
+            page: page,
+        }
+    }
+
+    pub fn get_buffer(&self) -> &LockedBufferShare {
+        &self.buffer
+    }
+
+    pub fn get_free_space(&self) -> usize {
+        unsafe { pg_sys::PageGetFreeSpace(self.page) }
+    }
+}
+
+impl Deref for ReadablePage {
     type Target = Page;
     fn deref(&self) -> &Self::Target {
         &self.page

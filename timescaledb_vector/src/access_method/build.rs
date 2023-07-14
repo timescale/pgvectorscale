@@ -1,12 +1,12 @@
 use pgrx::pg_sys::{BufferGetBlock, BufferGetBlockNumber, Item, Pointer};
 use pgrx::*;
 
-use crate::access_method::model::PgVector;
+use crate::access_method::model::{print_graph_from_disk, PgVector};
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
 
-use super::model;
+use super::model::{self, NodeBuilder};
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
@@ -31,17 +31,20 @@ struct BuildState<'a> {
     meta_page: TsvMetaPage,
     ntuples: usize,
     tape: Tape,
+    node_builder: NodeBuilder<'a>,
 }
 
 impl<'a> BuildState<'a> {
     fn new(index_relation: &'a PgRelation, meta_page: TsvMetaPage) -> Self {
         let mut tape = unsafe { Tape::new((**index_relation).as_ptr()) };
+        //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
             index_ralation: index_relation,
             ntuples: 0,
-            meta_page: meta_page,
+            meta_page: meta_page.clone(),
             tape: tape,
+            node_builder: NodeBuilder::new(index_relation, meta_page),
         }
     }
 }
@@ -140,6 +143,14 @@ fn do_heap_scan<'a>(
         );
     }
 
+    unsafe { state.node_builder.write() };
+    print_graph_from_disk(
+        index_relation,
+        ItemPointer {
+            block_number: 1,
+            offset: 1,
+        },
+    );
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
@@ -170,13 +181,18 @@ unsafe extern "C" fn build_callback_internal(
     let mut old_context = state.memcxt.set_as_current();
 
     state.ntuples = state.ntuples + 1;
+
+    //warning!("values {:?} {:?}", values, *values);
+    //let vec = PgVector::from_datum(*values);
     let values = std::slice::from_raw_parts(values, 1);
+    let vec = PgVector::from_datum(values[0]);
 
-    let vector = (*PgVector::from_datum(values[0])).to_slice();
-    let ip = ItemPointer::with_item_pointer_data(ctid);
+    let vector = (*vec).to_slice();
+    let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    let node = model::Node::new(vector, ip, &state.meta_page);
+    let node = model::Node::new(vector, heap_pointer, &state.meta_page);
     let index_pointer: ItemPointer = node.write(&mut state.tape);
+    state.node_builder.insert(&index_pointer, vector);
 
     old_context.set_as_current();
     state.memcxt.reset();
@@ -192,7 +208,7 @@ mod tests {
         Spi::run(&format!(
             "CREATE TABLE test(embedding vector(3));
 
-            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]');
+            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
 
             CREATE INDEX idxtest
                   ON test
