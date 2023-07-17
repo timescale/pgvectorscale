@@ -21,16 +21,30 @@ pub struct TsvMetaPage {
     /// version number for future-proofing
     version: u32,
     /// number of dimensions in the vector
-    pub num_dimensions: u32,
+    num_dimensions: u32,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
-    pub num_neighbors: u32,
+    num_neighbors: u32,
+}
+
+impl TsvMetaPage {
+    /// Number of dimensions in the vectors being stored.
+    /// Has to be the same for all vectors in the graph and cannot change.
+    pub fn get_num_dimensions(&self) -> u32 {
+        self.num_dimensions
+    }
+
+    /// Maximum number of neigbors per node. Given that we pre-allocate
+    /// these many slots for each node, this cannot change after the graph is built.
+    pub fn get_num_neighbors(&self) -> u32 {
+        self.num_neighbors
+    }
 }
 
 struct BuildState {
     memcxt: PgMemoryContexts,
     meta_page: TsvMetaPage,
     ntuples: usize,
-    tape: Tape,
+    tape: Tape, //The tape is a memory abstraction over Postgres pages for writing data.
     node_builder: BuilderGraph,
 }
 
@@ -149,13 +163,6 @@ fn do_heap_scan<'a>(
     }
 
     unsafe { state.node_builder.write(index_relation) };
-    /*print_graph_from_disk(
-        index_relation,
-        ItemPointer {
-            block_number: 1,
-            offset: 1,
-        },
-    );*/
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);

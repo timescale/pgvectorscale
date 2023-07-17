@@ -268,7 +268,7 @@ pub trait Graph {
         //sort by distance
         candidates.sort();
         let mut results = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page(index).num_neighbors as _,
+            self.get_meta_page(index).get_num_neighbors() as _,
         );
 
         let mut max_factors: Vec<f32> = vec![0.0; candidates.len()];
@@ -276,9 +276,11 @@ pub trait Graph {
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.get_meta_page(index).num_neighbors as _ {
+        while alpha <= max_alpha
+            && results.len() < self.get_meta_page(index).get_num_neighbors() as _
+        {
             for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.get_meta_page(index).num_neighbors as _ {
+                if results.len() >= self.get_meta_page(index).get_num_neighbors() as _ {
                     return results;
                 }
                 if max_factors[i] > alpha {

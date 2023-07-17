@@ -33,7 +33,7 @@ impl BuilderGraph {
         if self.neighbor_map.len() == 0 {
             self.neighbor_map.insert(
                 index_pointer,
-                Vec::<NeighborWithDistance>::with_capacity(self.meta_page.num_neighbors as _),
+                Vec::<NeighborWithDistance>::with_capacity(self.meta_page.get_num_neighbors() as _),
             );
             return;
         }
@@ -67,7 +67,7 @@ impl BuilderGraph {
         distance: f32,
     ) {
         let current_links = self.neighbor_map.get_mut(&from).unwrap();
-        if current_links.len() + 1 < self.meta_page.num_neighbors as _ {
+        if current_links.len() + 1 < self.meta_page.get_num_neighbors() as _ {
             current_links.push(NeighborWithDistance::new(to, distance));
         } else {
             let new_list =
@@ -93,7 +93,7 @@ impl BuilderGraph {
                 *a_distance = new_neighbor.get_distance() as Distance;
             }
             //set the marker that the list ended
-            if neighbors.len() < self.meta_page.num_neighbors as _ {
+            if neighbors.len() < self.meta_page.get_num_neighbors() as _ {
                 //TODO: why do we need to recreate the archive?
                 let archived = node.get_archived_node();
                 let mut past_last_distance =
