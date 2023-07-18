@@ -11,7 +11,7 @@ use super::model::{self};
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
-
+pub const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]
@@ -37,6 +37,10 @@ impl TsvMetaPage {
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
         self.num_neighbors
+    }
+
+    pub fn get_max_neighbors_during_build(&self) -> usize {
+        return ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize;
     }
 }
 
