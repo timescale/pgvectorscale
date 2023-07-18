@@ -1,6 +1,9 @@
+use std::time::Instant;
+
 use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
 
+use crate::access_method::builder_graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::util::page;
 use crate::util::tape::Tape;
@@ -50,6 +53,8 @@ struct BuildState {
     ntuples: usize,
     tape: Tape, //The tape is a memory abstraction over Postgres pages for writing data.
     node_builder: BuilderGraph,
+    started: Instant,
+    stats: InsertStats,
 }
 
 impl BuildState {
@@ -62,6 +67,8 @@ impl BuildState {
             meta_page: meta_page.clone(),
             tape: tape,
             node_builder: BuilderGraph::new(meta_page),
+            started: Instant::now(),
+            stats: InsertStats::new(),
         }
     }
 }
@@ -166,7 +173,27 @@ fn do_heap_scan<'a>(
         );
     }
 
-    unsafe { state.node_builder.write(index_relation) };
+    let write_stats = unsafe { state.node_builder.write(index_relation) };
+    assert!(write_stats.num_nodes == state.ntuples);
+    let writing_took = Instant::now()
+        .duration_since(write_stats.started)
+        .as_secs_f64();
+    if write_stats.num_nodes > 0 {
+        info!(
+            "Writing took {}s or {}s/tuple.  Avg neighbors: {}",
+            writing_took,
+            writing_took / write_stats.num_nodes as f64,
+            write_stats.num_neighbors / write_stats.num_nodes
+        );
+    }
+    if write_stats.num_prunes > 0 {
+        info!(
+            "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
+            write_stats.num_neighbors_before_prune / write_stats.num_prunes,
+            write_stats.num_neighbors_after_prune / write_stats.num_prunes,
+            write_stats.num_prunes
+        );
+    }
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
@@ -200,8 +227,18 @@ unsafe fn build_callback_internal(
 
     state.ntuples = state.ntuples + 1;
 
-    //warning!("values {:?} {:?}", values, *values);
-    //let vec = PgVector::from_datum(*values);
+    if state.ntuples % 1000 == 0 {
+        info!(
+            "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
+            state.ntuples,
+            Instant::now().duration_since(state.started).as_secs_f64(),
+            (Instant::now().duration_since(state.started) / state.ntuples as u32).as_secs_f64(),
+            state.stats.prune_neighbor_stats.distance_comparisons / state.ntuples,
+            state.stats.greedy_search_stats.distance_comparisons / state.ntuples,
+            state.stats,
+        );
+    }
+
     let values = std::slice::from_raw_parts(values, 1);
     let vec = PgVector::from_datum(values[0]);
 
@@ -210,7 +247,8 @@ unsafe fn build_callback_internal(
 
     let node = model::Node::new(vector, heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
-    state.node_builder.insert(&index, index_pointer, vector);
+    let new_stats = state.node_builder.insert(&index, index_pointer, vector);
+    state.stats.combine(new_stats);
 
     old_context.set_as_current();
     state.memcxt.reset();
