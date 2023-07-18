@@ -1,6 +1,5 @@
 use pgrx::PgRelation;
 
-
 use crate::util::ItemPointer;
 
 use super::{
@@ -37,16 +36,16 @@ impl Graph for DiskIndexGraph {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-    ) -> Option<Vec<NeighborWithDistance>> {
+        result: &mut Vec<NeighborWithDistance>,
+    ) -> bool {
         let rn = self.read(index, neighbors_of);
-        let mut ns = Vec::<NeighborWithDistance>::new();
         rn.get_archived_node().apply_to_neightbors(|dist, n| {
-            ns.push(NeighborWithDistance::new(
+            result.push(NeighborWithDistance::new(
                 n.deserialize_item_pointer(),
                 dist,
             ))
         });
-        Some(ns)
+        true
     }
 
     fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {

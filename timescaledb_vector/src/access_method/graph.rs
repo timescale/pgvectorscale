@@ -171,7 +171,8 @@ pub trait Graph {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-    ) -> Option<Vec<NeighborWithDistance>>;
+        result: &mut Vec<NeighborWithDistance>,
+    ) -> bool;
     fn get_meta_page(&self, index: &PgRelation) -> &TsvMetaPage;
 
     /// greedy search looks for the closest neighbors to a query vector
@@ -205,13 +206,17 @@ pub trait Graph {
 
         //OPT: Only build v when needed.
         let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(search_list_size);
+        let mut neighbors = Vec::<NeighborWithDistance>::with_capacity(
+            self.get_meta_page(index).get_num_neighbors() as _,
+        );
         while let Some((index_pointer, distance)) = l.visit_closest() {
-            let neighbors = self.get_neighbors(index, index_pointer);
-            if let None = neighbors {
+            neighbors.clear();
+            let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
+            if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
 
-            for neighbor_index_pointer in neighbors.unwrap() {
+            for neighbor_index_pointer in &neighbors {
                 l.insert(
                     index,
                     self,
@@ -231,7 +236,7 @@ pub trait Graph {
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
     fn prune_neighbors(
-        &mut self,
+        &self,
         index: &PgRelation,
         index_pointer: ItemPointer,
         new_neigbors: Vec<NeighborWithDistance>,
@@ -239,10 +244,11 @@ pub trait Graph {
         //TODO make configurable?
         let max_alpha = 1.2;
         //get a unique candidate pool
-        let mut candidates = match self.get_neighbors(index, index_pointer) {
-            Some(v) => v.clone(),
-            None => vec![], //new point has no entry in the map yet
-        };
+        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
+            (self.get_meta_page(index).get_num_neighbors() as usize) + new_neigbors.len(),
+        );
+        self.get_neighbors(index, index_pointer, &mut candidates);
+
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
             .map(|c| c.get_index_pointer_to_neigbor())
@@ -268,7 +274,7 @@ pub trait Graph {
         //sort by distance
         candidates.sort();
         let mut results = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page(index).get_num_neighbors() as _,
+            self.get_meta_page(index).get_max_neighbors_during_build(),
         );
 
         let mut max_factors: Vec<f32> = vec![0.0; candidates.len()];

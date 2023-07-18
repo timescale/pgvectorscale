@@ -33,7 +33,9 @@ impl BuilderGraph {
         if self.neighbor_map.len() == 0 {
             self.neighbor_map.insert(
                 index_pointer,
-                Vec::<NeighborWithDistance>::with_capacity(self.meta_page.get_num_neighbors() as _),
+                Vec::<NeighborWithDistance>::with_capacity(
+                    self.meta_page.get_max_neighbors_during_build() as _,
+                ),
             );
             return;
         }
@@ -67,9 +69,11 @@ impl BuilderGraph {
         distance: f32,
     ) {
         let current_links = self.neighbor_map.get_mut(&from).unwrap();
-        if current_links.len() + 1 < self.meta_page.get_num_neighbors() as _ {
+        if current_links.len() < current_links.capacity() as _ {
             current_links.push(NeighborWithDistance::new(to, distance));
         } else {
+            //Note prune_neighbors will reduce to current_links.len() to num_neighbors while capacity is num_neighbors * 1.3
+            //thus we are avoiding prunning every time
             let new_list =
                 self.prune_neighbors(index, from, vec![NeighborWithDistance::new(to, distance)]);
             self.neighbor_map.insert(from, new_list);
@@ -79,6 +83,14 @@ impl BuilderGraph {
     pub unsafe fn write(&self, index: &PgRelation) {
         //TODO: OPT: do this in order of item pointers
         for (index_pointer, neighbors) in &self.neighbor_map {
+            let prune_neighbors;
+            let neighbors = if neighbors.len() > self.meta_page.get_num_neighbors() as _ {
+                prune_neighbors = self.prune_neighbors(index, *index_pointer, vec![]);
+                &prune_neighbors
+            } else {
+                neighbors
+            };
+
             let node = Node::modify(index, index_pointer);
             let mut archived = node.get_archived_node();
             for (i, new_neighbor) in neighbors.iter().enumerate() {
@@ -129,11 +141,17 @@ impl Graph for BuilderGraph {
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,
-    ) -> Option<Vec<NeighborWithDistance>> {
+        result: &mut Vec<NeighborWithDistance>,
+    ) -> bool {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
-            Some(n) => Some(n.iter().map(|v| v.clone()).collect()),
-            None => None,
+            Some(n) => {
+                for nwd in n {
+                    result.push(nwd.clone());
+                }
+                true
+            }
+            None => false,
         }
     }
 
