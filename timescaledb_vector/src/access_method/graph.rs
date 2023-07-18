@@ -56,6 +56,7 @@ pub struct ListSearchResult {
     search_list_size: usize,
     best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
     inserted: HashSet<ItemPointer>,
+    pub stats: GreedySearchStats,
 }
 
 impl ListSearchResult {
@@ -64,6 +65,7 @@ impl ListSearchResult {
             search_list_size: search_list_size,
             best_candidate: vec![],
             inserted: HashSet::new(),
+            stats: GreedySearchStats::new(),
         }
     }
 
@@ -81,7 +83,9 @@ impl ListSearchResult {
             search_list_size: search_list_size,
             best_candidate: Vec::with_capacity(search_list_size),
             inserted: HashSet::with_capacity(search_list_size),
+            stats: GreedySearchStats::new(),
         };
+        res.stats.calls += 1;
         for index_pointer in init_ids {
             res.insert(index, graph, index_pointer, query);
         }
@@ -103,9 +107,11 @@ impl ListSearchResult {
         }
 
         let data_node = graph.read(index, index_pointer);
+        self.stats.node_reads += 1;
         let node = data_node.get_archived_node();
         let vec = node.vector.as_slice();
         let distance = distance(vec, query);
+        self.stats.distance_comparisons += 1;
 
         let neighbor = ListSearchNeighbor::new(
             index_pointer,
@@ -240,7 +246,9 @@ pub trait Graph {
         index: &PgRelation,
         index_pointer: ItemPointer,
         new_neigbors: Vec<NeighborWithDistance>,
-    ) -> Vec<NeighborWithDistance> {
+    ) -> (Vec<NeighborWithDistance>, PruneNeighborStats) {
+        let mut stats = PruneNeighborStats::new();
+        stats.calls += 1;
         //TODO make configurable?
         let max_alpha = 1.2;
         //get a unique candidate pool
@@ -287,7 +295,7 @@ pub trait Graph {
         {
             for (i, neighbor) in candidates.iter().enumerate() {
                 if results.len() >= self.get_meta_page(index).get_num_neighbors() as _ {
-                    return results;
+                    return (results, stats);
                 }
                 if max_factors[i] > alpha {
                     continue;
@@ -303,6 +311,7 @@ pub trait Graph {
 
                 //TODO make lazy
                 let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neigbor());
+                stats.node_reads += 1;
                 let existing_neighbor_node = data_node.get_archived_node();
                 let existing_neighbor_vec = existing_neighbor_node.vector.as_slice();
 
@@ -315,10 +324,12 @@ pub trait Graph {
 
                     let data_node =
                         self.read(index, candidate_neighbor.get_index_pointer_to_neigbor());
+                    stats.node_reads += 1;
                     let candidate_node = data_node.get_archived_node();
                     let candidate_vec = candidate_node.vector.as_slice();
                     let distance_between_candidate_and_existing_neighbor =
                         distance(existing_neighbor_vec, candidate_vec);
+                    stats.distance_comparisons += 1;
                     let distance_between_candidate_and_point = candidate_neighbor.get_distance();
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
                     let factor = if distance_between_candidate_and_existing_neighbor == 0.0 {
@@ -332,6 +343,52 @@ pub trait Graph {
             }
             alpha = alpha * 1.2
         }
-        results
+        (results, stats)
+    }
+}
+
+#[derive(Debug)]
+pub struct PruneNeighborStats {
+    pub calls: usize,
+    pub distance_comparisons: usize,
+    pub node_reads: usize,
+}
+
+impl PruneNeighborStats {
+    pub fn new() -> Self {
+        PruneNeighborStats {
+            calls: 0,
+            distance_comparisons: 0,
+            node_reads: 0,
+        }
+    }
+
+    pub fn combine(&mut self, other: Self) {
+        self.calls += other.calls;
+        self.distance_comparisons += other.distance_comparisons;
+        self.node_reads += other.node_reads;
+    }
+}
+
+#[derive(Debug)]
+pub struct GreedySearchStats {
+    pub calls: usize,
+    pub distance_comparisons: usize,
+    pub node_reads: usize,
+}
+
+impl GreedySearchStats {
+    pub fn new() -> Self {
+        GreedySearchStats {
+            calls: 0,
+            distance_comparisons: 0,
+            node_reads: 0,
+        }
+    }
+
+    pub fn combine(&mut self, other: Self) {
+        self.calls += other.calls;
+        self.distance_comparisons += other.distance_comparisons;
+        self.node_reads += other.node_reads;
     }
 }
