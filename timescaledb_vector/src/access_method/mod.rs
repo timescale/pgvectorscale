@@ -6,6 +6,7 @@ mod cost_estimate;
 mod debugging;
 mod disk_index_graph;
 mod graph;
+pub mod guc;
 mod model;
 pub mod options;
 mod scan;

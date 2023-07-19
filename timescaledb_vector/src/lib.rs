@@ -9,6 +9,7 @@ mod util;
 #[pg_guard]
 pub unsafe extern "C" fn _PG_init() {
     access_method::options::init();
+    access_method::guc::init();
 }
 
 #[allow(non_snake_case)]
