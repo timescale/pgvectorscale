@@ -1,4 +1,5 @@
 use pgrx::*;
+use rkyv::ArchiveUnsized;
 
 use crate::{
     access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
@@ -115,7 +116,7 @@ pub extern "C" fn amrescan(
 
     //TODO need to set search_list_size correctly
     //TODO right now doesn't handle more than LIMIT 100;
-    let search_list_size = 100;
+    let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
     use super::graph::Graph;
     let (lsr, _) = graph.greedy_search(&indexrel, query, search_list_size);
     let res = TSVResponseIterator::new(indexrel, lsr);

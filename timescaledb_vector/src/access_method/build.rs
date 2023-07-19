@@ -5,6 +5,7 @@ use pgrx::*;
 
 use crate::access_method::builder_graph::InsertStats;
 use crate::access_method::model::PgVector;
+use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -27,6 +28,8 @@ pub struct TsvMetaPage {
     num_dimensions: u32,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
     num_neighbors: u32,
+    search_list_size: u32,
+    max_alpha: f64,
 }
 
 impl TsvMetaPage {
@@ -40,6 +43,14 @@ impl TsvMetaPage {
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
         self.num_neighbors
+    }
+
+    pub fn get_search_list_size_for_build(&self) -> u32 {
+        self.search_list_size
+    }
+
+    pub fn get_max_alpha(&self) -> f64 {
+        self.max_alpha
     }
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
@@ -89,14 +100,16 @@ unsafe fn page_get_meta(page: pg_sys::Page, buffer: pg_sys::Buffer, new: bool) -
 unsafe fn write_meta_page(
     index: pg_sys::Relation,
     num_dimensions: u32,
-    num_neighbors: u32,
+    opt: PgBox<TSVIndexOptions>,
 ) -> TsvMetaPage {
     let page = page::WritablePage::new(index);
     let meta = page_get_meta(*page, *(*(page.get_buffer())), true);
     (*meta).magic_number = TSV_MAGIC_NUMBER;
     (*meta).version = TSV_VERSION;
     (*meta).num_dimensions = num_dimensions;
-    (*meta).num_neighbors = num_neighbors;
+    (*meta).num_neighbors = (*opt).num_neighbors;
+    (*meta).search_list_size = (*opt).search_list_size;
+    (*meta).max_alpha = (*opt).max_alpha;
     let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
 
     let meta_end = (meta as Pointer).add(std::mem::size_of::<TsvMetaPage>());
@@ -122,10 +135,18 @@ pub extern "C" fn ambuild(
 ) -> *mut pg_sys::IndexBuildResult {
     let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
+    let opt = TSVIndexOptions::from_relation(&index_relation);
+
+    notice!(
+        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}",
+        opt.num_neighbors,
+        opt.search_list_size,
+        opt.max_alpha
+    );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
     assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, 50) };
+    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, opt) };
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -269,7 +290,7 @@ mod tests {
             CREATE INDEX idxtest
                   ON test
                USING tsv(embedding)
-                WITH (placeholder=30);
+                WITH (num_neighbors=30);
 
             set enable_seqscan =0;
             select * from test order by embedding <=> '[0,0,0]';

@@ -74,8 +74,11 @@ impl BuilderGraph {
         }
 
         //TODO: make configurable?
-        let search_list_size = 100;
-        let (l, v) = self.greedy_search(index, vec, search_list_size);
+        let (l, v) = self.greedy_search(
+            index,
+            vec,
+            self.meta_page.get_search_list_size_for_build() as _,
+        );
         greedy_search_stats.combine(l.stats);
         let (neighbor_list, forward_stats) =
             self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());

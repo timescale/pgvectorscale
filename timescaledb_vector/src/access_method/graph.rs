@@ -256,7 +256,7 @@ pub trait Graph {
         let mut stats = PruneNeighborStats::new();
         stats.calls += 1;
         //TODO make configurable?
-        let max_alpha = 1.2;
+        let max_alpha = self.get_meta_page(index).get_max_alpha();
         //get a unique candidate pool
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
             (self.get_meta_page(index).get_num_neighbors() as usize) + new_neigbors.len(),
@@ -291,7 +291,7 @@ pub trait Graph {
             self.get_meta_page(index).get_max_neighbors_during_build(),
         );
 
-        let mut max_factors: Vec<f32> = vec![0.0; candidates.len()];
+        let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
@@ -308,7 +308,7 @@ pub trait Graph {
                 }
 
                 //don't consider again
-                max_factors[i] = f32::MAX;
+                max_factors[i] = f64::MAX;
                 results.push(neighbor.clone());
 
                 //we've now added this to the results so it's going to be a neighbor
@@ -339,10 +339,10 @@ pub trait Graph {
                     let distance_between_candidate_and_point = candidate_neighbor.get_distance();
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
                     let factor = if distance_between_candidate_and_existing_neighbor == 0.0 {
-                        f32::MAX //avoid division by 0
+                        f64::MAX //avoid division by 0
                     } else {
-                        distance_between_candidate_and_point
-                            / distance_between_candidate_and_existing_neighbor
+                        distance_between_candidate_and_point as f64
+                            / distance_between_candidate_and_existing_neighbor as f64
                     };
                     max_factors[j] = max_factors[j].max(factor)
                 }
