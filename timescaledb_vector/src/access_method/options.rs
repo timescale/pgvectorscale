@@ -4,14 +4,16 @@ use pgrx::prelude::*;
 use pgrx::*;
 use std::fmt::Debug;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(C)]
 pub struct TSVIndexOptions {
     /* varlena header (do not touch directly!) */
     #[allow(dead_code)]
     vl_len_: i32,
 
-    placeholder: i32,
+    pub num_neighbors: u32,
+    pub search_list_size: u32,
+    pub max_alpha: f64,
 }
 
 impl TSVIndexOptions {
@@ -21,7 +23,9 @@ impl TSVIndexOptions {
         } else if relation.rd_options.is_null() {
             // use defaults
             let mut ops = unsafe { PgBox::<TSVIndexOptions>::alloc0() };
-            ops.placeholder = 47;
+            ops.num_neighbors = 50;
+            ops.search_list_size = 65;
+            ops.max_alpha = 1.0;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -35,7 +39,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 1;
+const NUM_REL_OPTS: usize = 3;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
@@ -45,11 +49,23 @@ pub unsafe extern "C" fn amoptions(
     validate: bool,
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
-    let tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS] = [pg_sys::relopt_parse_elt {
-        optname: "placeholder".as_pg_cstr(),
-        opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
-        offset: offset_of!(TSVIndexOptions, placeholder) as i32,
-    }];
+    let tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS] = [
+        pg_sys::relopt_parse_elt {
+            optname: "num_neighbors".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            offset: offset_of!(TSVIndexOptions, num_neighbors) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "search_list_size".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            offset: offset_of!(TSVIndexOptions, search_list_size) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "max_alpha".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
+            offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
+        },
+    ];
 
     build_relopts(reloptions, validate, tab)
 }
@@ -80,11 +96,31 @@ pub unsafe fn init() {
 
     pg_sys::add_int_reloption(
         RELOPT_KIND_TSV,
-        "placeholder".as_pg_cstr(),
-        "Placeholder option".as_pg_cstr(),
-        47,
-        0,
+        "num_neighbors".as_pg_cstr(),
+        "Maximum number of neighbors in the graph".as_pg_cstr(),
         50,
+        10,
+        1000,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+
+    pg_sys::add_int_reloption(
+        RELOPT_KIND_TSV,
+        "search_list_size".as_pg_cstr(),
+        "The search list size to use during a build".as_pg_cstr(),
+        65,
+        10,
+        1000,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+
+    pg_sys::add_real_reloption(
+        RELOPT_KIND_TSV,
+        "max_alpha".as_pg_cstr(),
+        "The maximum alpha used in pruning".as_pg_cstr(),
+        1.0,
+        1.0,
+        5.0,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
 }
@@ -102,14 +138,14 @@ mod tests {
         CREATE INDEX idxtest
                   ON test
                USING tsv(encoding)
-                WITH (placeholder=30);",
+                WITH (num_neighbors=30);",
         ))?;
 
         let index_oid =
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.placeholder, 30);
+        assert_eq!(options.num_neighbors, 30);
         Ok(())
     }
 
@@ -126,7 +162,9 @@ mod tests {
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.placeholder, 47);
+        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.search_list_size, 65);
+        assert_eq!(options.max_alpha, 1.0);
         Ok(())
     }
 }
