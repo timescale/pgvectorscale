@@ -51,7 +51,10 @@ pub struct ReadableNode {
 
 impl ReadableNode {
     pub fn get_archived_node(&self) -> &ArchivedNode {
-        rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
+        // checking the code here is expensive during build, so skip it.
+        // TODO: should we check the data during queries?
+        //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
+        unsafe { rkyv::archived_root::<Node>(self._rb.get_data_slice()) }
     }
 }
 
