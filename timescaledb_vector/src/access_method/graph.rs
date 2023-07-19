@@ -9,7 +9,13 @@ use super::{
     model::{NeighborWithDistance, ReadableNode},
 };
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn distance(a: &[f32], b: &[f32]) -> f32 {
+    super::distance_x86::distance_opt_runtime_select(a, b)
+}
+
 //TODO: use slow L2 for now. Make pluggable and simd
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 fn distance(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
 
