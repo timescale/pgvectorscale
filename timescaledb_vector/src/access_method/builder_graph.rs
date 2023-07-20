@@ -80,8 +80,12 @@ impl BuilderGraph {
             self.meta_page.get_search_list_size_for_build() as _,
         );
         greedy_search_stats.combine(l.stats);
-        let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());
+        let (neighbor_list, forward_stats) = self.prune_neighbors(
+            index,
+            index_pointer,
+            v.unwrap().into_iter().collect(),
+            false,
+        );
         prune_neighbor_stats.combine(forward_stats);
 
         //set forward pointers
@@ -124,8 +128,12 @@ impl BuilderGraph {
             //info!("sizes {} {} {}", current_links.len() + 1, current_links.capacity(), self.meta_page.get_max_neighbors_during_build());
             //Note prune_neighbors will reduce to current_links.len() to num_neighbors while capacity is num_neighbors * 1.3
             //thus we are avoiding prunning every time
-            let (new_list, stats) =
-                self.prune_neighbors(index, from, vec![NeighborWithDistance::new(to, distance)]);
+            let (new_list, stats) = self.prune_neighbors(
+                index,
+                from,
+                vec![NeighborWithDistance::new(to, distance)],
+                true,
+            );
             self.neighbor_map.insert(from, new_list);
             (true, stats)
         }
@@ -140,7 +148,7 @@ impl BuilderGraph {
             let neighbors = if neighbors.len() > self.meta_page.get_num_neighbors() as _ {
                 stats.num_prunes += 1;
                 stats.num_neighbors_before_prune += neighbors.len();
-                (prune_neighbors, _) = self.prune_neighbors(index, *index_pointer, vec![]);
+                (prune_neighbors, _) = self.prune_neighbors(index, *index_pointer, vec![], true);
                 stats.num_neighbors_after_prune += prune_neighbors.len();
                 &prune_neighbors
             } else {

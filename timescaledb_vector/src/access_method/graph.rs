@@ -252,6 +252,7 @@ pub trait Graph {
         index: &PgRelation,
         index_pointer: ItemPointer,
         new_neigbors: Vec<NeighborWithDistance>,
+        saturate: bool,
     ) -> (Vec<NeighborWithDistance>, PruneNeighborStats) {
         let mut stats = PruneNeighborStats::new();
         stats.calls += 1;
@@ -350,7 +351,7 @@ pub trait Graph {
             alpha = alpha * 1.2
         }
         //experimental: saturate graph via max_factor.
-        if results.len() < self.get_meta_page(index).get_num_neighbors() as _ {
+        if saturate && results.len() < self.get_meta_page(index).get_num_neighbors() as _ {
             let mut max_factor_reverse_index: Vec<_> = max_factors
                 .iter()
                 .enumerate()
