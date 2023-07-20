@@ -349,6 +349,23 @@ pub trait Graph {
             }
             alpha = alpha * 1.2
         }
+        //experimental: saturate graph via max_factor.
+        if results.len() < self.get_meta_page(index).get_num_neighbors() as _ {
+            let mut max_factor_reverse_index: Vec<_> = max_factors
+                .iter()
+                .enumerate()
+                .filter(|&p| *p.1 < f64::MAX)
+                .collect();
+            //sort by increasing values of factor
+            max_factor_reverse_index.sort_by(|&a, &b| a.1.partial_cmp(b.1).unwrap());
+            for (candidate_index, _) in max_factor_reverse_index {
+                results.push(candidates[candidate_index].clone());
+                if results.len() >= self.get_meta_page(index).get_num_neighbors() as _ {
+                    break;
+                }
+            }
+        }
+
         (results, stats)
     }
 }
