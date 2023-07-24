@@ -8,8 +8,8 @@ use std::ops::Deref;
 use pgrx::*;
 
 use pgrx::pg_sys::{
-    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber_MAIN_FORKNUM,
-    InvalidBlockNumber, ReadBufferMode_RBM_NORMAL, Relation,
+    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber_MAIN_FORKNUM, InvalidBlockNumber,
+    ReadBufferMode_RBM_NORMAL, Relation,
 };
 
 /// LockedBufferExclusive is an RAII-guarded buffer that
@@ -53,7 +53,13 @@ impl LockedBufferExclusive {
 impl Drop for LockedBufferExclusive {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
-        unsafe { pg_sys::UnlockReleaseBuffer(self.buffer) };
+        unsafe {
+            // Only unlock while in a transaction state. Should not be unlocking during abort or commit.
+            // During abort, the system will unlock stuff itself. During commit, the release should have already happened.
+            if pgrx::pg_sys::IsTransactionState() {
+                pg_sys::UnlockReleaseBuffer(self.buffer);
+            }
+        }
     }
 }
 
@@ -95,7 +101,13 @@ impl LockedBufferShare {
 impl Drop for LockedBufferShare {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
-        unsafe { pg_sys::UnlockReleaseBuffer(self.buffer) };
+        unsafe {
+            // Only unlock while in a transaction state. Should not be unlocking during abort or commit.
+            // During abort, the system will unlock stuff itself. During commit, the release should have already happened.
+            if pgrx::pg_sys::IsTransactionState() {
+                pg_sys::UnlockReleaseBuffer(self.buffer);
+            }
+        }
     }
 }
 
