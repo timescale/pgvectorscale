@@ -3,22 +3,20 @@ use rkyv::ArchiveUnsized;
 
 use crate::{
     access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
-    util::{buffer::LockedBufferShare, ItemPointer},
+    util::{buffer::LockedBufferShare, HeapPointer, ItemPointer},
 };
 
 use super::graph::ListSearchResult;
 
 struct TSVResponseIterator {
-    index: PgRelation,
     lsr: ListSearchResult,
     current: usize,
     last_buffer: Option<LockedBufferShare>,
 }
 
 impl TSVResponseIterator {
-    fn new(index: PgRelation, lsr: ListSearchResult) -> Self {
+    fn new(lsr: ListSearchResult) -> Self {
         Self {
-            index: index,
             lsr: lsr,
             current: 0,
             last_buffer: None,
@@ -26,10 +24,8 @@ impl TSVResponseIterator {
     }
 }
 
-impl Iterator for TSVResponseIterator {
-    type Item = ItemPointer;
-
-    fn next(&mut self) -> Option<Self::Item> {
+impl TSVResponseIterator {
+    fn next(&mut self, index: &PgRelation) -> Option<HeapPointer> {
         let item = self.lsr.get_closest_heap_pointer(self.current);
         match item {
             Some(heap_pointer) => {
@@ -42,7 +38,7 @@ impl Iterator for TSVResponseIterator {
                  */
                 self.last_buffer = unsafe {
                     Some(LockedBufferShare::read(
-                        self.index.as_ptr(),
+                        index.as_ptr(),
                         index_pointer.block_number,
                     ))
                 };
@@ -50,7 +46,10 @@ impl Iterator for TSVResponseIterator {
                 self.current = self.current + 1;
                 Some(heap_pointer)
             }
-            None => None,
+            None => {
+                self.last_buffer = None;
+                None
+            }
         }
     }
 }
@@ -119,7 +118,7 @@ pub extern "C" fn amrescan(
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
     use super::graph::Graph;
     let (lsr, _) = graph.greedy_search(&indexrel, query, search_list_size);
-    let res = TSVResponseIterator::new(indexrel, lsr);
+    let res = TSVResponseIterator::new(lsr);
 
     state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
 }
@@ -133,9 +132,11 @@ pub extern "C" fn amgettuple(
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
     let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
 
+    let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
+
     /* no need to recheck stuff for now */
     scan.xs_recheckorderby = false;
-    match iter.next() {
+    match iter.next(&indexrel) {
         Some(heap_pointer) => {
             let tid_to_set = &mut scan.xs_heaptid;
             heap_pointer.to_item_pointer_data(tid_to_set);
@@ -148,4 +149,41 @@ pub extern "C" fn amgettuple(
 #[pg_guard]
 pub extern "C" fn amendscan(_scan: pg_sys::IndexScanDesc) {
     // nothing to do here
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::*;
+    #[pg_test]
+    unsafe fn test_index_scan() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+        INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+
+        INSERT INTO test(embedding) SELECT ('[' || g::text ||', 0, 0]')::vector FROM generate_series(0, 100) g;
+
+        CREATE INDEX idxtest
+              ON test
+           USING tsv(embedding)
+            WITH (num_neighbors=30);"
+        ))?;
+
+        Spi::run(&format!(
+            "
+        set enable_seqscan =0;
+        select * from test order by embedding <=> '[0,0,0]';
+        explain analyze select * from test order by embedding <=> '[0,0,0]';
+        ",
+        ))?;
+
+        Spi::run(&format!(
+            "
+        drop index idxtest;
+        ",
+        ))?;
+
+        Ok(())
+    }
 }

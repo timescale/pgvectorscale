@@ -295,7 +295,8 @@ mod tests {
             set enable_seqscan =0;
             select * from test order by embedding <=> '[0,0,0]';
             explain analyze select * from test order by embedding <=> '[0,0,0]';
-                ",
+            drop index idxtest;
+            ",
         ))?;
         Ok(())
     }
