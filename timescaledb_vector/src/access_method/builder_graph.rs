@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use pgrx::*;
@@ -134,14 +134,47 @@ impl BuilderGraph {
     pub unsafe fn write(&self, index: &PgRelation) -> WriteStats {
         let mut stats = WriteStats::new();
         //TODO: OPT: do this in order of item pointers
+        let vertex: Vec<&ItemPointer> = self.neighbor_map.keys().into_iter().collect();
+        use rand::seq::SliceRandom;
+        use rand::thread_rng;
+        let mut rng = thread_rng();
+
         for (index_pointer, neighbors) in &self.neighbor_map {
             stats.num_nodes += 1;
-            let prune_neighbors;
+            let mut prune_neighbors;
             let neighbors = if neighbors.len() > self.meta_page.get_num_neighbors() as _ {
                 stats.num_prunes += 1;
                 stats.num_neighbors_before_prune += neighbors.len();
                 (prune_neighbors, _) = self.prune_neighbors(index, *index_pointer, vec![]);
                 stats.num_neighbors_after_prune += prune_neighbors.len();
+                &prune_neighbors
+            } else if neighbors.len() < self.meta_page.get_num_neighbors() as _ {
+                let mut n_set: HashSet<_> = neighbors
+                    .iter()
+                    .map(|n| n.get_index_pointer_to_neigbor())
+                    .collect();
+                prune_neighbors = neighbors.clone();
+
+                let readable_node = self.read(index, *index_pointer);
+                let a_readable_node = readable_node.get_archived_node();
+                let node_vec = a_readable_node.vector.as_slice();
+
+                let mut probes = 0;
+                while n_set.len() < self.meta_page.get_num_neighbors() as _
+                    && vertex.len() > 0
+                    && probes < self.meta_page.get_num_neighbors() as _
+                {
+                    probes += 1;
+                    let item = vertex.choose(&mut rng).unwrap();
+                    if n_set.insert(**item) {
+                        let new_neighbor_node = self.read(index, **item);
+                        let a_new_neigbor_node = new_neighbor_node.get_archived_node();
+                        let new_neigbor_vec = a_new_neigbor_node.vector.as_slice();
+                        let distance = super::graph::distance(node_vec, new_neigbor_vec);
+                        let value = NeighborWithDistance::new(**item, distance);
+                        prune_neighbors.push(value)
+                    }
+                }
                 &prune_neighbors
             } else {
                 neighbors

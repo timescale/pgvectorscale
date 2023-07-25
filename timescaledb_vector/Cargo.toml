@@ -14,6 +14,7 @@ pg_test = []
 [dependencies]
 memoffset = "0.9.0"
 pgrx = "=0.9.8"
+rand = "0.8.5"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0"}
 
