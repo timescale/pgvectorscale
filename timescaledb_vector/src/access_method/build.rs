@@ -192,12 +192,12 @@ pub unsafe extern "C" fn aminsert(
     _index_unchanged: bool,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
-    panic!("Not yet implemented")
+    panic!("aminsert: not yet implemented")
 }
 
 #[pg_guard]
 pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
-    panic!("Not yet implemented")
+    panic!("ambuildempty: not yet implemented")
 }
 
 fn do_heap_scan<'a>(
