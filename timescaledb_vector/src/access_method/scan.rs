@@ -9,14 +9,22 @@ use crate::{
 use super::graph::ListSearchResult;
 
 struct TSVResponseIterator {
+    query: Vec<f32>,
     lsr: ListSearchResult,
+    search_list_size: usize,
     current: usize,
     last_buffer: Option<LockedBufferShare>,
 }
 
 impl TSVResponseIterator {
-    fn new(lsr: ListSearchResult) -> Self {
+    fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
+        //TODO: use real init id
+        let mut graph = DiskIndexGraph::new(&index, vec![ItemPointer::new(1, 1)]);
+        use super::graph::Graph;
+        let lsr = graph.greedy_search_streaming_init(&index, query);
         Self {
+            query: query.to_vec(),
+            search_list_size: search_list_size,
             lsr: lsr,
             current: 0,
             last_buffer: None,
@@ -26,10 +34,14 @@ impl TSVResponseIterator {
 
 impl TSVResponseIterator {
     fn next(&mut self, index: &PgRelation) -> Option<HeapPointer> {
-        let item = self.lsr.get_closest_heap_pointer(self.current);
+        let mut graph = DiskIndexGraph::new(&index, vec![ItemPointer::new(1, 1)]);
+        use super::graph::Graph;
+        graph.greedy_search_iterate(&mut self.lsr, index, &self.query, self.search_list_size);
+
+        let item = self.lsr.consume();
+
         match item {
-            Some(heap_pointer) => {
-                let index_pointer = self.lsr.get_closets_index_pointer(self.current).unwrap();
+            Some((heap_pointer, index_pointer)) => {
                 /*
                  * An index scan must maintain a pin on the index page holding the
                  * item last returned by amgettuple
@@ -110,15 +122,11 @@ pub extern "C" fn amrescan(
     let vec = unsafe { PgVector::from_datum(orderby_keys[0].sk_argument) };
     let query = unsafe { (*vec).to_slice() };
 
-    //TODO: use real init id
-    let mut graph = DiskIndexGraph::new(&indexrel, vec![ItemPointer::new(1, 1)]);
-
     //TODO need to set search_list_size correctly
     //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
-    use super::graph::Graph;
-    let (lsr, _) = graph.greedy_search(&indexrel, query, search_list_size);
-    let res = TSVResponseIterator::new(lsr);
+
+    let res = TSVResponseIterator::new(&indexrel, query, search_list_size);
 
     state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
 }
@@ -172,7 +180,53 @@ mod tests {
 
         Spi::run(&format!(
             "
-        set enable_seqscan =0;
+        set enable_seqscan = 0;
+        select * from test order by embedding <=> '[0,0,0]';
+        explain analyze select * from test order by embedding <=> '[0,0,0]';
+        ",
+        ))?;
+
+        Spi::run(&format!(
+            "
+        set enable_seqscan = 0;
+        set tsv.query_search_list_size = 2;
+        select * from test order by embedding <=> '[0,0,0]';
+        ",
+        ))?;
+
+        let res: Option<i64> = Spi::get_one(&format!(
+            "
+        set enable_seqscan = 0;
+        set tsv.query_search_list_size = 2;
+        WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;
+        ",
+        ))?;
+
+        assert_eq!(104, res.unwrap());
+
+        Spi::run(&format!(
+            "
+        drop index idxtest;
+        ",
+        ))?;
+
+        Ok(())
+    }
+
+    /*#[pg_test]
+    unsafe fn test_index_scan_on_empty_table() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+        CREATE INDEX idxtest
+              ON test
+           USING tsv(embedding)
+            WITH (num_neighbors=30);"
+        ))?;
+
+        Spi::run(&format!(
+            "
+        set enable_seqscan = 0;
         select * from test order by embedding <=> '[0,0,0]';
         explain analyze select * from test order by embedding <=> '[0,0,0]';
         ",
@@ -185,5 +239,5 @@ mod tests {
         ))?;
 
         Ok(())
-    }
+    } */
 }

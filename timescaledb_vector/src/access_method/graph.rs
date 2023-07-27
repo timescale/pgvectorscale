@@ -59,25 +59,25 @@ impl ListSearchNeighbor {
 }
 
 pub struct ListSearchResult {
-    search_list_size: usize,
     best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
     inserted: HashSet<ItemPointer>,
+    max_history_size: Option<usize>,
     pub stats: GreedySearchStats,
 }
 
 impl ListSearchResult {
-    fn empty(search_list_size: usize) -> Self {
+    fn empty() -> Self {
         Self {
-            search_list_size: search_list_size,
             best_candidate: vec![],
             inserted: HashSet::new(),
+            max_history_size: None,
             stats: GreedySearchStats::new(),
         }
     }
 
     fn new<G>(
         index: &PgRelation,
-        search_list_size: usize,
+        max_history_size: Option<usize>,
         graph: &G,
         init_ids: Vec<ItemPointer>,
         query: &[f32],
@@ -86,9 +86,9 @@ impl ListSearchResult {
         G: Graph + ?Sized,
     {
         let mut res = Self {
-            search_list_size: search_list_size,
-            best_candidate: Vec::with_capacity(search_list_size),
-            inserted: HashSet::with_capacity(search_list_size),
+            best_candidate: Vec::new(),
+            inserted: HashSet::new(),
+            max_history_size: max_history_size,
             stats: GreedySearchStats::new(),
         };
         res.stats.calls += 1;
@@ -129,50 +129,45 @@ impl ListSearchResult {
 
     /// Internal function
     fn _insert_neighbor(&mut self, n: ListSearchNeighbor) {
-        if self.best_candidate.len() >= self.search_list_size {
-            let last = self.best_candidate.last().unwrap();
-            if n >= *last {
-                //n is too far in the list to be the best candidate.
-                return;
+        if let Some(max_size) = self.max_history_size {
+            if self.best_candidate.len() >= max_size {
+                let last = self.best_candidate.last().unwrap();
+                if n >= *last {
+                    //n is too far in the list to be the best candidate.
+                    return;
+                }
+                self.best_candidate.pop();
             }
-            self.best_candidate.pop();
         }
-
         //insert while preserving sort order.
         let idx = self.best_candidate.partition_point(|x| *x < n);
         self.best_candidate.insert(idx, n)
     }
 
-    fn visit_closest(&mut self) -> Option<(ItemPointer, f32)> {
+    fn visit_closest(&mut self, pos_limit: usize) -> Option<(ItemPointer, f32, usize)> {
         //OPT: should we optimize this not to do a linear search each time?
-        let neighbor = self.best_candidate.iter_mut().find(|n| !n.visited);
-        match neighbor {
-            Some(n) => {
-                (*n).visited = true;
-                Some((n.index_pointer, n.distance))
+        let neighbor_position = self.best_candidate.iter().position(|n| !n.visited);
+        match neighbor_position {
+            Some(pos) => {
+                if pos > pos_limit {
+                    return None;
+                }
+                let n = &mut self.best_candidate[pos];
+                n.visited = true;
+                Some((n.index_pointer, n.distance, pos))
             }
             None => None,
         }
     }
 
-    pub fn get_closets_index_pointer(&self, index: usize) -> Option<ItemPointer> {
-        self.best_candidate.get(index).map(|n| n.index_pointer)
-    }
-
-    fn get_k_index_pointers(&self, k: usize) -> Vec<ItemPointer> {
-        let mut k_closets = Vec::<ItemPointer>::with_capacity(k);
-        for i in 0..k {
-            let item = self.get_closets_index_pointer(i);
-            match item {
-                Some(pointer) => k_closets.push(pointer),
-                None => break,
-            }
+    //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
+    //into the best_candidate list, so it will never again be returned.
+    pub fn consume(&mut self) -> Option<(HeapPointer, IndexPointer)> {
+        if self.best_candidate.is_empty() {
+            return None;
         }
-        k_closets
-    }
-
-    pub fn get_closest_heap_pointer(&self, i: usize) -> Option<HeapPointer> {
-        self.best_candidate.get(i).map(|f| f.heap_pointer)
+        let f = self.best_candidate.remove(0);
+        return Some((f.heap_pointer, f.index_pointer));
     }
 }
 
@@ -197,9 +192,8 @@ pub trait Graph {
     /// To get the K closest neighbors, you then get the first K items in the ListSearchResult
     /// return items.
     ///
-    /// Note: there may be a streaming implementation of this possible if we don't limit the size
-    /// of the ListSearchResult, and use  ListSearchResult as the state. Then you don't output item
-    /// i until you've visited all item up until i+window (e.g. i+10).
+    /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
+    /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     fn greedy_search(
         &mut self,
         index: &PgRelation,
@@ -212,16 +206,51 @@ pub trait Graph {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
-            return (ListSearchResult::empty(search_list_size), None);
+            return (ListSearchResult::empty(), None);
         }
-        let mut l = ListSearchResult::new(index, search_list_size, self, init_ids.unwrap(), query);
+        let mut l = ListSearchResult::new(
+            index,
+            Some(search_list_size),
+            self,
+            init_ids.unwrap(),
+            query,
+        );
+        let v = self.greedy_search_iterate(&mut l, index, query, search_list_size);
+        return (l, v);
+    }
 
+    /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
+    /// the next elements.
+    fn greedy_search_streaming_init(
+        &mut self,
+        index: &PgRelation,
+        query: &[f32],
+    ) -> ListSearchResult {
+        let init_ids = self.get_init_ids();
+        if let None = init_ids {
+            //no nodes in the graph
+            return ListSearchResult::empty();
+        }
+        ListSearchResult::new(index, None, self, init_ids.unwrap(), query)
+    }
+
+    /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
+    fn greedy_search_iterate(
+        &mut self,
+        lsr: &mut ListSearchResult,
+        index: &PgRelation,
+        query: &[f32],
+        visit_n_closest: usize,
+    ) -> Option<HashSet<NeighborWithDistance>>
+    where
+        Self: Graph,
+    {
         //OPT: Only build v when needed.
-        let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(search_list_size);
+        let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
         let mut neighbors = Vec::<NeighborWithDistance>::with_capacity(
             self.get_meta_page(index).get_num_neighbors() as _,
         );
-        while let Some((index_pointer, distance)) = l.visit_closest() {
+        while let Some((index_pointer, distance, pos)) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
             let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
             if !neighbors_existed {
@@ -229,7 +258,7 @@ pub trait Graph {
             }
 
             for neighbor_index_pointer in &neighbors {
-                l.insert(
+                lsr.insert(
                     index,
                     self,
                     neighbor_index_pointer.get_index_pointer_to_neigbor(),
@@ -239,7 +268,7 @@ pub trait Graph {
             v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
 
-        (l, Some(v))
+        Some(v)
     }
 
     /// Prune neigbors by prefering neighbors closer to the point in question
