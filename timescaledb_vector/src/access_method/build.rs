@@ -4,6 +4,7 @@ use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
 
 use crate::access_method::builder_graph::InsertStats;
+use crate::access_method::graph::Graph;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
@@ -30,6 +31,8 @@ pub struct TsvMetaPage {
     num_neighbors: u32,
     search_list_size: u32,
     max_alpha: f64,
+    init_ids_block_number: pgrx::pg_sys::BlockNumber,
+    init_ids_offset: pgrx::pg_sys::OffsetNumber,
 }
 
 impl TsvMetaPage {
@@ -55,6 +58,15 @@ impl TsvMetaPage {
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
         return ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize;
+    }
+
+    pub fn get_init_ids(&self) -> Option<Vec<IndexPointer>> {
+        if self.init_ids_block_number == 0 && self.init_ids_offset == 0 {
+            return None;
+        }
+
+        let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
+        Some(vec![ptr])
     }
 }
 
@@ -110,6 +122,8 @@ unsafe fn write_meta_page(
     (*meta).num_neighbors = (*opt).num_neighbors;
     (*meta).search_list_size = (*opt).search_list_size;
     (*meta).max_alpha = (*opt).max_alpha;
+    (*meta).init_ids_block_number = 0;
+    (*meta).init_ids_offset = 0;
     let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
 
     let meta_end = (meta as Pointer).add(std::mem::size_of::<TsvMetaPage>());
@@ -125,6 +139,16 @@ pub unsafe fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
     let page = page::ReadablePage::read(index.as_ptr(), 0);
     let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
     (*meta).clone()
+}
+
+pub unsafe fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
+    assert!(init_ids.len() == 1); //change this if we support multiple
+    let id = init_ids[0];
+    let page = page::WritablePage::modify(index.as_ptr(), 0);
+    let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
+    (*meta).init_ids_block_number = id.block_number;
+    (*meta).init_ids_offset = id.offset;
+    page.commit()
 }
 
 #[pg_guard]
@@ -196,6 +220,13 @@ fn do_heap_scan<'a>(
 
     let write_stats = unsafe { state.node_builder.write(index_relation) };
     assert!(write_stats.num_nodes == state.ntuples);
+
+    if let Some(ids) = state.node_builder.get_init_ids() {
+        unsafe {
+            update_meta_page_init_ids(index_relation, ids);
+        }
+    }
+
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
         .as_secs_f64();

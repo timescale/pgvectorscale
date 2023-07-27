@@ -9,23 +9,19 @@ use super::{
 };
 
 pub struct DiskIndexGraph {
-    init_ids: Vec<ItemPointer>,
     meta_page: super::build::TsvMetaPage,
 }
 
 impl DiskIndexGraph {
-    pub fn new(index: &PgRelation, init_ids: Vec<ItemPointer>) -> Self {
+    pub fn new(index: &PgRelation) -> Self {
         let meta = unsafe { read_meta_page(index) };
-        Self {
-            init_ids: init_ids,
-            meta_page: meta,
-        }
+        Self { meta_page: meta }
     }
 }
 
 impl Graph for DiskIndexGraph {
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        Some(self.init_ids.clone())
+        self.meta_page.get_init_ids()
     }
 
     fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
