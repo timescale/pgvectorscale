@@ -18,8 +18,7 @@ struct TSVResponseIterator {
 
 impl TSVResponseIterator {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
-        //TODO: use real init id
-        let mut graph = DiskIndexGraph::new(&index, vec![ItemPointer::new(1, 1)]);
+        let mut graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
         let lsr = graph.greedy_search_streaming_init(&index, query);
         Self {
@@ -34,7 +33,7 @@ impl TSVResponseIterator {
 
 impl TSVResponseIterator {
     fn next(&mut self, index: &PgRelation) -> Option<HeapPointer> {
-        let mut graph = DiskIndexGraph::new(&index, vec![ItemPointer::new(1, 1)]);
+        let mut graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
         graph.greedy_search_iterate(&mut self.lsr, index, &self.query, self.search_list_size);
 
@@ -213,7 +212,7 @@ mod tests {
         Ok(())
     }
 
-    /*#[pg_test]
+    #[pg_test]
     unsafe fn test_index_scan_on_empty_table() -> spi::Result<()> {
         Spi::run(&format!(
             "CREATE TABLE test(embedding vector(3));
@@ -239,5 +238,5 @@ mod tests {
         ))?;
 
         Ok(())
-    } */
+    }
 }
