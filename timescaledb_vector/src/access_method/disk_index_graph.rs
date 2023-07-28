@@ -47,4 +47,24 @@ impl Graph for DiskIndexGraph {
     fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
         &self.meta_page
     }
+
+    fn set_neighbors(
+        &mut self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        new_neighbors: Vec<NeighborWithDistance>,
+    ) {
+        unsafe {
+            Node::update_neighbors(
+                index,
+                neighbors_of,
+                &new_neighbors,
+                self.get_meta_page(index),
+            );
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.meta_page.get_init_ids().is_none()
+    }
 }

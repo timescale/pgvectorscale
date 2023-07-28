@@ -21,113 +21,12 @@ pub struct BuilderGraph {
     meta_page: super::build::TsvMetaPage,
 }
 
-#[derive(Debug)]
-pub struct InsertStats {
-    pub prune_neighbor_stats: PruneNeighborStats,
-    pub greedy_search_stats: GreedySearchStats,
-}
-
-impl InsertStats {
-    pub fn new() -> Self {
-        return InsertStats {
-            prune_neighbor_stats: PruneNeighborStats::new(),
-            greedy_search_stats: GreedySearchStats::new(),
-        };
-    }
-
-    pub fn combine(&mut self, other: InsertStats) {
-        self.prune_neighbor_stats
-            .combine(other.prune_neighbor_stats);
-        self.greedy_search_stats.combine(other.greedy_search_stats);
-    }
-}
-
 impl BuilderGraph {
     pub fn new(meta_page: super::build::TsvMetaPage) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
             first: None,
             meta_page: meta_page,
-        }
-    }
-
-    pub fn insert(
-        &mut self,
-        index: &PgRelation,
-        index_pointer: IndexPointer,
-        vec: &[f32],
-    ) -> InsertStats {
-        let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
-        let mut greedy_search_stats = GreedySearchStats::new();
-
-        if self.neighbor_map.len() == 0 {
-            self.neighbor_map.insert(
-                index_pointer,
-                Vec::<NeighborWithDistance>::with_capacity(
-                    self.meta_page.get_max_neighbors_during_build() as _,
-                ),
-            );
-            return InsertStats {
-                prune_neighbor_stats: prune_neighbor_stats,
-                greedy_search_stats: greedy_search_stats,
-            };
-        }
-
-        //TODO: make configurable?
-        let (l, v) = self.greedy_search(
-            index,
-            vec,
-            self.meta_page.get_search_list_size_for_build() as _,
-        );
-        greedy_search_stats.combine(l.stats);
-        let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());
-        prune_neighbor_stats.combine(forward_stats);
-
-        //set forward pointers
-        self.neighbor_map
-            .insert(index_pointer, neighbor_list.clone());
-
-        //update back pointers
-        let mut cnt = 0;
-        for neighbor in neighbor_list {
-            let (needed_prune, backpointer_stats) = self.update_back_pointer(
-                index,
-                neighbor.get_index_pointer_to_neigbor(),
-                index_pointer,
-                neighbor.get_distance(),
-            );
-            if needed_prune {
-                cnt = cnt + 1;
-            }
-            prune_neighbor_stats.combine(backpointer_stats);
-        }
-        //info!("pruned {} neighbors", cnt);
-        return InsertStats {
-            prune_neighbor_stats: prune_neighbor_stats,
-            greedy_search_stats: greedy_search_stats,
-        };
-    }
-
-    fn update_back_pointer(
-        &mut self,
-        index: &PgRelation,
-        from: IndexPointer,
-        to: IndexPointer,
-        distance: f32,
-    ) -> (bool, PruneNeighborStats) {
-        let current_links = self.neighbor_map.get_mut(&from).unwrap();
-        if current_links.len() < current_links.capacity() as _ {
-            current_links.push(NeighborWithDistance::new(to, distance));
-            (false, PruneNeighborStats::new())
-        } else {
-            //info!("sizes {} {} {}", current_links.len() + 1, current_links.capacity(), self.meta_page.get_max_neighbors_during_build());
-            //Note prune_neighbors will reduce to current_links.len() to num_neighbors while capacity is num_neighbors * 1.3
-            //thus we are avoiding prunning every time
-            let (new_list, stats) =
-                self.prune_neighbors(index, from, vec![NeighborWithDistance::new(to, distance)]);
-            self.neighbor_map.insert(from, new_list);
-            (true, stats)
         }
     }
 
@@ -148,28 +47,7 @@ impl BuilderGraph {
             };
             stats.num_neighbors += neighbors.len();
 
-            let node = Node::modify(index, index_pointer);
-            let mut archived = node.get_archived_node();
-            for (i, new_neighbor) in neighbors.iter().enumerate() {
-                //TODO: why do we need to recreate the archive?
-                let mut a_index_pointer = archived.as_mut().neighbor_index_pointer().index_pin(i);
-                //TODO hate that we have to set each field like this
-                a_index_pointer.block_number =
-                    new_neighbor.get_index_pointer_to_neigbor().block_number;
-                a_index_pointer.offset = new_neighbor.get_index_pointer_to_neigbor().offset;
-
-                let mut a_distance = archived.as_mut().neighbor_distances().index_pin(i);
-                *a_distance = new_neighbor.get_distance() as Distance;
-            }
-            //set the marker that the list ended
-            if neighbors.len() < self.meta_page.get_num_neighbors() as _ {
-                //TODO: why do we need to recreate the archive?
-                let archived = node.get_archived_node();
-                let mut past_last_distance =
-                    archived.neighbor_distances().index_pin(neighbors.len());
-                *past_last_distance = Distance::NAN;
-            }
-            node.commit()
+            Node::update_neighbors(index, *index_pointer, neighbors, self.get_meta_page(index));
         }
         stats
     }
@@ -215,6 +93,19 @@ impl Graph for BuilderGraph {
 
     fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
         &self.meta_page
+    }
+
+    fn set_neighbors(
+        &mut self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        new_neighbors: Vec<NeighborWithDistance>,
+    ) {
+        self.neighbor_map.insert(neighbors_of, new_neighbors);
+    }
+
+    fn is_empty(&self) -> bool {
+        self.neighbor_map.len() == 0
     }
 }
 

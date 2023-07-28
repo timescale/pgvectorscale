@@ -3,8 +3,9 @@ use std::time::Instant;
 use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
 
-use crate::access_method::builder_graph::InsertStats;
+use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
+use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
@@ -183,16 +184,34 @@ pub extern "C" fn ambuild(
 
 #[pg_guard]
 pub unsafe extern "C" fn aminsert(
-    _index_relation: pg_sys::Relation,
-    _values: *mut pg_sys::Datum,
-    _isnull: *mut bool,
-    _heap_tid: pg_sys::ItemPointer,
+    indexrel: pg_sys::Relation,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    heap_tid: pg_sys::ItemPointer,
     _heap_relation: pg_sys::Relation,
     _check_unique: pg_sys::IndexUniqueCheck,
     _index_unchanged: bool,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
-    panic!("aminsert: not yet implemented")
+    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
+    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    if let None = vec {
+        //todo handle NULLs?
+        return false;
+    }
+    let vec = vec.unwrap();
+    let vector = (*vec).to_slice();
+    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
+    let mut graph = DiskIndexGraph::new(&index_relation);
+    let meta_page = read_meta_page(&index_relation);
+
+    let node = model::Node::new(vector, heap_pointer, &meta_page);
+
+    let mut tape = unsafe { Tape::new((*index_relation).as_ptr()) };
+    let index_pointer: IndexPointer = node.write(&mut tape);
+
+    let _stats = graph.insert(&index_relation, index_pointer, vector);
+    false
 }
 
 #[pg_guard]
@@ -257,19 +276,23 @@ unsafe extern "C" fn build_callback(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
     values: *mut pg_sys::Datum,
-    _isnull: *mut bool,
+    isnull: *mut bool,
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
     let index_relation = unsafe { PgRelation::from_pg(index) };
-    build_callback_internal(index_relation, *ctid, values, state);
+    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    if let Some(vec) = vec {
+        build_callback_internal(index_relation, *ctid, (*vec).to_slice(), state);
+    }
+    //todo: what do we do with nulls?
 }
 
 #[inline(always)]
 unsafe fn build_callback_internal(
     index: PgRelation,
     ctid: pg_sys::ItemPointerData,
-    values: *mut pg_sys::Datum,
+    vector: &[f32],
     state: *mut std::os::raw::c_void,
 ) {
     check_for_interrupts!();
@@ -291,10 +314,6 @@ unsafe fn build_callback_internal(
         );
     }
 
-    let values = std::slice::from_raw_parts(values, 1);
-    let vec = PgVector::from_datum(values[0]);
-
-    let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
     let node = model::Node::new(vector, heap_pointer, &state.meta_page);
@@ -329,6 +348,42 @@ mod tests {
             drop index idxtest;
             ",
         ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_insert() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+
+            CREATE INDEX idxtest
+                  ON test
+               USING tsv(embedding)
+                WITH (num_neighbors=30);
+
+            INSERT INTO test(embedding) VALUES ('[11,12,13]');
+            ",
+        ))?;
+
+        let res: Option<i64> = Spi::get_one(&format!(
+            "   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+        ))?;
+        assert_eq!(4, res.unwrap());
+
+        Spi::run(&format!(
+            "INSERT INTO test(embedding) VALUES ('[11,12,13]'),  ('[14,15,16]');",
+        ))?;
+        let res: Option<i64> = Spi::get_one(&format!(
+            "   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+        ))?;
+        assert_eq!(6, res.unwrap());
+
+        Spi::run(&format!("drop index idxtest;",))?;
+
         Ok(())
     }
 }

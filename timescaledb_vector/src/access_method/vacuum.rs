@@ -61,12 +61,12 @@ mod tests {
 
         client
             .batch_execute(
-                "CREATE TABLE test(embedding vector(3));
+                "CREATE TABLE test_vac(embedding vector(3));
 
-        INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+        INSERT INTO test_vac(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
 
-        CREATE INDEX idxtest
-              ON test
+        CREATE INDEX idxtest_vac
+              ON test_vac
            USING tsv(embedding)
             WITH (num_neighbors=30);
             ",
@@ -74,22 +74,22 @@ mod tests {
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
 
         assert_eq!(cnt, 3);
 
         client
-            .execute("DELETE FROM test WHERE embedding = '[1,2,3]';", &[])
+            .execute("DELETE FROM test_vac WHERE embedding = '[1,2,3]';", &[])
             .unwrap();
 
-        client.execute("VACUUM test", &[]).unwrap();
-        client.execute("DROP INDEX idxtest", &[]).unwrap();
+        client.execute("VACUUM test_vac", &[]).unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
         assert_eq!(cnt, 2);
 
-        client.execute("DROP TABLE test", &[]).unwrap();
+        client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
+        client.execute("DROP TABLE test_vac", &[]).unwrap();
     }
 
     #[pg_test]
