@@ -180,6 +180,16 @@ pub trait Graph {
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool;
+
+    fn is_empty(&self) -> bool;
+
+    fn set_neighbors(
+        &mut self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        new_neighbors: Vec<NeighborWithDistance>,
+    );
+
     fn get_meta_page(&self, index: &PgRelation) -> &TsvMetaPage;
 
     /// greedy search looks for the closest neighbors to a query vector
@@ -380,6 +390,87 @@ pub trait Graph {
         }
         (results, stats)
     }
+
+    fn insert(
+        &mut self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        vec: &[f32],
+    ) -> InsertStats {
+        let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
+        let mut greedy_search_stats = GreedySearchStats::new();
+        let meta_page = self.get_meta_page(index);
+
+        if self.is_empty() {
+            self.set_neighbors(
+                index,
+                index_pointer,
+                Vec::<NeighborWithDistance>::with_capacity(
+                    meta_page.get_max_neighbors_during_build() as _,
+                ),
+            );
+            return InsertStats {
+                prune_neighbor_stats: prune_neighbor_stats,
+                greedy_search_stats: greedy_search_stats,
+            };
+        }
+
+        //TODO: make configurable?
+        let (l, v) =
+            self.greedy_search(index, vec, meta_page.get_search_list_size_for_build() as _);
+        greedy_search_stats.combine(l.stats);
+        let (neighbor_list, forward_stats) =
+            self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());
+        prune_neighbor_stats.combine(forward_stats);
+
+        //set forward pointers
+        self.set_neighbors(index, index_pointer, neighbor_list.clone());
+
+        //update back pointers
+        let mut cnt = 0;
+        for neighbor in neighbor_list {
+            let (needed_prune, backpointer_stats) = self.update_back_pointer(
+                index,
+                neighbor.get_index_pointer_to_neigbor(),
+                index_pointer,
+                neighbor.get_distance(),
+            );
+            if needed_prune {
+                cnt = cnt + 1;
+            }
+            prune_neighbor_stats.combine(backpointer_stats);
+        }
+        //info!("pruned {} neighbors", cnt);
+        return InsertStats {
+            prune_neighbor_stats: prune_neighbor_stats,
+            greedy_search_stats: greedy_search_stats,
+        };
+    }
+
+    fn update_back_pointer(
+        &mut self,
+        index: &PgRelation,
+        from: IndexPointer,
+        to: IndexPointer,
+        distance: f32,
+    ) -> (bool, PruneNeighborStats) {
+        let mut current_links = Vec::<NeighborWithDistance>::new();
+        self.get_neighbors(index, from, &mut current_links);
+
+        if current_links.len() < current_links.capacity() as _ {
+            current_links.push(NeighborWithDistance::new(to, distance));
+            self.set_neighbors(index, from, current_links);
+            (false, PruneNeighborStats::new())
+        } else {
+            //info!("sizes {} {} {}", current_links.len() + 1, current_links.capacity(), self.meta_page.get_max_neighbors_during_build());
+            //Note prune_neighbors will reduce to current_links.len() to num_neighbors while capacity is num_neighbors * 1.3
+            //thus we are avoiding prunning every time
+            let (new_list, stats) =
+                self.prune_neighbors(index, from, vec![NeighborWithDistance::new(to, distance)]);
+            self.set_neighbors(index, from, new_list);
+            (true, stats)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -425,5 +516,26 @@ impl GreedySearchStats {
         self.calls += other.calls;
         self.distance_comparisons += other.distance_comparisons;
         self.node_reads += other.node_reads;
+    }
+}
+
+#[derive(Debug)]
+pub struct InsertStats {
+    pub prune_neighbor_stats: PruneNeighborStats,
+    pub greedy_search_stats: GreedySearchStats,
+}
+
+impl InsertStats {
+    pub fn new() -> Self {
+        return InsertStats {
+            prune_neighbor_stats: PruneNeighborStats::new(),
+            greedy_search_stats: GreedySearchStats::new(),
+        };
+    }
+
+    pub fn combine(&mut self, other: InsertStats) {
+        self.prune_neighbor_stats
+            .combine(other.prune_neighbor_stats);
+        self.greedy_search_stats.combine(other.greedy_search_stats);
     }
 }

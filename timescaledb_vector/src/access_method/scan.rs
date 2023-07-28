@@ -201,7 +201,7 @@ mod tests {
         ",
         ))?;
 
-        assert_eq!(104, res.unwrap());
+        assert_eq!(104, res.unwrap(), "Testing query over entire table");
 
         Spi::run(&format!(
             "

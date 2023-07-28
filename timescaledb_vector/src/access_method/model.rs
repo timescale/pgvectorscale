@@ -22,11 +22,25 @@ pub struct PgVector {
 }
 
 impl PgVector {
+    pub unsafe fn from_pg_parts(
+        datum_parts: *mut pg_sys::Datum,
+        isnull_parts: *mut bool,
+        index: usize,
+    ) -> Option<*mut PgVector> {
+        let isnulls = std::slice::from_raw_parts(isnull_parts, index + 1);
+        if isnulls[index] {
+            return None;
+        }
+        let datums = std::slice::from_raw_parts(datum_parts, index + 1);
+        Some(Self::from_datum(datums[index]))
+    }
+
     pub unsafe fn from_datum(datum: pg_sys::Datum) -> *mut PgVector {
         let detoasted = pg_sys::pg_detoast_datum(datum.cast_mut_ptr());
         let casted = detoasted.cast::<PgVector>();
         casted
     }
+
     pub fn to_slice(&self) -> &[f32] {
         let dim = (*self).dim;
         unsafe { (*self).x.as_slice(dim as _) }
@@ -96,9 +110,37 @@ impl Node {
         ReadableNode { _rb: rb }
     }
 
-    pub unsafe fn modify(index: &PgRelation, index_pointer: &ItemPointer) -> WritableNode {
+    pub unsafe fn modify(index: &PgRelation, index_pointer: ItemPointer) -> WritableNode {
         let wb = index_pointer.modify_bytes((*index).as_ptr());
         WritableNode { wb: wb }
+    }
+
+    pub unsafe fn update_neighbors(
+        index: &PgRelation,
+        index_pointer: ItemPointer,
+        neighbors: &Vec<NeighborWithDistance>,
+        meta_page: &super::build::TsvMetaPage,
+    ) {
+        let node = Node::modify(index, index_pointer);
+        let mut archived = node.get_archived_node();
+        for (i, new_neighbor) in neighbors.iter().enumerate() {
+            //TODO: why do we need to recreate the archive?
+            let mut a_index_pointer = archived.as_mut().neighbor_index_pointer().index_pin(i);
+            //TODO hate that we have to set each field like this
+            a_index_pointer.block_number = new_neighbor.get_index_pointer_to_neigbor().block_number;
+            a_index_pointer.offset = new_neighbor.get_index_pointer_to_neigbor().offset;
+
+            let mut a_distance = archived.as_mut().neighbor_distances().index_pin(i);
+            *a_distance = new_neighbor.get_distance() as Distance;
+        }
+        //set the marker that the list ended
+        if neighbors.len() < meta_page.get_num_neighbors() as _ {
+            //TODO: why do we need to recreate the archive?
+            let archived = node.get_archived_node();
+            let mut past_last_distance = archived.neighbor_distances().index_pin(neighbors.len());
+            *past_last_distance = Distance::NAN;
+        }
+        node.commit()
     }
 
     pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
