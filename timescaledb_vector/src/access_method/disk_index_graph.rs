@@ -14,7 +14,7 @@ pub struct DiskIndexGraph {
 
 impl DiskIndexGraph {
     pub fn new(index: &PgRelation) -> Self {
-        let meta = unsafe { read_meta_page(index) };
+        let meta = read_meta_page(index);
         Self { meta_page: meta }
     }
 }
@@ -54,6 +54,10 @@ impl Graph for DiskIndexGraph {
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
+        if self.meta_page.get_init_ids().is_none() {
+            super::build::update_meta_page_init_ids(index, vec![neighbors_of]);
+            self.meta_page = read_meta_page(index);
+        }
         unsafe {
             Node::update_neighbors(
                 index,

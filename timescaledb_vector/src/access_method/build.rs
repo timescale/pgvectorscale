@@ -136,20 +136,25 @@ unsafe fn write_meta_page(
     mp
 }
 
-pub unsafe fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
-    let page = page::ReadablePage::read(index.as_ptr(), 0);
-    let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
-    (*meta).clone()
+pub fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
+    unsafe {
+        let page = page::ReadablePage::read(index.as_ptr(), 0);
+        let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
+        (*meta).clone()
+    }
 }
 
-pub unsafe fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
+pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
     assert!(init_ids.len() == 1); //change this if we support multiple
     let id = init_ids[0];
-    let page = page::WritablePage::modify(index.as_ptr(), 0);
-    let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
-    (*meta).init_ids_block_number = id.block_number;
-    (*meta).init_ids_offset = id.offset;
-    page.commit()
+
+    unsafe {
+        let page = page::WritablePage::modify(index.as_ptr(), 0);
+        let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
+        (*meta).init_ids_block_number = id.block_number;
+        (*meta).init_ids_offset = id.offset;
+        page.commit()
+    }
 }
 
 #[pg_guard]
@@ -239,12 +244,6 @@ fn do_heap_scan<'a>(
 
     let write_stats = unsafe { state.node_builder.write(index_relation) };
     assert!(write_stats.num_nodes == state.ntuples);
-
-    if let Some(ids) = state.node_builder.get_init_ids() {
-        unsafe {
-            update_meta_page_init_ids(index_relation, ids);
-        }
-    }
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
@@ -381,6 +380,31 @@ mod tests {
                 WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
         ))?;
         assert_eq!(6, res.unwrap());
+
+        Spi::run(&format!("drop index idxtest;",))?;
+
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_empty_table_insert() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING tsv(embedding)
+                WITH (num_neighbors=30);
+
+            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+            ",
+        ))?;
+
+        let res: Option<i64> = Spi::get_one(&format!(
+            "   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+        ))?;
+        assert_eq!(3, res.unwrap());
 
         Spi::run(&format!("drop index idxtest;",))?;
 
