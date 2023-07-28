@@ -17,7 +17,6 @@ use super::model::{Distance, NeighborWithDistance, Node, ReadableNode};
 pub struct BuilderGraph {
     //maps node's pointer to the representation on disk
     neighbor_map: std::collections::HashMap<ItemPointer, Vec<NeighborWithDistance>>,
-    first: Option<ItemPointer>,
     meta_page: super::build::TsvMetaPage,
 }
 
@@ -25,7 +24,6 @@ impl BuilderGraph {
     pub fn new(meta_page: super::build::TsvMetaPage) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
-            first: None,
             meta_page: meta_page,
         }
     }
@@ -55,18 +53,8 @@ impl BuilderGraph {
 
 impl Graph for BuilderGraph {
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        //TODO make this based on centroid. For now, just first node.
         //returns a vector for generality
-        match &self.first {
-            Some(item) => Some(vec![*item]),
-            None => match self.neighbor_map.keys().next() {
-                Some(item) => {
-                    self.first = Some(*item);
-                    Some(vec![*item])
-                }
-                None => None,
-            },
-        }
+        self.meta_page.get_init_ids()
     }
 
     fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
@@ -101,6 +89,11 @@ impl Graph for BuilderGraph {
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
+        if self.meta_page.get_init_ids().is_none() {
+            //TODO probably better set off of centeroids
+            super::build::update_meta_page_init_ids(index, vec![neighbors_of]);
+            self.meta_page = super::build::read_meta_page(index);
+        }
         self.neighbor_map.insert(neighbors_of, new_neighbors);
     }
 
