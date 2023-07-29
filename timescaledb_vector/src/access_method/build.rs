@@ -410,4 +410,31 @@ mod tests {
 
         Ok(())
     }
+
+    #[pg_test]
+    unsafe fn test_insert_empty_insert() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING tsv(embedding)
+                WITH (num_neighbors=30);
+
+            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+            DELETE FROM test;
+            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[14,15,16]');
+            ",
+        ))?;
+
+        let res: Option<i64> = Spi::get_one(&format!(
+            "   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+        ))?;
+        assert_eq!(2, res.unwrap());
+
+        Spi::run(&format!("drop index idxtest;",))?;
+
+        Ok(())
+    }
 }
