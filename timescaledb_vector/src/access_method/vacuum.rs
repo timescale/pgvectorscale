@@ -44,7 +44,7 @@ mod tests {
     use pgrx::*;
 
     #[test]
-    fn test_delete_vacuum() {
+    fn test_delete_vacuum_plain() {
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -74,7 +74,7 @@ mod tests {
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
 
         assert_eq!(cnt, 3);
 
@@ -82,16 +82,85 @@ mod tests {
             .execute("DELETE FROM test_vac WHERE embedding = '[1,2,3]';", &[])
             .unwrap();
 
+        client.close().unwrap();
+
+        let (mut client, _) = pgrx_tests::client().unwrap();
+
         client.execute("VACUUM test_vac", &[]).unwrap();
 
+        //inserts into the previous 1,2,3 spot that was deleted
+        client
+            .execute(
+                "INSERT INTO test_vac(embedding) VALUES ('[10,12,13]');",
+                &[],
+            )
+            .unwrap();
+
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[0,0,0]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-        assert_eq!(cnt, 2);
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        //if the old index is still used the count is 4
+        assert_eq!(cnt, 3);
 
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
     }
 
+    #[test]
+    fn test_delete_vacuum_full() {
+        //we need to run vacuum in this test which cannot be run from SPI.
+        //so we cannot use the pg_test framework here. Thus we do a bit of
+        //hackery to bring up the test db and then use a client to run queries against it.
+
+        //bring up the test db by running a fake test on a fake fn
+        pgrx_tests::run_test(
+            "test_delete_mock_fn",
+            None,
+            crate::pg_test::postgresql_conf_options(),
+        )
+        .unwrap();
+
+        let (mut client, _) = pgrx_tests::client().unwrap();
+
+        client
+            .batch_execute(
+                "CREATE TABLE test_vac_full(embedding vector(3));
+
+        INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+
+        CREATE INDEX idxtest_vac_full
+              ON test_vac_full
+           USING tsv(embedding)
+            WITH (num_neighbors=30);
+            ",
+            )
+            .unwrap();
+
+        client.execute("set enable_seqscan = 0;", &[]).unwrap();
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+
+        assert_eq!(cnt, 3);
+
+        client.execute("DELETE FROM test_vac_full", &[]).unwrap();
+
+        client.close().unwrap();
+
+        let (mut client, _) = pgrx_tests::client().unwrap();
+        client.execute("VACUUM FULL test_vac_full", &[]).unwrap();
+
+        client
+            .execute(
+                "INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]');",
+                &[],
+            )
+            .unwrap();
+
+        client.execute("set enable_seqscan = 0;", &[]).unwrap();
+        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        assert_eq!(cnt, 1);
+
+        client.execute("DROP INDEX idxtest_vac_full", &[]).unwrap();
+        client.execute("DROP TABLE test_vac_full", &[]).unwrap();
+    }
     #[pg_test]
     ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
     fn test_delete_mock_fn() -> spi::Result<()> {
@@ -116,7 +185,7 @@ mod tests {
 
         let res: Option<i64> = Spi::get_one(&format!(
             "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
         ))?;
         assert_eq!(2, res.unwrap());
 
@@ -124,7 +193,7 @@ mod tests {
         Spi::run(&format!("DELETE FROM test WHERE embedding = '[1,2,3]';",))?;
         let res: Option<i64> = Spi::get_one(&format!(
             "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
+                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
         ))?;
         assert_eq!(2, res.unwrap());
 
