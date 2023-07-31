@@ -7,8 +7,8 @@ use reductive::pq::{Pq, QuantizeVector};
 
 use crate::util::ItemPointer;
 
-use super::build::TsvMetaPage;
 use super::graph::Graph;
+use super::meta_page::TsvMetaPage;
 use super::model::*;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
@@ -116,8 +116,8 @@ impl Graph for BuilderGraph {
     ) {
         if self.meta_page.get_init_ids().is_none() {
             //TODO probably better set off of centeroids
-            super::build::update_meta_page_init_ids(index, vec![neighbors_of]);
-            self.meta_page = super::build::read_meta_page(index);
+            super::meta_page::update_meta_page_init_ids(index, vec![neighbors_of]);
+            self.meta_page = super::meta_page::read_meta_page(index);
         }
         self.neighbor_map.insert(neighbors_of, new_neighbors);
     }

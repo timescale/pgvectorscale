@@ -6,6 +6,7 @@ mod debugging;
 mod disk_index_graph;
 mod graph;
 pub mod guc;
+mod meta_page;
 mod model;
 pub mod options;
 mod scan;
