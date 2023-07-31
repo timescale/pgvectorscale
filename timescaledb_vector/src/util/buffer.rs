@@ -45,6 +45,24 @@ impl LockedBufferExclusive {
         LockedBufferExclusive { buffer: buf }
     }
 
+    /// Get an exclusive lock for cleanup (vacuum) operations.
+    /// Obtaining this lock is more restrictive. It will only be obtained once the pin
+    /// count is 1. Refer to the PG code for `LockBufferForCleanup` for more info
+    pub unsafe fn read_for_cleanup(index: Relation, block: BlockNumber) -> Self {
+        let fork_number = ForkNumber_MAIN_FORKNUM;
+
+        let buf = pg_sys::ReadBufferExtended(
+            index,
+            fork_number,
+            block,
+            ReadBufferMode_RBM_NORMAL,
+            std::ptr::null_mut(),
+        );
+
+        pg_sys::LockBufferForCleanup(buf);
+        LockedBufferExclusive { buffer: buf }
+    }
+
     pub fn get_block_number(&self) -> BlockNumber {
         unsafe { BufferGetBlockNumber(self.buffer) }
     }

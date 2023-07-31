@@ -83,7 +83,7 @@ struct BuildState {
 
 impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
-        let tape = unsafe { Tape::new((**index_relation).as_ptr()) };
+        let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
@@ -115,7 +115,7 @@ unsafe fn write_meta_page(
     num_dimensions: u32,
     opt: PgBox<TSVIndexOptions>,
 ) -> TsvMetaPage {
-    let page = page::WritablePage::new(index);
+    let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
     let meta = page_get_meta(*page, *(*(page.get_buffer())), true);
     (*meta).magic_number = TSV_MAGIC_NUMBER;
     (*meta).version = TSV_VERSION;
@@ -212,7 +212,7 @@ pub unsafe extern "C" fn aminsert(
 
     let node = model::Node::new(vector, heap_pointer, &meta_page);
 
-    let mut tape = unsafe { Tape::new((*index_relation).as_ptr()) };
+    let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);
 
     let _stats = graph.insert(&index_relation, index_pointer, vector);

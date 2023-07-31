@@ -1,19 +1,77 @@
-use pgrx::*;
+use pgrx::{pg_sys::FirstOffsetNumber, *};
+use rkyv::Deserialize;
+
+use crate::{
+    access_method::model::ArchivedNode,
+    util::{
+        page::{PageType, ReadablePage, WritablePage},
+        ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
+        ItemPointer,
+    },
+};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
-    _info: *mut pg_sys::IndexVacuumInfo,
+    info: *mut pg_sys::IndexVacuumInfo,
     stats: *mut pg_sys::IndexBulkDeleteResult,
-    _callback: pg_sys::IndexBulkDeleteCallback,
-    _callback_state: *mut ::std::os::raw::c_void,
+    callback: pg_sys::IndexBulkDeleteCallback,
+    callback_state: *mut ::std::os::raw::c_void,
 ) -> *mut pg_sys::IndexBulkDeleteResult {
     let results = if stats.is_null() {
         unsafe { PgBox::<pg_sys::IndexBulkDeleteResult>::alloc0().into_pg() }
     } else {
         stats
     };
-    //TODO: actually optimize the deletes by removing index tuples.
-    //for now just have the indexscan do the right thing by looking at the heap.
+
+    let index_relation = unsafe { PgRelation::from_pg((*info).index) };
+    let nblocks = unsafe {
+        pg_sys::RelationGetNumberOfBlocksInFork(
+            index_relation.as_ptr(),
+            pg_sys::ForkNumber_MAIN_FORKNUM,
+        )
+    };
+    for block_number in 0..nblocks {
+        let page = unsafe { WritablePage::cleanup(index_relation.as_ptr(), block_number) };
+        if page.get_type() != PageType::Node {
+            continue;
+        }
+        let mut modified = false;
+
+        unsafe { pg_sys::vacuum_delay_point() };
+
+        let max_offset = unsafe { PageGetMaxOffsetNumber(*page) };
+        for offset_number in FirstOffsetNumber..(max_offset + 1) as _ {
+            unsafe {
+                let item_id = PageGetItemId(*page, offset_number);
+                let item = PageGetItem(*page, item_id) as *mut u8;
+                let len = (*item_id).lp_len();
+                let data = std::slice::from_raw_parts_mut(item, len as _);
+                let node = ArchivedNode::with_data(data);
+
+                if node.is_deleted() {
+                    continue;
+                }
+
+                let heap_pointer: ItemPointer = node.heap_item_pointer.deserialize_item_pointer();
+                let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
+                    ..Default::default()
+                };
+                heap_pointer.to_item_pointer_data(&mut ctid);
+
+                let deleted = callback.unwrap()(&mut ctid, callback_state);
+                if deleted {
+                    node.delete();
+                    modified = true;
+                    (*results).tuples_removed += 1.0;
+                } else {
+                    (*results).num_index_tuples += 1.0;
+                }
+            }
+        }
+        if modified {
+            page.commit();
+        }
+    }
     results
 }
 

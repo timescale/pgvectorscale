@@ -2,6 +2,7 @@ use std::cmp::Ordering;
 
 use std::pin::Pin;
 
+use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
@@ -55,7 +56,6 @@ pub struct Node {
     neighbor_index_pointers: Vec<ItemPointer>,
     neighbor_distances: Vec<Distance>,
     pub heap_item_pointer: HeapPointer,
-    deleted: bool,
 }
 
 //ReadableNode ties an archive node to it's underlying buffer
@@ -79,8 +79,7 @@ pub struct WritableNode {
 
 impl WritableNode {
     pub fn get_archived_node(&self) -> Pin<&mut ArchivedNode> {
-        let pinned_bytes = Pin::new(self.wb.get_data_slice());
-        unsafe { rkyv::archived_root_mut::<Node>(pinned_bytes) }
+        ArchivedNode::with_data(self.wb.get_data_slice())
     }
 
     pub fn commit(self) {
@@ -101,7 +100,6 @@ impl Node {
             neighbor_index_pointers: (0..num_neighbors).map(|_| ItemPointer::new(0, 0)).collect(),
             neighbor_distances: (0..num_neighbors).map(|_| Distance::NAN).collect(),
             heap_item_pointer: heap_item_pointer,
-            deleted: false,
         }
     }
 
@@ -151,6 +149,22 @@ impl Node {
 
 /// contains helpers for mutate-in-place. See struct_mutable_refs in test_alloc.rs in rkyv
 impl ArchivedNode {
+    pub fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedNode> {
+        let pinned_bytes = Pin::new(data);
+        unsafe { rkyv::archived_root_mut::<Node>(pinned_bytes) }
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.heap_item_pointer.offset == InvalidOffsetNumber
+    }
+
+    pub fn delete(self: Pin<&mut Self>) {
+        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
+        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        heap_pointer.offset = InvalidOffsetNumber;
+        heap_pointer.block_number = InvalidBlockNumber;
+    }
+
     pub fn neighbor_index_pointer(
         self: Pin<&mut Self>,
     ) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {

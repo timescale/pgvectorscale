@@ -1,4 +1,4 @@
-use pgrx::*;
+use pgrx::{pg_sys::InvalidOffsetNumber, *};
 use rkyv::ArchiveUnsized;
 
 use crate::{
@@ -35,31 +35,39 @@ impl TSVResponseIterator {
     fn next(&mut self, index: &PgRelation) -> Option<HeapPointer> {
         let mut graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
-        graph.greedy_search_iterate(&mut self.lsr, index, &self.query, self.search_list_size);
 
-        let item = self.lsr.consume();
+        /* Iterate until we find a non-deleted tuple */
+        loop {
+            graph.greedy_search_iterate(&mut self.lsr, index, &self.query, self.search_list_size);
 
-        match item {
-            Some((heap_pointer, index_pointer)) => {
-                /*
-                 * An index scan must maintain a pin on the index page holding the
-                 * item last returned by amgettuple
-                 *
-                 * https://www.postgresql.org/docs/current/index-locking.html
-                 */
-                self.last_buffer = unsafe {
-                    Some(LockedBufferShare::read(
-                        index.as_ptr(),
-                        index_pointer.block_number,
-                    ))
-                };
+            let item = self.lsr.consume();
 
-                self.current = self.current + 1;
-                Some(heap_pointer)
-            }
-            None => {
-                self.last_buffer = None;
-                None
+            match item {
+                Some((heap_pointer, index_pointer)) => {
+                    /*
+                     * An index scan must maintain a pin on the index page holding the
+                     * item last returned by amgettuple
+                     *
+                     * https://www.postgresql.org/docs/current/index-locking.html
+                     */
+                    self.last_buffer = unsafe {
+                        Some(LockedBufferShare::read(
+                            index.as_ptr(),
+                            index_pointer.block_number,
+                        ))
+                    };
+
+                    self.current = self.current + 1;
+                    if heap_pointer.offset == InvalidOffsetNumber {
+                        /* deleted tuple */
+                        continue;
+                    }
+                    return Some(heap_pointer);
+                }
+                None => {
+                    self.last_buffer = None;
+                    return None;
+                }
             }
         }
     }
