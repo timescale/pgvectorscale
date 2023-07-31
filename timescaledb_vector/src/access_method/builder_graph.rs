@@ -8,7 +8,7 @@ use reductive::pq::{Pq, QuantizeVector};
 use crate::util::ItemPointer;
 
 use super::graph::Graph;
-use super::meta_page::TsvMetaPage;
+use super::meta_page::MetaPage;
 use super::model::*;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
@@ -19,11 +19,11 @@ use super::model::*;
 pub struct BuilderGraph {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
-    meta_page: TsvMetaPage,
+    meta_page: MetaPage,
 }
 
 impl BuilderGraph {
-    pub fn new(meta_page: TsvMetaPage) -> Self {
+    pub fn new(meta_page: MetaPage) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
             meta_page,
@@ -108,6 +108,10 @@ impl Graph for BuilderGraph {
         self.neighbor_map.len() == 0
     }
 
+    fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
+        &self.meta_page
+    }
+
     fn set_neighbors(
         &mut self,
         index: &PgRelation,
@@ -116,14 +120,10 @@ impl Graph for BuilderGraph {
     ) {
         if self.meta_page.get_init_ids().is_none() {
             //TODO probably better set off of centeroids
-            super::meta_page::update_meta_page_init_ids(index, vec![neighbors_of]);
-            self.meta_page = super::meta_page::read_meta_page(index);
+            MetaPage::update_init_ids(index, vec![neighbors_of]);
+            self.meta_page = MetaPage::read(index);
         }
         self.neighbor_map.insert(neighbors_of, new_neighbors);
-    }
-
-    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
-        &self.meta_page
     }
 }
 

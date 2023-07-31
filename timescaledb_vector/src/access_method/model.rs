@@ -15,7 +15,7 @@ use crate::util::{
     ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
 
-use super::meta_page::TsvMetaPage;
+use super::meta_page::MetaPage;
 
 //Ported from pg_vector code
 #[repr(C)]
@@ -94,7 +94,7 @@ impl WritableNode {
 }
 
 impl Node {
-    pub fn new(vector: Vec<f32>, heap_item_pointer: ItemPointer, meta_page: &TsvMetaPage) -> Self {
+    pub fn new(vector: Vec<f32>, heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
         let num_pq = if meta_page.get_use_pq() {
             meta_page.get_pq_vector_length()
@@ -126,7 +126,7 @@ impl Node {
         index: &PgRelation,
         index_pointer: ItemPointer,
         neighbors: &Vec<NeighborWithDistance>,
-        meta_page: &TsvMetaPage,
+        meta_page: &MetaPage,
         vector: Option<Vec<u8>>,
     ) {
         let node = Node::modify(index, index_pointer);

@@ -6,7 +6,6 @@ use reductive::pq::Pq;
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
-use crate::access_method::meta_page::{read_meta_page, write_meta_page};
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pq::{PgPq, PqTrainer};
@@ -15,12 +14,12 @@ use crate::util::tape::Tape;
 use crate::util::*;
 
 use super::builder_graph::BuilderGraph;
-use super::meta_page::TsvMetaPage;
+use super::meta_page::MetaPage;
 use super::model::{self};
 
 struct BuildState {
     memcxt: PgMemoryContexts,
-    meta_page: TsvMetaPage,
+    meta_page: MetaPage,
     ntuples: usize,
     tape: Tape, //The tape is a memory abstraction over Postgres pages for writing data.
     node_builder: BuilderGraph,
@@ -30,7 +29,7 @@ struct BuildState {
 }
 
 impl BuildState {
-    fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
+    fn new(index_relation: &PgRelation, meta_page: MetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
         let pq = if meta_page.get_use_pq() {
             Some(PqTrainer::new(&meta_page))
@@ -81,7 +80,7 @@ pub extern "C" fn ambuild(
         };
     }
     assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, opt.clone()) };
+    let meta_page = unsafe { MetaPage::create(indexrel, dimensions as _, opt.clone()) };
     let (ntuples, pq_opt) = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     // When using PQ, we initialize a node to store the model we use to quantize the vectors.
@@ -89,7 +88,7 @@ pub extern "C" fn ambuild(
         if opt.use_pq {
             let pq = pq_opt.unwrap();
             let index_pointer: IndexPointer = model::write_pq(pq, &index_relation);
-            super::meta_page::update_meta_page_pq_pointer(&index_relation, index_pointer)
+            super::meta_page::MetaPage::update_pq_pointer(&index_relation, index_pointer)
         }
     }
 
@@ -121,7 +120,7 @@ pub unsafe extern "C" fn aminsert(
     let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut graph = DiskIndexGraph::new(&index_relation);
-    let meta_page = read_meta_page(&index_relation);
+    let meta_page = MetaPage::read(&index_relation);
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
 
@@ -150,7 +149,7 @@ fn do_heap_scan<'a>(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
-    meta_page: TsvMetaPage,
+    meta_page: MetaPage,
 ) -> (usize, Option<Pq<f32>>) {
     let mut state = BuildState::new(index_relation, meta_page.clone());
     unsafe {
