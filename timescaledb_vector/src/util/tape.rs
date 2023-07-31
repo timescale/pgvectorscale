@@ -1,6 +1,6 @@
 //! Tape provides a simple infinite-tape-writing abstraction over postgres pages.
 
-use super::page::WritablePage;
+use super::page::{PageType, WritablePage};
 use pg_sys::Relation;
 use pgrx::{
     pg_sys::{BlockNumber, BLCKSZ},
@@ -8,16 +8,18 @@ use pgrx::{
 };
 
 pub struct Tape {
+    page_type: PageType,
     index: Relation,
     current: BlockNumber,
 }
 
 impl Tape {
-    pub unsafe fn new(index: Relation) -> Self {
-        let page = WritablePage::new(index);
+    pub unsafe fn new(index: Relation, page_type: PageType) -> Self {
+        let page = WritablePage::new(index, page_type);
         let block_number = page.get_block_number();
         page.commit();
         Self {
+            page_type,
             index: index,
             current: block_number,
         }
@@ -34,7 +36,7 @@ impl Tape {
         if current_page.get_free_space() < size {
             //TODO update forward pointer;
 
-            current_page = WritablePage::new(self.index);
+            current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
             if current_page.get_free_space() < size {
                 panic!("Not enough free space on new page");

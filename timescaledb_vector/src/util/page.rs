@@ -18,10 +18,31 @@ pub struct WritablePage {
 
 pub const TSV_PAGE_ID: u16 = 0xAE24; /* magic number, generated randomly */
 
+/// PageType identifies different types of pages in our index.
+/// The layout of any one type should be consistent
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum PageType {
+    Meta = 0,
+    Node = 1,
+}
+
+impl PageType {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            0 => PageType::Meta,
+            1 => PageType::Node,
+            _ => panic!("Unknown PageType number {}", value),
+        }
+    }
+}
 /// This is the Tsv-specific data that goes on every "tsv-owned" page
 /// It is placed at the end of a page in the "special" area
+
+#[repr(C)]
 struct TsvPageOpaqueData {
-    page_id: u16, //  A magic ID for debuging to identify the page as a "tsv-owned"
+    page_type: u8, // stores the PageType enum as an integer (u8 because we doubt we'll have more than 256 types).
+    _reserved: u8, // don't waste bytes, may be able to reuse later. For now: 0
+    page_id: u16, //  A magic ID for debuging to identify the page as a "tsv-owned". Should be last.
 }
 
 #[inline(always)]
@@ -36,7 +57,7 @@ unsafe fn get_tsv_opaque_data(page: Page) -> *mut TsvPageOpaqueData {
 /// It is probably not a good idea to hold on to a WritablePage for a long time.
 impl WritablePage {
     /// new creates a totally new page on a relation by extending the relation
-    pub unsafe fn new(index: Relation) -> Self {
+    pub unsafe fn new(index: Relation, page_type: PageType) -> Self {
         let buffer = LockedBufferExclusive::new(index);
         let state = pg_sys::GenericXLogStart(index);
         //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
@@ -46,7 +67,11 @@ impl WritablePage {
             pg_sys::BLCKSZ as usize,
             std::mem::size_of::<TsvPageOpaqueData>(),
         );
-        (*get_tsv_opaque_data(page)).page_id = TSV_PAGE_ID;
+        *get_tsv_opaque_data(page) = TsvPageOpaqueData {
+            page_type: page_type as u8,
+            _reserved: 0,
+            page_id: TSV_PAGE_ID,
+        };
         Self {
             buffer: buffer,
             page: page,
@@ -57,6 +82,16 @@ impl WritablePage {
 
     pub unsafe fn modify(index: Relation, block: BlockNumber) -> Self {
         let buffer = LockedBufferExclusive::read(index, block);
+        Self::modify_with_buffer(index, buffer)
+    }
+
+    /// get a writable page for cleanup(vacuum) operations.
+    pub unsafe fn cleanup(index: Relation, block: BlockNumber) -> Self {
+        let buffer = LockedBufferExclusive::read_for_cleanup(index, block);
+        Self::modify_with_buffer(index, buffer)
+    }
+
+    unsafe fn modify_with_buffer(index: Relation, buffer: LockedBufferExclusive) -> Self {
         let state = pg_sys::GenericXLogStart(index);
         let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
         Self {
@@ -79,6 +114,9 @@ impl WritablePage {
         unsafe { pg_sys::PageGetFreeSpace(self.page) }
     }
 
+    pub fn get_type(&self) -> PageType {
+        unsafe { PageType::from_u8((*get_tsv_opaque_data(self.page)).page_type) }
+    }
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
     pub fn commit(mut self) {

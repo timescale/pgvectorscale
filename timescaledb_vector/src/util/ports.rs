@@ -61,3 +61,24 @@ pub unsafe fn PageGetItemId(page: pgrx::pg_sys::Page, offset: OffsetNumber) -> I
     let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
     (*header).pd_linp.as_mut_ptr().add((offset - 1) as _)
 }
+
+#[allow(non_snake_case)]
+pub unsafe fn PageGetMaxOffsetNumber(page: pgrx::pg_sys::Page) -> usize {
+    /*
+    PageHeader	pageheader = (PageHeader) page;
+
+    if (pageheader->pd_lower <= SizeOfPageHeaderData)
+        return 0;
+    else
+        return (pageheader->pd_lower - SizeOfPageHeaderData) / sizeof(ItemIdData);
+     */
+
+    let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
+
+    if (*header).pd_lower as usize <= SizeOfPageHeaderData {
+        0
+    } else {
+        ((*header).pd_lower as usize - SizeOfPageHeaderData)
+            / std::mem::size_of::<pgrx::pg_sys::ItemIdData>()
+    }
+}
