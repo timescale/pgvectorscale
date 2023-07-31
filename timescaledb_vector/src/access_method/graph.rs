@@ -6,7 +6,7 @@ use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
-    build::TsvMetaPage,
+    meta_page::TsvMetaPage,
     model::{NeighborWithDistance, ReadableNode},
 };
 

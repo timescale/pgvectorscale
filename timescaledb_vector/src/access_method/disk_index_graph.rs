@@ -3,8 +3,8 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    build::{read_meta_page, TsvMetaPage},
     graph::Graph,
+    meta_page::{read_meta_page, update_meta_page_init_ids, TsvMetaPage},
     model::{NeighborWithDistance, Node, ReadableNode},
 };
 
@@ -55,7 +55,7 @@ impl Graph for DiskIndexGraph {
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
         if self.meta_page.get_init_ids().is_none() {
-            super::build::update_meta_page_init_ids(index, vec![neighbors_of]);
+            update_meta_page_init_ids(index, vec![neighbors_of]);
             self.meta_page = read_meta_page(index);
         }
         unsafe {
