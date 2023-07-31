@@ -4,17 +4,17 @@ use crate::util::ItemPointer;
 
 use super::{
     graph::Graph,
-    meta_page::{read_meta_page, update_meta_page_init_ids, TsvMetaPage},
+    meta_page::MetaPage,
     model::{NeighborWithDistance, Node, ReadableNode},
 };
 
 pub struct DiskIndexGraph {
-    meta_page: TsvMetaPage,
+    meta_page: MetaPage,
 }
 
 impl DiskIndexGraph {
     pub fn new(index: &PgRelation) -> Self {
-        let meta = read_meta_page(index);
+        let meta = MetaPage::read(index);
         Self { meta_page: meta }
     }
 }
@@ -48,6 +48,10 @@ impl Graph for DiskIndexGraph {
         self.meta_page.get_init_ids().is_none()
     }
 
+    fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
+        &self.meta_page
+    }
+
     fn set_neighbors(
         &mut self,
         index: &PgRelation,
@@ -55,8 +59,8 @@ impl Graph for DiskIndexGraph {
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
         if self.meta_page.get_init_ids().is_none() {
-            update_meta_page_init_ids(index, vec![neighbors_of]);
-            self.meta_page = read_meta_page(index);
+            MetaPage::update_init_ids(index, vec![neighbors_of]);
+            self.meta_page = MetaPage::read(index);
         }
         unsafe {
             Node::update_neighbors_and_pq(
@@ -67,9 +71,5 @@ impl Graph for DiskIndexGraph {
                 None,
             );
         }
-    }
-
-    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
-        &self.meta_page
     }
 }

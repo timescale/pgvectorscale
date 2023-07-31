@@ -6,7 +6,7 @@ use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
-    meta_page::TsvMetaPage,
+    meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
 };
 
@@ -79,7 +79,7 @@ impl ListSearchResult {
     }
 
     fn new<G>(
-        meta_page: &TsvMetaPage,
+        meta_page: &MetaPage,
         index: &PgRelation,
         max_history_size: Option<usize>,
         graph: &G,
@@ -211,7 +211,7 @@ pub trait Graph {
         new_neighbors: Vec<NeighborWithDistance>,
     );
 
-    fn get_meta_page(&self, index: &PgRelation) -> &TsvMetaPage;
+    fn get_meta_page(&self, index: &PgRelation) -> &MetaPage;
 
     /// greedy search looks for the closest neighbors to a query vector
     /// You may think that this needs the "K" parameter but it does not,

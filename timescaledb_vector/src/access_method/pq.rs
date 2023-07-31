@@ -40,7 +40,7 @@ pub struct PqTrainer {
 }
 
 impl PqTrainer {
-    pub fn new(meta_page: &super::meta_page::TsvMetaPage) -> PqTrainer {
+    pub fn new(meta_page: &super::meta_page::MetaPage) -> PqTrainer {
         PqTrainer {
             training_set: Vec::with_capacity(NUM_TRAINING_SET_SIZE),
             num_subquantizers: meta_page.get_pq_vector_length(),
@@ -98,7 +98,7 @@ pub struct PgPq {
 
 impl PgPq {
     pub fn new(
-        meta_page: &super::meta_page::TsvMetaPage,
+        meta_page: &super::meta_page::MetaPage,
         index_relation: &PgRelation,
     ) -> Option<PgPq> {
         if !meta_page.get_use_pq() {
