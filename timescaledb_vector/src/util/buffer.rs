@@ -12,6 +12,38 @@ use pgrx::pg_sys::{
     ReadBufferMode_RBM_NORMAL,
 };
 
+pub struct LockRelationForExtension<'a> {
+    relation: &'a PgRelation,
+}
+
+impl<'a> LockRelationForExtension<'a> {
+    pub fn new(index: &'a PgRelation) -> Self {
+        unsafe {
+            pg_sys::LockRelationForExtension(
+                index.as_ptr(),
+                pg_sys::ExclusiveLock as pg_sys::LOCKMODE,
+            )
+        }
+        Self { relation: index }
+    }
+}
+
+impl<'a> Drop for LockRelationForExtension<'a> {
+    /// drop both unlock and unpins the buffer.
+    fn drop(&mut self) {
+        unsafe {
+            // Only unlock while in a transaction state. Should not be unlocking during abort or commit.
+            // During abort, the system will unlock stuff itself. During commit, the release should have already happened.
+            if pgrx::pg_sys::IsTransactionState() {
+                pg_sys::UnlockRelationForExtension(
+                    self.relation.as_ptr(),
+                    pg_sys::ExclusiveLock as pg_sys::LOCKMODE,
+                );
+            }
+        }
+    }
+}
+
 /// LockedBufferExclusive is an RAII-guarded buffer that
 /// has been locked for exclusive access.
 ///
@@ -26,7 +58,11 @@ impl<'a> LockedBufferExclusive<'a> {
     /// The block is obtained by extending the relation.
     ///
     /// The returned block will be pinned and locked in exclusive mode
+    ///
+    /// Safety: safe because it locks the relation for extension.
     pub fn new(index: &'a PgRelation) -> Self {
+        //ReadBufferExtended requires the caller to ensure that only one backend extends the relation at one time.
+        let _lock = LockRelationForExtension::new(index);
         //should really be using  ExtendBufferedRel but it's not in pgrx so go thru the read path with InvalidBlockNumber
         unsafe { Self::read_unchecked(index, InvalidBlockNumber) }
     }
