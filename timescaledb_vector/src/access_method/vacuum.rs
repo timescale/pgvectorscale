@@ -30,7 +30,7 @@ pub extern "C" fn ambulkdelete(
         )
     };
     for block_number in 0..nblocks {
-        let page = unsafe { WritablePage::cleanup(index_relation.as_ptr(), block_number) };
+        let page = unsafe { WritablePage::cleanup(&index_relation, block_number) };
         if page.get_type() != PageType::Node {
             continue;
         }

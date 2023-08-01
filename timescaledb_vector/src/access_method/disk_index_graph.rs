@@ -20,8 +20,8 @@ impl DiskIndexGraph {
 }
 
 impl Graph for DiskIndexGraph {
-    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
-        unsafe { Node::read(index, &index_pointer) }
+    fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a> {
+        unsafe { Node::read(index, index_pointer) }
     }
 
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {

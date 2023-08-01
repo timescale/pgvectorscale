@@ -7,15 +7,15 @@ use crate::{
 
 use super::graph::ListSearchResult;
 
-struct TSVResponseIterator {
+struct TSVResponseIterator<'a> {
     query: Vec<f32>,
     lsr: ListSearchResult,
     search_list_size: usize,
     current: usize,
-    last_buffer: Option<LockedBufferShare>,
+    last_buffer: Option<LockedBufferShare<'a>>,
 }
 
-impl TSVResponseIterator {
+impl<'a> TSVResponseIterator<'a> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
         let mut graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
@@ -30,8 +30,8 @@ impl TSVResponseIterator {
     }
 }
 
-impl TSVResponseIterator {
-    fn next(&mut self, index: &PgRelation) -> Option<HeapPointer> {
+impl<'a> TSVResponseIterator<'a> {
+    fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
         let mut graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
 
@@ -49,12 +49,8 @@ impl TSVResponseIterator {
                      *
                      * https://www.postgresql.org/docs/current/index-locking.html
                      */
-                    self.last_buffer = unsafe {
-                        Some(LockedBufferShare::read(
-                            index.as_ptr(),
-                            index_pointer.block_number,
-                        ))
-                    };
+                    self.last_buffer =
+                        Some(LockedBufferShare::read(index, index_pointer.block_number));
 
                     self.current = self.current + 1;
                     if heap_pointer.offset == InvalidOffsetNumber {
@@ -72,8 +68,8 @@ impl TSVResponseIterator {
     }
 }
 
-struct TSVScanState {
-    iterator: *mut TSVResponseIterator,
+struct TSVScanState<'a> {
+    iterator: *mut TSVResponseIterator<'a>,
 }
 
 #[pg_guard]

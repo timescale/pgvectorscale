@@ -1,7 +1,7 @@
 //! A Page is a Postgres abstraction for a slice of memory you can write to
 //! It is usually 8kb and has a special layout. See https://www.postgresql.org/docs/current/storage-page-layout.html
 
-use pg_sys::{Page, Relation};
+use pg_sys::Page;
 use pgrx::{
     pg_sys::{BlockNumber, BufferGetPage},
     *,
@@ -9,8 +9,8 @@ use pgrx::{
 use std::ops::Deref;
 
 use super::buffer::{LockedBufferExclusive, LockedBufferShare};
-pub struct WritablePage {
-    buffer: LockedBufferExclusive,
+pub struct WritablePage<'a> {
+    buffer: LockedBufferExclusive<'a>,
     page: Page,
     state: *mut pg_sys::GenericXLogState,
     committed: bool,
@@ -49,60 +49,88 @@ struct TsvPageOpaqueData {
     page_id: u16, //  A magic ID for debuging to identify the page as a "tsv-owned". Should be last.
 }
 
-#[inline(always)]
-unsafe fn get_tsv_opaque_data(page: Page) -> *mut TsvPageOpaqueData {
-    let sp = super::ports::PageGetSpecialPointer(page);
-    sp.cast::<TsvPageOpaqueData>()
+impl TsvPageOpaqueData {
+    fn new(page_type: PageType) -> Self {
+        Self {
+            page_type: page_type as u8,
+            _reserved: 0,
+            page_id: TSV_PAGE_ID,
+        }
+    }
+
+    /// Safety: unsafe because no verification done. Blind cast.
+    #[inline(always)]
+    unsafe fn with_page(page: Page) -> *mut TsvPageOpaqueData {
+        let sp = super::ports::PageGetSpecialPointer(page);
+        sp.cast::<TsvPageOpaqueData>()
+    }
+
+    /// Safety: Safe because of the verify call that checks a magic number
+    fn read_from_page(page: &Page) -> &TsvPageOpaqueData {
+        unsafe {
+            let ptr = Self::with_page(*page);
+            (*ptr).verify();
+            ptr.as_ref().unwrap()
+        }
+    }
+
+    fn verify(&self) {
+        assert_eq!(self.page_id, TSV_PAGE_ID);
+        PageType::from_u8(self.page_type);
+    }
 }
 
 /// WritablePage implements and RAII-guarded Page that you can write to.
 /// All writes will be WAL-logged.
 ///
 /// It is probably not a good idea to hold on to a WritablePage for a long time.
-impl WritablePage {
+impl<'a> WritablePage<'a> {
     /// new creates a totally new page on a relation by extending the relation
-    pub unsafe fn new(index: Relation, page_type: PageType) -> Self {
+    pub fn new(index: &'a PgRelation, page_type: PageType) -> Self {
         let buffer = LockedBufferExclusive::new(index);
-        let state = pg_sys::GenericXLogStart(index);
-        //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
-        let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
-        pg_sys::PageInit(
-            page,
-            pg_sys::BLCKSZ as usize,
-            std::mem::size_of::<TsvPageOpaqueData>(),
-        );
-        *get_tsv_opaque_data(page) = TsvPageOpaqueData {
-            page_type: page_type as u8,
-            _reserved: 0,
-            page_id: TSV_PAGE_ID,
-        };
-        Self {
-            buffer: buffer,
-            page: page,
-            state: state,
-            committed: false,
+        unsafe {
+            let state = pg_sys::GenericXLogStart(index.as_ptr());
+            //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
+            let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
+            pg_sys::PageInit(
+                page,
+                pg_sys::BLCKSZ as usize,
+                std::mem::size_of::<TsvPageOpaqueData>(),
+            );
+            *TsvPageOpaqueData::with_page(page) = TsvPageOpaqueData::new(page_type);
+            Self {
+                buffer: buffer,
+                page: page,
+                state: state,
+                committed: false,
+            }
         }
     }
 
-    pub unsafe fn modify(index: Relation, block: BlockNumber) -> Self {
+    pub fn modify(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferExclusive::read(index, block);
         Self::modify_with_buffer(index, buffer)
     }
 
     /// get a writable page for cleanup(vacuum) operations.
-    pub unsafe fn cleanup(index: Relation, block: BlockNumber) -> Self {
+    pub unsafe fn cleanup(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferExclusive::read_for_cleanup(index, block);
         Self::modify_with_buffer(index, buffer)
     }
 
-    unsafe fn modify_with_buffer(index: Relation, buffer: LockedBufferExclusive) -> Self {
-        let state = pg_sys::GenericXLogStart(index);
-        let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
-        Self {
-            buffer: buffer,
-            page: page,
-            state: state,
-            committed: false,
+    // Safety: Safe because it verifies the page
+    fn modify_with_buffer(index: &'a PgRelation, buffer: LockedBufferExclusive<'a>) -> Self {
+        unsafe {
+            let state = pg_sys::GenericXLogStart(index.as_ptr());
+            let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
+            //this check the page
+            _ = TsvPageOpaqueData::read_from_page(&page);
+            Self {
+                buffer: buffer,
+                page: page,
+                state: state,
+                committed: false,
+            }
         }
     }
 
@@ -119,7 +147,13 @@ impl WritablePage {
     }
 
     pub fn get_type(&self) -> PageType {
-        unsafe { PageType::from_u8((*get_tsv_opaque_data(self.page)).page_type) }
+        unsafe {
+            let opaque_data =
+            //safe to do because self.page was already verified during construction
+            TsvPageOpaqueData::with_page(self.page);
+
+            PageType::from_u8((*opaque_data).page_type)
+        }
     }
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
@@ -132,7 +166,7 @@ impl WritablePage {
     }
 }
 
-impl Drop for WritablePage {
+impl<'a> Drop for WritablePage<'a> {
     // drop aborts the xlog if it has not been committed.
     fn drop(&mut self) {
         if !self.committed {
@@ -143,21 +177,21 @@ impl Drop for WritablePage {
     }
 }
 
-impl Deref for WritablePage {
+impl<'a> Deref for WritablePage<'a> {
     type Target = Page;
     fn deref(&self) -> &Self::Target {
         &self.page
     }
 }
 
-pub struct ReadablePage {
-    buffer: LockedBufferShare,
+pub struct ReadablePage<'a> {
+    buffer: LockedBufferShare<'a>,
     page: Page,
 }
 
-impl ReadablePage {
+impl<'a> ReadablePage<'a> {
     /// new creates a totally new page on a relation by extending the relation
-    pub unsafe fn read(index: Relation, block: BlockNumber) -> Self {
+    pub unsafe fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferShare::read(index, block);
         let page = BufferGetPage(*buffer);
         Self {
@@ -171,7 +205,7 @@ impl ReadablePage {
     }
 }
 
-impl Deref for ReadablePage {
+impl<'a> Deref for ReadablePage<'a> {
     type Target = Page;
     fn deref(&self) -> &Self::Target {
         &self.page

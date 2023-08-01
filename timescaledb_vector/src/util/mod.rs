@@ -3,7 +3,7 @@ pub mod page;
 pub mod ports;
 pub mod tape;
 
-use pgrx::pg_sys::Relation;
+use pgrx::PgRelation;
 use rkyv::{Archive, Deserialize, Serialize};
 
 use self::{
@@ -25,25 +25,25 @@ impl ArchivedItemPointer {
     }
 }
 
-pub struct ReadableBuffer {
-    _page: ReadablePage,
+pub struct ReadableBuffer<'a> {
+    _page: ReadablePage<'a>,
     len: usize,
     ptr: *const u8,
 }
 
-impl ReadableBuffer {
+impl<'a> ReadableBuffer<'a> {
     pub fn get_data_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 }
 
-pub struct WritableBuffer {
-    _page: WritablePage,
+pub struct WritableBuffer<'a> {
+    _page: WritablePage<'a>,
     len: usize,
     ptr: *mut u8,
 }
 
-impl WritableBuffer {
+impl<'a> WritableBuffer<'a> {
     pub fn get_data_slice(&self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
@@ -81,7 +81,7 @@ impl ItemPointer {
         pgrx::item_pointer_set_all(ctid, self.block_number, self.offset)
     }
 
-    pub unsafe fn read_bytes(&self, index: Relation) -> ReadableBuffer {
+    pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer {
         let page = ReadablePage::read(index, self.block_number);
         let item_id = PageGetItemId(*page, self.offset);
         let item = PageGetItem(*page, item_id) as *mut u8;
@@ -92,7 +92,7 @@ impl ItemPointer {
             len: len as _,
         }
     }
-    pub unsafe fn modify_bytes(&self, index: Relation) -> WritableBuffer {
+    pub unsafe fn modify_bytes(self, index: &PgRelation) -> WritableBuffer {
         let page = WritablePage::modify(index, self.block_number);
         let item_id = PageGetItemId(*page, self.offset);
         let item = PageGetItem(*page, item_id) as *mut u8;

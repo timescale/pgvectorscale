@@ -1,20 +1,19 @@
 //! Tape provides a simple infinite-tape-writing abstraction over postgres pages.
 
 use super::page::{PageType, WritablePage};
-use pg_sys::Relation;
 use pgrx::{
     pg_sys::{BlockNumber, BLCKSZ},
     *,
 };
 
-pub struct Tape {
+pub struct Tape<'a> {
     page_type: PageType,
-    index: Relation,
+    index: &'a PgRelation,
     current: BlockNumber,
 }
 
-impl Tape {
-    pub unsafe fn new(index: Relation, page_type: PageType) -> Self {
+impl<'a> Tape<'a> {
+    pub unsafe fn new(index: &'a PgRelation, page_type: PageType) -> Self {
         let page = WritablePage::new(index, page_type);
         let block_number = page.get_block_number();
         page.commit();
