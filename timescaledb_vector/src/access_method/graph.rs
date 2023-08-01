@@ -193,7 +193,7 @@ impl ListSearchResult {
 }
 
 pub trait Graph {
-    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode;
+    fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a>;
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>>;
     fn get_neighbors(
         &self,

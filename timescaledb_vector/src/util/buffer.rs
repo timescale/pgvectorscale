@@ -9,32 +9,43 @@ use pgrx::*;
 
 use pgrx::pg_sys::{
     BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber_MAIN_FORKNUM, InvalidBlockNumber,
-    ReadBufferMode_RBM_NORMAL, Relation,
+    ReadBufferMode_RBM_NORMAL,
 };
 
 /// LockedBufferExclusive is an RAII-guarded buffer that
 /// has been locked for exclusive access.
 ///
 /// It is probably not a good idea to hold on to this too long.
-pub struct LockedBufferExclusive {
+pub struct LockedBufferExclusive<'a> {
+    _relation: &'a PgRelation,
     buffer: Buffer,
 }
 
-impl LockedBufferExclusive {
+impl<'a> LockedBufferExclusive<'a> {
     /// new return an allocated buffer for a new block in a relation.
     /// The block is obtained by extending the relation.
     ///
     /// The returned block will be pinned and locked in exclusive mode
-    pub unsafe fn new(index: Relation) -> Self {
+    pub fn new(index: &'a PgRelation) -> Self {
         //should really be using  ExtendBufferedRel but it's not in pgrx so go thru the read path with InvalidBlockNumber
-        Self::read(index, InvalidBlockNumber)
+        unsafe { Self::read_unchecked(index, InvalidBlockNumber) }
     }
 
-    pub unsafe fn read(index: Relation, block: BlockNumber) -> Self {
+    /// Safety: Safe because it checks the block number
+    pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
+        let nblocks = unsafe {
+            pg_sys::RelationGetNumberOfBlocksInFork(index.as_ptr(), pg_sys::ForkNumber_MAIN_FORKNUM)
+        };
+        assert!(block < nblocks);
+        unsafe { Self::read_unchecked(index, block) }
+    }
+
+    /// Safety: unsafe because tje block number is not verifiwed
+    unsafe fn read_unchecked(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
 
         let buf = pg_sys::ReadBufferExtended(
-            index,
+            index.as_ptr(),
             fork_number,
             block,
             ReadBufferMode_RBM_NORMAL,
@@ -42,17 +53,20 @@ impl LockedBufferExclusive {
         );
 
         pg_sys::LockBuffer(buf, pg_sys::BUFFER_LOCK_EXCLUSIVE as i32);
-        LockedBufferExclusive { buffer: buf }
+        LockedBufferExclusive {
+            _relation: index,
+            buffer: buf,
+        }
     }
 
     /// Get an exclusive lock for cleanup (vacuum) operations.
     /// Obtaining this lock is more restrictive. It will only be obtained once the pin
     /// count is 1. Refer to the PG code for `LockBufferForCleanup` for more info
-    pub unsafe fn read_for_cleanup(index: Relation, block: BlockNumber) -> Self {
+    pub unsafe fn read_for_cleanup(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
 
         let buf = pg_sys::ReadBufferExtended(
-            index,
+            index.as_ptr(),
             fork_number,
             block,
             ReadBufferMode_RBM_NORMAL,
@@ -60,7 +74,10 @@ impl LockedBufferExclusive {
         );
 
         pg_sys::LockBufferForCleanup(buf);
-        LockedBufferExclusive { buffer: buf }
+        LockedBufferExclusive {
+            _relation: index,
+            buffer: buf,
+        }
     }
 
     pub fn get_block_number(&self) -> BlockNumber {
@@ -68,7 +85,7 @@ impl LockedBufferExclusive {
     }
 }
 
-impl Drop for LockedBufferExclusive {
+impl<'a> Drop for LockedBufferExclusive<'a> {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {
@@ -81,7 +98,7 @@ impl Drop for LockedBufferExclusive {
     }
 }
 
-impl Deref for LockedBufferExclusive {
+impl<'a> Deref for LockedBufferExclusive<'a> {
     type Target = Buffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
@@ -92,31 +109,43 @@ impl Deref for LockedBufferExclusive {
 /// has been locked for share access.
 ///
 /// It is probably not a good idea to hold on to this too long.
-pub struct LockedBufferShare {
+pub struct LockedBufferShare<'a> {
+    _relation: &'a PgRelation,
     buffer: Buffer,
 }
 
-impl LockedBufferShare {
+impl<'a> LockedBufferShare<'a> {
     /// read return buffer for the given blockNumber in a relation.
     ///
     /// The returned block will be pinned and locked in share mode
-    pub unsafe fn read(index: Relation, block: BlockNumber) -> Self {
+    ///
+    /// Safety: Safe because it checks the block number is within range
+    pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
 
-        let buf = pg_sys::ReadBufferExtended(
-            index,
-            fork_number,
-            block,
-            ReadBufferMode_RBM_NORMAL,
-            std::ptr::null_mut(),
-        );
+        let nblocks =
+            unsafe { pg_sys::RelationGetNumberOfBlocksInFork(index.as_ptr(), fork_number) };
+        assert!(block < nblocks);
 
-        pg_sys::LockBuffer(buf, pg_sys::BUFFER_LOCK_SHARE as i32);
-        LockedBufferShare { buffer: buf }
+        unsafe {
+            let buf = pg_sys::ReadBufferExtended(
+                index.as_ptr(),
+                fork_number,
+                block,
+                ReadBufferMode_RBM_NORMAL,
+                std::ptr::null_mut(),
+            );
+
+            pg_sys::LockBuffer(buf, pg_sys::BUFFER_LOCK_SHARE as i32);
+            LockedBufferShare {
+                _relation: index,
+                buffer: buf,
+            }
+        }
     }
 }
 
-impl Drop for LockedBufferShare {
+impl<'a> Drop for LockedBufferShare<'a> {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {
@@ -129,7 +158,7 @@ impl Drop for LockedBufferShare {
     }
 }
 
-impl Deref for LockedBufferShare {
+impl<'a> Deref for LockedBufferShare<'a> {
     type Target = Buffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer

@@ -65,11 +65,11 @@ pub struct Node {
 }
 
 //ReadableNode ties an archive node to it's underlying buffer
-pub struct ReadableNode {
-    _rb: ReadableBuffer,
+pub struct ReadableNode<'a> {
+    _rb: ReadableBuffer<'a>,
 }
 
-impl ReadableNode {
+impl<'a> ReadableNode<'a> {
     pub fn get_archived_node(&self) -> &ArchivedNode {
         // checking the code here is expensive during build, so skip it.
         // TODO: should we check the data during queries?
@@ -79,11 +79,11 @@ impl ReadableNode {
 }
 
 //WritableNode ties an archive node to it's underlying buffer that can be modified
-pub struct WritableNode {
-    wb: WritableBuffer,
+pub struct WritableNode<'a> {
+    wb: WritableBuffer<'a>,
 }
 
-impl WritableNode {
+impl<'a> WritableNode<'a> {
     pub fn get_archived_node(&self) -> Pin<&mut ArchivedNode> {
         ArchivedNode::with_data(self.wb.get_data_slice())
     }
@@ -112,13 +112,13 @@ impl Node {
         }
     }
 
-    pub unsafe fn read(index: &PgRelation, index_pointer: &ItemPointer) -> ReadableNode {
-        let rb = index_pointer.read_bytes((*index).as_ptr());
+    pub unsafe fn read<'a>(index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a> {
+        let rb = index_pointer.read_bytes(index);
         ReadableNode { _rb: rb }
     }
 
     pub unsafe fn modify(index: &PgRelation, index_pointer: ItemPointer) -> WritableNode {
-        let wb = index_pointer.modify_bytes((*index).as_ptr());
+        let wb = index_pointer.modify_bytes(index);
         WritableNode { wb: wb }
     }
 
@@ -163,9 +163,9 @@ impl Node {
 
         node.commit()
     }
-    pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
+    pub fn write(&self, tape: &mut Tape) -> ItemPointer {
         let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
-        tape.write(&bytes)
+        unsafe { tape.write(&bytes) }
     }
 }
 
@@ -302,17 +302,20 @@ impl PqQuantizerDef {
         let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
         tape.write(&bytes)
     }
-    pub unsafe fn read(index: &PgRelation, index_pointer: &ItemPointer) -> ReadablePqQuantizerDef {
-        let rb = index_pointer.read_bytes((*index).as_ptr());
+    pub unsafe fn read<'a>(
+        index: &'a PgRelation,
+        index_pointer: &ItemPointer,
+    ) -> ReadablePqQuantizerDef<'a> {
+        let rb = index_pointer.read_bytes(index);
         ReadablePqQuantizerDef { _rb: rb }
     }
 }
 
-pub struct ReadablePqQuantizerDef {
-    _rb: ReadableBuffer,
+pub struct ReadablePqQuantizerDef<'a> {
+    _rb: ReadableBuffer<'a>,
 }
 
-impl ReadablePqQuantizerDef {
+impl<'a> ReadablePqQuantizerDef<'a> {
     pub fn get_archived_node(&self) -> &ArchivedPqQuantizerDef {
         // checking the code here is expensive during build, so skip it.
         // TODO: should we check the data during queries?
@@ -334,18 +337,21 @@ impl PqQuantizerVector {
         let bytes = rkyv::to_bytes::<_, 8192>(self).unwrap();
         tape.write(&bytes)
     }
-    pub unsafe fn read(index: &PgRelation, index_pointer: &ItemPointer) -> ReadablePqVectorNode {
-        let rb = index_pointer.read_bytes((*index).as_ptr());
+    pub unsafe fn read<'a>(
+        index: &'a PgRelation,
+        index_pointer: &ItemPointer,
+    ) -> ReadablePqVectorNode<'a> {
+        let rb = index_pointer.read_bytes(index);
         ReadablePqVectorNode { _rb: rb }
     }
 }
 
 //ReadablePqNode ties an archive node to it's underlying buffer
-pub struct ReadablePqVectorNode {
-    _rb: ReadableBuffer,
+pub struct ReadablePqVectorNode<'a> {
+    _rb: ReadableBuffer<'a>,
 }
 
-impl ReadablePqVectorNode {
+impl<'a> ReadablePqVectorNode<'a> {
     pub fn get_archived_node(&self) -> &ArchivedPqQuantizerVector {
         // checking the code here is expensive during build, so skip it.
         // TODO: should we check the data during queries?
@@ -382,7 +388,7 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
     let shape = pq.subquantizers().dim();
     let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());
 
-    let mut pqt = Tape::new((*index).as_ptr(), PageType::PqQuantizerDef);
+    let mut pqt = Tape::new(index, PageType::PqQuantizerDef);
 
     // write out the large vector bits.
     // we write "from the back"
@@ -394,7 +400,7 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
 
     // get numbers that can fit in a page by subtracting the item pointer.
     let block_fit = (BLCKSZ as usize / size_of::<f32>()) - size_of::<ItemPointer>() - 64;
-    let mut tape = Tape::new((*index).as_ptr(), PageType::PqQuantizerVector);
+    let mut tape = Tape::new(index, PageType::PqQuantizerVector);
     loop {
         let l = prev_vec.len();
         if l == 0 {

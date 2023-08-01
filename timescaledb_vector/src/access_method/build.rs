@@ -17,20 +17,20 @@ use super::builder_graph::BuilderGraph;
 use super::meta_page::MetaPage;
 use super::model::{self};
 
-struct BuildState {
+struct BuildState<'a> {
     memcxt: PgMemoryContexts,
     meta_page: MetaPage,
     ntuples: usize,
-    tape: Tape, //The tape is a memory abstraction over Postgres pages for writing data.
+    tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
     node_builder: BuilderGraph,
     started: Instant,
     stats: InsertStats,
     pq_trainer: Option<PqTrainer>,
 }
 
-impl BuildState {
-    fn new(index_relation: &PgRelation, meta_page: MetaPage) -> Self {
-        let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
+impl<'a> BuildState<'a> {
+    fn new(index_relation: &'a PgRelation, meta_page: MetaPage) -> Self {
+        let tape = unsafe { Tape::new(index_relation, page::PageType::Node) };
         let pq = if meta_page.get_use_pq() {
             Some(PqTrainer::new(&meta_page))
         } else {
@@ -80,7 +80,7 @@ pub extern "C" fn ambuild(
         };
     }
     assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { MetaPage::create(indexrel, dimensions as _, opt.clone()) };
+    let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt.clone()) };
     let (ntuples, pq_opt) = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     // When using PQ, we initialize a node to store the model we use to quantize the vectors.
@@ -133,7 +133,7 @@ pub unsafe extern "C" fn aminsert(
         }
     }
 
-    let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
+    let mut tape = unsafe { Tape::new(&index_relation, page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);
 
     let _stats = graph.insert(&index_relation, index_pointer, vector);
@@ -205,22 +205,27 @@ unsafe extern "C" fn build_callback(
     let index_relation = unsafe { PgRelation::from_pg(index) };
     let vec = PgVector::from_pg_parts(values, isnull, 0);
     if let Some(vec) = vec {
-        build_callback_internal(index_relation, *ctid, (*vec).to_slice(), state);
+        let state = (state as *mut BuildState).as_mut().unwrap();
+
+        let mut old_context = state.memcxt.set_as_current();
+        let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
+
+        build_callback_internal(index_relation, heap_pointer, (*vec).to_slice(), state);
+
+        old_context.set_as_current();
+        state.memcxt.reset();
     }
     //todo: what do we do with nulls?
 }
 
 #[inline(always)]
-unsafe fn build_callback_internal(
+fn build_callback_internal(
     index: PgRelation,
-    ctid: pg_sys::ItemPointerData,
+    heap_pointer: ItemPointer,
     vector: &[f32],
-    state: *mut std::os::raw::c_void,
+    state: &mut BuildState,
 ) {
     check_for_interrupts!();
-
-    let state = (state as *mut BuildState).as_mut().unwrap();
-    let mut old_context = state.memcxt.set_as_current();
 
     state.ntuples = state.ntuples + 1;
 
@@ -236,8 +241,6 @@ unsafe fn build_callback_internal(
         );
     }
 
-    let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
-
     match &state.pq_trainer {
         Some(_) => {
             let pqt = state.pq_trainer.as_mut();
@@ -251,8 +254,6 @@ unsafe fn build_callback_internal(
     let index_pointer: IndexPointer = node.write(&mut state.tape);
     let new_stats = state.node_builder.insert(&index, index_pointer, vector);
     state.stats.combine(new_stats);
-    old_context.set_as_current();
-    state.memcxt.reset();
 }
 
 #[cfg(any(test, feature = "pg_test"))]

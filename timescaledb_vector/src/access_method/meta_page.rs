@@ -99,7 +99,7 @@ impl MetaPage {
     /// Write out a new meta page.
     /// Has to be done as the first write to a new relation.
     pub unsafe fn create(
-        index: pg_sys::Relation,
+        index: &PgRelation,
         num_dimensions: u32,
         opt: PgBox<TSVIndexOptions>,
     ) -> MetaPage {
@@ -131,7 +131,7 @@ impl MetaPage {
     /// Read the meta page for an index
     pub fn read(index: &PgRelation) -> MetaPage {
         unsafe {
-            let page = page::ReadablePage::read(index.as_ptr(), 0);
+            let page = page::ReadablePage::read(index, 0);
             let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
             (*meta).clone()
         }
@@ -143,7 +143,7 @@ impl MetaPage {
         let id = init_ids[0];
 
         unsafe {
-            let page = page::WritablePage::modify(index.as_ptr(), 0);
+            let page = page::WritablePage::modify(index, 0);
             let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
             (*meta).init_ids_block_number = id.block_number;
             (*meta).init_ids_offset = id.offset;
@@ -153,7 +153,7 @@ impl MetaPage {
 
     pub fn update_pq_pointer(index: &PgRelation, pq_pointer: IndexPointer) {
         unsafe {
-            let page = page::WritablePage::modify(index.as_ptr(), 0);
+            let page = page::WritablePage::modify(index, 0);
             let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
             (*meta).pq_block_number = pq_pointer.block_number;
             (*meta).pq_block_offset = pq_pointer.offset;

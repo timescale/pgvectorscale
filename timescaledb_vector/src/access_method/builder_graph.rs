@@ -32,7 +32,7 @@ impl BuilderGraph {
 
     unsafe fn get_pq_vector(
         index: &PgRelation,
-        index_pointer: &ItemPointer,
+        index_pointer: ItemPointer,
         pq: &Pq<f32>,
     ) -> Vec<u8> {
         let node = Node::read(index, index_pointer);
@@ -61,7 +61,7 @@ impl BuilderGraph {
             stats.num_neighbors += neighbors.len();
 
             let pqv = match pq {
-                Some(pq) => Some(BuilderGraph::get_pq_vector(index, index_pointer, pq)),
+                Some(pq) => Some(BuilderGraph::get_pq_vector(index, *index_pointer, pq)),
                 None => None,
             };
             Node::update_neighbors_and_pq(
@@ -77,8 +77,8 @@ impl BuilderGraph {
 }
 
 impl Graph for BuilderGraph {
-    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
-        unsafe { Node::read(index, &index_pointer) }
+    fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a> {
+        unsafe { Node::read(index, index_pointer) }
     }
 
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
