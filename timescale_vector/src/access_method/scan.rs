@@ -1,7 +1,10 @@
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
-    access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
+    access_method::{
+        disk_index_graph::DiskIndexGraph, graph::VectorProvider, meta_page::MetaPage,
+        model::PgVector,
+    },
     util::{buffer::LockedBufferShare, HeapPointer},
 };
 
@@ -17,7 +20,10 @@ struct TSVResponseIterator<'a> {
 
 impl<'a> TSVResponseIterator<'a> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
-        let mut graph = DiskIndexGraph::new(&index);
+        let meta_page = MetaPage::read(&index);
+        let use_pq = meta_page.get_use_pq();
+        let mut graph =
+            DiskIndexGraph::new(&index, VectorProvider::new(None, None, use_pq, use_pq));
         use super::graph::Graph;
         let lsr = graph.greedy_search_streaming_init(&index, query);
         Self {
@@ -32,7 +38,10 @@ impl<'a> TSVResponseIterator<'a> {
 
 impl<'a> TSVResponseIterator<'a> {
     fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
-        let mut graph = DiskIndexGraph::new(&index);
+        let meta_page = MetaPage::read(&index);
+        let use_pq = meta_page.get_use_pq();
+        let mut graph =
+            DiskIndexGraph::new(&index, VectorProvider::new(None, None, use_pq, use_pq));
         use super::graph::Graph;
 
         /* Iterate until we find a non-deleted tuple */

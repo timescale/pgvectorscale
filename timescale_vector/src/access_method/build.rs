@@ -6,6 +6,7 @@ use reductive::pq::Pq;
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
+use crate::access_method::graph::VectorProvider;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pq::{PgPq, PqTrainer};
@@ -17,19 +18,19 @@ use super::builder_graph::BuilderGraph;
 use super::meta_page::MetaPage;
 use super::model::{self};
 
-struct BuildState<'a> {
+struct BuildState<'a, 'b> {
     memcxt: PgMemoryContexts,
     meta_page: MetaPage,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
-    node_builder: BuilderGraph,
+    node_builder: BuilderGraph<'b>,
     started: Instant,
     stats: InsertStats,
     pq_trainer: Option<PqTrainer>,
 }
 
-impl<'a> BuildState<'a> {
-    fn new(index_relation: &'a PgRelation, meta_page: MetaPage) -> Self {
+impl<'a, 'b> BuildState<'a, 'b> {
+    fn new(index_relation: &'a PgRelation, meta_page: MetaPage, bg: BuilderGraph<'b>) -> Self {
         let tape = unsafe { Tape::new(index_relation, page::PageType::Node) };
         let pq = if meta_page.get_use_pq() {
             Some(PqTrainer::new(&meta_page))
@@ -42,7 +43,7 @@ impl<'a> BuildState<'a> {
             ntuples: 0,
             meta_page: meta_page.clone(),
             tape,
-            node_builder: BuilderGraph::new(meta_page),
+            node_builder: bg,
             started: Instant::now(),
             stats: InsertStats::new(),
             pq_trainer: pq,
@@ -105,12 +106,13 @@ pub unsafe extern "C" fn aminsert(
     values: *mut pg_sys::Datum,
     isnull: *mut bool,
     heap_tid: pg_sys::ItemPointer,
-    _heap_relation: pg_sys::Relation,
+    heaprel: pg_sys::Relation,
     _check_unique: pg_sys::IndexUniqueCheck,
     _index_unchanged: bool,
-    _index_info: *mut pg_sys::IndexInfo,
+    index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
+    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
     let vec = PgVector::from_pg_parts(values, isnull, 0);
     if let None = vec {
         //todo handle NULLs?
@@ -119,8 +121,14 @@ pub unsafe extern "C" fn aminsert(
     let vec = vec.unwrap();
     let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
-    let mut graph = DiskIndexGraph::new(&index_relation);
     let meta_page = MetaPage::read(&index_relation);
+    let vp = VectorProvider::new(
+        Some(&heap_relation),
+        Some(get_attribute_number(index_info)),
+        meta_page.get_use_pq(),
+        false,
+    );
+    let mut graph = DiskIndexGraph::new(&index_relation, vp);
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
 
@@ -145,13 +153,25 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
+fn get_attribute_number(index_info: *mut pg_sys::IndexInfo) -> pg_sys::AttrNumber {
+    unsafe { assert!((*index_info).ii_NumIndexAttrs == 1) };
+    unsafe { (*index_info).ii_IndexAttrNumbers[0] }
+}
+
 fn do_heap_scan<'a>(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
     meta_page: MetaPage,
 ) -> (usize, Option<Pq<f32>>) {
-    let mut state = BuildState::new(index_relation, meta_page.clone());
+    let vp = VectorProvider::new(
+        Some(heap_relation),
+        Some(get_attribute_number(index_info)),
+        meta_page.get_use_pq(),
+        false,
+    );
+    let bg = BuilderGraph::new(meta_page.clone(), vp);
+    let mut state = BuildState::new(index_relation, meta_page.clone(), bg);
     unsafe {
         pg_sys::IndexBuildHeapScan(
             heap_relation.as_ptr(),

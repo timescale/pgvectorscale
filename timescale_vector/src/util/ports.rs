@@ -3,7 +3,8 @@
 //! Thus, we don't follow rust naming conventions.
 
 use memoffset::*;
-use pgrx::pg_sys::{ItemId, OffsetNumber, Pointer};
+use pgrx::pg_sys::{Datum, ItemId, OffsetNumber, Pointer, TupleTableSlot};
+use pgrx::{pg_sys, PgBox};
 
 /// Given a valid Page pointer, return address of the "Special Pointer" (custom info at end of page)
 ///
@@ -81,4 +82,41 @@ pub unsafe fn PageGetMaxOffsetNumber(page: pgrx::pg_sys::Page) -> usize {
         ((*header).pd_lower as usize - SizeOfPageHeaderData)
             / std::mem::size_of::<pgrx::pg_sys::ItemIdData>()
     }
+}
+
+pub unsafe fn slot_getattr(
+    slot: &PgBox<TupleTableSlot>,
+    attnum: pg_sys::AttrNumber,
+) -> Option<Datum> {
+    /*
+    static inline Datum
+    slot_getattr(TupleTableSlot *slot, int attnum,
+                 bool *isnull)
+    {
+        Assert(attnum > 0);
+
+        if (attnum > slot->tts_nvalid)
+            slot_getsomeattrs(slot, attnum);
+
+        *isnull = slot->tts_isnull[attnum - 1];
+
+        return slot->tts_values[attnum - 1];
+    }
+    */
+    assert!(attnum > 0);
+
+    if attnum > slot.tts_nvalid {
+        pg_sys::slot_getsomeattrs_int(slot.as_ptr(), attnum as _);
+        /*panic!(
+            "invalid attributes not yet handled: {} out of {}",
+            attnum, slot.tts_nvalid
+        );*/
+    }
+
+    let index = (attnum - 1) as usize;
+
+    if *slot.tts_isnull.add(index) {
+        return None;
+    }
+    return Some(*slot.tts_values.add(index));
 }

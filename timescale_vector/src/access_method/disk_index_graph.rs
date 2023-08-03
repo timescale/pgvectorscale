@@ -3,23 +3,31 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    graph::Graph,
+    graph::{Graph, VectorProvider},
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node, ReadableNode},
 };
 
-pub struct DiskIndexGraph {
+pub struct DiskIndexGraph<'a> {
     meta_page: MetaPage,
+    vector_provider: VectorProvider<'a>,
 }
 
-impl DiskIndexGraph {
-    pub fn new(index: &PgRelation) -> Self {
+impl<'a> DiskIndexGraph<'a> {
+    pub fn new(index: &PgRelation, vp: VectorProvider<'a>) -> Self {
         let meta = MetaPage::read(index);
-        Self { meta_page: meta }
+        Self {
+            meta_page: meta,
+            vector_provider: vp,
+        }
     }
 }
 
-impl Graph for DiskIndexGraph {
+impl<'h> Graph for DiskIndexGraph<'h> {
+    fn get_vector_provider(&self) -> VectorProvider {
+        return self.vector_provider.clone();
+    }
+
     fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a> {
         unsafe { Node::read(index, index_pointer) }
     }
