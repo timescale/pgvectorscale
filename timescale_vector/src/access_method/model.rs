@@ -96,15 +96,19 @@ impl<'a> WritableNode<'a> {
 impl Node {
     pub fn new(vector: Vec<f32>, heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
-        let num_pq = if meta_page.get_use_pq() {
-            meta_page.get_pq_vector_length()
+        let (vector, pq_vector) = if meta_page.get_use_pq() {
+            let pq_vec_len = meta_page.get_pq_vector_length();
+            (
+                Vec::with_capacity(0),
+                (0..pq_vec_len).map(|_| 0u8).collect(),
+            )
         } else {
-            0
+            (vector, Vec::with_capacity(0))
         };
         Self {
             vector,
             // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
-            pq_vector: (0..num_pq).map(|_| 0u8).collect(),
+            pq_vector,
             // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
             neighbor_index_pointers: (0..num_neighbors).map(|_| ItemPointer::new(0, 0)).collect(),
             neighbor_distances: (0..num_neighbors).map(|_| Distance::NAN).collect(),

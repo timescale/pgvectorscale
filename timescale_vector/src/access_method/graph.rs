@@ -1,10 +1,14 @@
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::PgRelation;
+use pgrx::pg_sys::{Datum, TupleTableSlot};
+use pgrx::{pg_sys, PgBox, PgRelation};
 
+use crate::access_method::model::Node;
 use crate::access_method::pq::{DistanceCalculator, PgPq};
+use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
+use super::model::PgVector;
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
@@ -27,6 +31,207 @@ fn distance(a: &[f32], b: &[f32]) -> f32 {
         .sum();
     assert!(norm >= 0.);
     norm.sqrt()
+}
+
+struct TableSlot {
+    slot: PgBox<TupleTableSlot>,
+}
+
+impl TableSlot {
+    unsafe fn new(relation: &PgRelation) -> Self {
+        let slot = PgBox::from_pg(pg_sys::table_slot_create(
+            relation.as_ptr(),
+            std::ptr::null_mut(),
+        ));
+        Self { slot }
+    }
+
+    unsafe fn get_attribute(&self, attribute_number: pg_sys::AttrNumber) -> Option<Datum> {
+        slot_getattr(&self.slot, attribute_number)
+    }
+}
+
+impl Drop for TableSlot {
+    fn drop(&mut self) {
+        unsafe { pg_sys::ExecDropSingleTupleTableSlot(self.slot.as_ptr()) };
+    }
+}
+
+#[derive(Clone)]
+pub struct VectorProvider<'a> {
+    pq_enabled: bool,
+    calc_distance_with_pq: bool,
+    heap_rel: Option<&'a PgRelation>,
+    heap_attr_number: Option<pg_sys::AttrNumber>,
+}
+
+impl<'a> VectorProvider<'a> {
+    pub fn new(
+        heap_rel: Option<&'a PgRelation>,
+        heap_attr_number: Option<pg_sys::AttrNumber>,
+        pq_enabled: bool,
+        calc_distance_with_pq: bool,
+    ) -> Self {
+        Self {
+            pq_enabled,
+            calc_distance_with_pq,
+            heap_rel,
+            heap_attr_number,
+        }
+    }
+
+    pub unsafe fn get_full_vector_copy_from_heap(
+        &self,
+        index: &PgRelation,
+        index_pointer: ItemPointer,
+    ) -> Vec<f32> {
+        let heap_pointer = self.get_heap_pointer(index, index_pointer);
+        let slot = TableSlot::new(self.heap_rel.unwrap());
+        let slice = self.get_slice(&slot, heap_pointer);
+        slice.to_vec()
+    }
+
+    unsafe fn get_slice<'s>(&self, slot: &'s TableSlot, heap_pointer: HeapPointer) -> &'s [f32] {
+        let table_am = self.heap_rel.unwrap().rd_tableam;
+        let fetch_row_version = (*table_am).tuple_fetch_row_version.unwrap();
+        let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
+            ..Default::default()
+        };
+        heap_pointer.to_item_pointer_data(&mut ctid);
+        fetch_row_version(
+            self.heap_rel.unwrap().as_ptr(),
+            &mut ctid,
+            &mut pg_sys::SnapshotAnyData,
+            slot.slot.as_ptr(),
+        );
+
+        let vector =
+            PgVector::from_datum(slot.get_attribute(self.heap_attr_number.unwrap()).unwrap());
+
+        //note pgvector slice is only valid as long as the slot is valid that's why the lifetime is tied to it.
+        (*vector).to_slice()
+    }
+
+    fn get_heap_pointer(&self, index: &PgRelation, index_pointer: IndexPointer) -> HeapPointer {
+        let rn = unsafe { Node::read(index, index_pointer) };
+        let node = rn.get_archived_node();
+        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
+        heap_pointer
+    }
+
+    unsafe fn get_distance(
+        &self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        query: &[f32],
+        dm: &DistanceMeasure,
+        stats: &mut GreedySearchStats,
+    ) -> (f32, HeapPointer) {
+        if self.calc_distance_with_pq {
+            let rn = unsafe { Node::read(index, index_pointer) };
+            stats.node_reads += 1;
+            let node = rn.get_archived_node();
+            assert!(node.pq_vector.len() > 0);
+            let vec = node.pq_vector.as_slice();
+            let distance = dm.get_pq_distance(vec);
+            stats.pq_distance_comparisons += 1;
+            stats.distance_comparisons += 1;
+            return (distance, node.heap_item_pointer.deserialize_item_pointer());
+        }
+
+        //now we know we're doing a distance calc on the full-sized vector
+        if self.pq_enabled {
+            //have to get it from the heap
+            let heap_pointer = self.get_heap_pointer(index, index_pointer);
+            stats.node_reads += 1;
+            let slot = TableSlot::new(self.heap_rel.unwrap());
+            let slice = self.get_slice(&slot, heap_pointer);
+            stats.distance_comparisons += 1;
+            return (dm.get_full_vector_distance(slice, query), heap_pointer);
+        } else {
+            //have to get it from the index
+            let rn = unsafe { Node::read(index, index_pointer) };
+            stats.node_reads += 1;
+            let node = rn.get_archived_node();
+            assert!(node.vector.len() > 0);
+            let vec = node.vector.as_slice();
+            let distance = dm.get_full_vector_distance(vec, query);
+            stats.distance_comparisons += 1;
+            return (distance, node.heap_item_pointer.deserialize_item_pointer());
+        }
+    }
+
+    unsafe fn get_distance_pair_for_full_vectors<F>(
+        &self,
+        index: &PgRelation,
+        index_pointer1: IndexPointer,
+        index_pointer2: IndexPointer,
+        distancefn: F,
+    ) -> f32
+    where
+        F: Fn(&[f32], &[f32]) -> f32,
+    {
+        assert!(!self.calc_distance_with_pq);
+
+        if self.pq_enabled {
+            let heap_pointer1 = self.get_heap_pointer(index, index_pointer1);
+            let heap_pointer2 = self.get_heap_pointer(index, index_pointer2);
+            let slot1 = TableSlot::new(self.heap_rel.unwrap());
+            let slot2 = TableSlot::new(self.heap_rel.unwrap());
+            let slice1 = self.get_slice(&slot1, heap_pointer1);
+            let slice2 = self.get_slice(&slot2, heap_pointer2);
+            distancefn(slice1, slice2)
+        } else {
+            let rn1 = Node::read(index, index_pointer1);
+            let rn2 = Node::read(index, index_pointer2);
+            let node1 = rn1.get_archived_node();
+            let node2 = rn2.get_archived_node();
+            assert!(node1.vector.len() > 0);
+            assert!(node1.vector.len() == node2.vector.len());
+            let vec1 = node1.vector.as_slice();
+            let vec2 = node2.vector.as_slice();
+            distancefn(vec1, vec2)
+        }
+    }
+}
+
+pub struct DistanceMeasure {
+    distance_calculator: Option<DistanceCalculator>,
+    //query: Option<&[f32]>
+}
+
+impl DistanceMeasure {
+    pub fn new(
+        index: &PgRelation,
+        meta_page: &MetaPage,
+        query: &[f32],
+        calc_distance_with_pq: bool,
+    ) -> Self {
+        let use_pq = meta_page.get_use_pq();
+        if calc_distance_with_pq {
+            assert!(use_pq);
+            let pq = PgPq::new(meta_page, index);
+            let dc = pq.unwrap().distance_calculator(query, distance);
+            return Self {
+                distance_calculator: Some(dc),
+            };
+        }
+
+        return Self {
+            distance_calculator: None,
+        };
+    }
+
+    fn get_pq_distance(&self, vec: &[u8]) -> f32 {
+        let dc = self.distance_calculator.as_ref().unwrap();
+        let distance = dc.distance(vec);
+        distance
+    }
+
+    fn get_full_vector_distance(&self, vec: &[f32], query: &[f32]) -> f32 {
+        assert!(self.distance_calculator.is_none());
+        distance(vec, query)
+    }
 }
 
 struct ListSearchNeighbor {
@@ -63,7 +268,7 @@ pub struct ListSearchResult {
     best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
-    pq_distance_calculator: Option<DistanceCalculator>,
+    dm: DistanceMeasure,
     pub stats: GreedySearchStats,
 }
 
@@ -73,34 +278,30 @@ impl ListSearchResult {
             best_candidate: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
-            pq_distance_calculator: None,
+            dm: DistanceMeasure {
+                distance_calculator: None,
+            },
             stats: GreedySearchStats::new(),
         }
     }
 
     fn new<G>(
-        meta_page: &MetaPage,
         index: &PgRelation,
         max_history_size: Option<usize>,
         graph: &G,
         init_ids: Vec<ItemPointer>,
         query: &[f32],
+        dm: DistanceMeasure,
     ) -> Self
     where
         G: Graph + ?Sized,
     {
-        let pq = PgPq::new(meta_page, index);
-        let dc = match pq {
-            Some(pgpq) => Some(pgpq.distance_calculator(query, distance)),
-            None => None,
-        };
-
         let mut res = Self {
             best_candidate: Vec::new(),
             inserted: HashSet::new(),
             max_history_size,
             stats: GreedySearchStats::new(),
-            pq_distance_calculator: dc,
+            dm: dm,
         };
         res.stats.calls += 1;
         for index_pointer in init_ids {
@@ -123,28 +324,11 @@ impl ListSearchResult {
             return;
         }
 
-        let data_node = graph.read(index, index_pointer);
-        self.stats.node_reads += 1;
-        let node = data_node.get_archived_node();
+        let vp = graph.get_vector_provider();
+        let (dist, heap_pointer) =
+            unsafe { vp.get_distance(index, index_pointer, query, &self.dm, &mut self.stats) };
 
-        let d = match &self.pq_distance_calculator {
-            Some(dc) => {
-                self.stats.pq_distance_comparisons += 1;
-                dc.distance(node.pq_vector.as_slice())
-            }
-            None => {
-                let vec = node.vector.as_slice();
-                distance(vec, query)
-            }
-        };
-
-        self.stats.distance_comparisons += 1;
-
-        let neighbor = ListSearchNeighbor::new(
-            index_pointer,
-            node.heap_item_pointer.deserialize_item_pointer(),
-            d,
-        );
+        let neighbor = ListSearchNeighbor::new(index_pointer, heap_pointer, dist);
         self._insert_neighbor(neighbor);
     }
 
@@ -204,6 +388,18 @@ pub trait Graph {
 
     fn is_empty(&self) -> bool;
 
+    fn get_vector_provider(&self) -> VectorProvider;
+
+    fn get_distance_measure(
+        &self,
+        index: &PgRelation,
+        query: &[f32],
+        calc_distance_with_pq: bool,
+    ) -> DistanceMeasure {
+        let meta_page = self.get_meta_page(index);
+        return DistanceMeasure::new(index, meta_page, query, calc_distance_with_pq);
+    }
+
     fn set_neighbors(
         &mut self,
         index: &PgRelation,
@@ -239,13 +435,20 @@ pub trait Graph {
             //no nodes in the graph
             return (ListSearchResult::empty(), None);
         }
+        let dm = {
+            self.get_distance_measure(
+                index,
+                query,
+                self.get_vector_provider().calc_distance_with_pq,
+            )
+        };
         let mut l = ListSearchResult::new(
-            self.get_meta_page(index),
             index,
             Some(search_list_size),
             self,
             init_ids.unwrap(),
             query,
+            dm,
         );
         let v = self.greedy_search_iterate(&mut l, index, query, search_list_size);
         return (l, v);
@@ -263,14 +466,12 @@ pub trait Graph {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        ListSearchResult::new(
-            self.get_meta_page(index),
+        let dm = self.get_distance_measure(
             index,
-            None,
-            self,
-            init_ids.unwrap(),
             query,
-        )
+            self.get_vector_provider().calc_distance_with_pq,
+        );
+        ListSearchResult::new(index, None, self, init_ids.unwrap(), query, dm)
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
@@ -383,11 +584,7 @@ pub trait Graph {
                 //rename for clarity.
                 let existing_neighbor = neighbor;
 
-                //TODO make lazy
-                let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neighbor());
-                stats.node_reads += 1;
-                let existing_neighbor_node = data_node.get_archived_node();
-                let existing_neighbor_vec = existing_neighbor_node.vector.as_slice();
+                let vp = self.get_vector_provider();
 
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
@@ -396,13 +593,16 @@ pub trait Graph {
                         continue;
                     }
 
-                    let data_node =
-                        self.read(index, candidate_neighbor.get_index_pointer_to_neighbor());
-                    stats.node_reads += 1;
-                    let candidate_node = data_node.get_archived_node();
-                    let candidate_vec = candidate_node.vector.as_slice();
-                    let distance_between_candidate_and_existing_neighbor =
-                        distance(existing_neighbor_vec, candidate_vec);
+                    //todo handle the non-pq case
+                    let distance_between_candidate_and_existing_neighbor = unsafe {
+                        vp.get_distance_pair_for_full_vectors(
+                            index,
+                            existing_neighbor.get_index_pointer_to_neighbor(),
+                            candidate_neighbor.get_index_pointer_to_neighbor(),
+                            distance,
+                        )
+                    };
+                    stats.node_reads += 2;
                     stats.distance_comparisons += 1;
                     let distance_between_candidate_and_point = candidate_neighbor.get_distance();
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for

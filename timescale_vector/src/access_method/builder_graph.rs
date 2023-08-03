@@ -7,7 +7,7 @@ use reductive::pq::{Pq, QuantizeVector};
 
 use crate::util::ItemPointer;
 
-use super::graph::Graph;
+use super::graph::{Graph, VectorProvider};
 use super::meta_page::MetaPage;
 use super::model::*;
 
@@ -16,28 +16,30 @@ use super::model::*;
 /// pages every time you change the neighbors. Instead you change the neighbors in memory
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
-pub struct BuilderGraph {
+pub struct BuilderGraph<'a> {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
     meta_page: MetaPage,
+    vector_provider: VectorProvider<'a>,
 }
 
-impl BuilderGraph {
-    pub fn new(meta_page: MetaPage) -> Self {
+impl<'a> BuilderGraph<'a> {
+    pub fn new(meta_page: MetaPage, vp: VectorProvider<'a>) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
             meta_page,
+            vector_provider: vp,
         }
     }
 
     unsafe fn get_pq_vector(
+        &self,
         index: &PgRelation,
         index_pointer: ItemPointer,
         pq: &Pq<f32>,
     ) -> Vec<u8> {
-        let node = Node::read(index, index_pointer);
-        // todo: deal with clone
-        let copy: Vec<f32> = node.get_archived_node().vector.iter().map(|f| *f).collect();
+        let vp = self.get_vector_provider();
+        let copy = vp.get_full_vector_copy_from_heap(index, index_pointer);
         let og_vec = Array1::from(copy);
         pq.quantize_vector(og_vec).to_vec()
     }
@@ -61,7 +63,7 @@ impl BuilderGraph {
             stats.num_neighbors += neighbors.len();
 
             let pqv = match pq {
-                Some(pq) => Some(BuilderGraph::get_pq_vector(index, *index_pointer, pq)),
+                Some(pq) => Some(self.get_pq_vector(index, *index_pointer, pq)),
                 None => None,
             };
             Node::update_neighbors_and_pq(
@@ -76,8 +78,8 @@ impl BuilderGraph {
     }
 }
 
-impl Graph for BuilderGraph {
-    fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a> {
+impl<'a> Graph for BuilderGraph<'a> {
+    fn read<'b>(&self, index: &'b PgRelation, index_pointer: ItemPointer) -> ReadableNode<'b> {
         unsafe { Node::read(index, index_pointer) }
     }
 
@@ -106,6 +108,10 @@ impl Graph for BuilderGraph {
 
     fn is_empty(&self) -> bool {
         self.neighbor_map.len() == 0
+    }
+
+    fn get_vector_provider(&self) -> VectorProvider {
+        return self.vector_provider.clone();
     }
 
     fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
