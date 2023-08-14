@@ -109,7 +109,7 @@ impl BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
             ntuples: 0,
             meta_page: meta_page.clone(),
-            tape: tape,
+            tape,
             node_builder: BuilderGraph::new(meta_page),
             started: Instant::now(),
             stats: InsertStats::new(),
@@ -118,7 +118,7 @@ impl BuildState {
     }
 
     fn train_pq(&self) -> Pq<f32> {
-        notice!("training pq with {} vectors", self.vectors.len());
+        notice!("Training pq with {} vectors", self.vectors.len());
         let training_set = self.vectors.iter().map(|x| x.to_vec()).flatten().collect();
         let shape = (self.vectors.len(), self.vectors[0].len());
         let instances = Array2::<f32>::from_shape_vec(shape, training_set).unwrap();
