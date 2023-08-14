@@ -14,6 +14,7 @@ pub struct TSVIndexOptions {
     pub num_neighbors: u32,
     pub search_list_size: u32,
     pub max_alpha: f64,
+    pub use_pq: bool,
 }
 
 impl TSVIndexOptions {
@@ -26,6 +27,7 @@ impl TSVIndexOptions {
             ops.num_neighbors = 50;
             ops.search_list_size = 65;
             ops.max_alpha = 1.0;
+            ops.use_pq = false;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -39,7 +41,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 3;
+const NUM_REL_OPTS: usize = 4;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
@@ -65,6 +67,11 @@ pub unsafe extern "C" fn amoptions(
             opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
         },
+        pg_sys::relopt_parse_elt {
+            optname: "use_pq".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
+            offset: offset_of!(TSVIndexOptions, use_pq) as i32,
+        },
     ];
 
     build_relopts(reloptions, validate, tab)
@@ -87,6 +94,7 @@ unsafe fn build_relopts(
         tab.as_ptr(),
         NUM_REL_OPTS as i32,
     );
+
 
     rdopts as *mut pg_sys::bytea
 }
@@ -121,6 +129,13 @@ pub unsafe fn init() {
         1.0,
         1.0,
         5.0,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+    pg_sys::add_bool_reloption(
+        RELOPT_KIND_TSV,
+        "use_pq".as_pg_cstr(),
+        "Enable product quantization".as_pg_cstr(),
+        false,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
 }
@@ -165,6 +180,7 @@ mod tests {
         assert_eq!(options.num_neighbors, 50);
         assert_eq!(options.search_list_size, 65);
         assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.use_pq, false);
         Ok(())
     }
 }

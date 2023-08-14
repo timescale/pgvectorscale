@@ -1,12 +1,11 @@
-use pgrx::{pg_sys::FirstOffsetNumber, *};
-use rkyv::Deserialize;
+use pgrx::{*, pg_sys::FirstOffsetNumber};
 
 use crate::{
     access_method::model::ArchivedNode,
     util::{
-        page::{PageType, ReadablePage, WritablePage},
-        ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
         ItemPointer,
+        page::{PageType, WritablePage},
+        ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
     },
 };
 

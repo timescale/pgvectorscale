@@ -1,9 +1,8 @@
-use pgrx::{pg_sys::InvalidOffsetNumber, *};
-use rkyv::ArchiveUnsized;
+use pgrx::{*, pg_sys::InvalidOffsetNumber};
 
 use crate::{
     access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
-    util::{buffer::LockedBufferShare, HeapPointer, ItemPointer},
+    util::{buffer::LockedBufferShare, HeapPointer},
 };
 
 use super::graph::ListSearchResult;
@@ -23,8 +22,8 @@ impl TSVResponseIterator {
         let lsr = graph.greedy_search_streaming_init(&index, query);
         Self {
             query: query.to_vec(),
-            search_list_size: search_list_size,
-            lsr: lsr,
+            search_list_size,
+            lsr,
             current: 0,
             last_buffer: None,
         }
@@ -116,7 +115,7 @@ pub extern "C" fn amrescan(
     }
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
-    let mut state =
+    let state =
         unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
 
     if nkeys > 0 {
@@ -170,6 +169,7 @@ pub extern "C" fn amendscan(_scan: pg_sys::IndexScanDesc) {
 #[pgrx::pg_schema]
 mod tests {
     use pgrx::*;
+
     #[pg_test]
     unsafe fn test_index_scan() -> spi::Result<()> {
         Spi::run(&format!(
