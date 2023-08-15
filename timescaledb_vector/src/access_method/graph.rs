@@ -33,6 +33,9 @@ fn distance(a: &[f32], b: &[f32]) -> f32 {
 
 unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32>> {
     let meta_page = build::read_meta_page(index);
+    if !meta_page.get_use_pq() {
+        return vec![]
+    }
     let pq_ids = meta_page.get_pq_ids().unwrap();
     let ip = pq_ids[0];
     let pq = model::read_pq(&index, &ip);
@@ -157,9 +160,9 @@ impl ListSearchResult {
         let node = data_node.get_archived_node();
 
         let mut d = 0.0;
-        let len = node.pq_vector.len() - 1;
 
         if self.try_pq && !self.distance_table.is_empty() {
+            let len = node.pq_vector.len() - 1;
             self.stats.pq_distance_comparisons += 1;
             for m in 0..len {
                 d += self.distance_table[m][node.pq_vector[m] as usize];
@@ -493,8 +496,8 @@ pub trait Graph {
         }
         //info!("pruned {} neighbors", cnt);
         return InsertStats {
-            prune_neighbor_stats: prune_neighbor_stats,
-            greedy_search_stats: greedy_search_stats,
+            prune_neighbor_stats,
+            greedy_search_stats,
         };
     }
 

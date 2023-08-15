@@ -177,7 +177,7 @@ pub fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
 }
 
 pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
-    assert!(init_ids.len() == 1); //change this if we support multiple
+    assert_eq!(init_ids.len(), 1); //change this if we support multiple
     let id = init_ids[0];
 
     unsafe {
@@ -391,6 +391,7 @@ unsafe fn build_callback_internal(
     state.stats.combine(new_stats);
     old_context.set_as_current();
     state.memcxt.reset();
+
 }
 
 #[cfg(any(test, feature = "pg_test"))]

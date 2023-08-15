@@ -322,7 +322,6 @@ impl PqQuantizerDef {
 
     pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
         let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
-        info!("writing {} bytes", bytes.len());
         tape.write(&bytes)
     }
     pub unsafe fn read(index: &PgRelation, index_pointer: &ItemPointer) -> ReadablePqQuantizerDef {
