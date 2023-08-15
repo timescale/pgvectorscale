@@ -10,16 +10,12 @@ use super::{
 
 pub struct DiskIndexGraph {
     meta_page: TsvMetaPage,
-    init_ids: Vec<ItemPointer>,
 }
 
 impl DiskIndexGraph {
     pub fn new(index: &PgRelation) -> Self {
         let meta = read_meta_page(index);
-        Self {
-            meta_page: meta,
-            init_ids: vec![],
-        }
+        Self { meta_page: meta }
     }
 }
 

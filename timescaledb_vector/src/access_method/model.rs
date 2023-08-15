@@ -150,7 +150,6 @@ impl Node {
             let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
             *pgv = vector[i];
         }
-
         node.commit()
     }
 
@@ -219,6 +218,10 @@ impl ArchivedNode {
 
     pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
+    }
+
+    pub fn vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<f32>>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.vector) }
     }
 
     pub fn num_neighbors(&self) -> usize {
@@ -376,7 +379,6 @@ impl ReadablePqVectorNode {
     }
 }
 
-
 //TODO: Make defensive.
 pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
     let rpq = PqQuantizerDef::read(index, &index_pointer);
@@ -387,7 +389,7 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
     let mut next = rpn.next_vector_pointer.deserialize_item_pointer();
     loop {
         if next.offset == 0 && next.block_number == 0 {
-            break
+            break;
         }
         let qvn = PqQuantizerVector::read(index, &next);
         let vn = qvn.get_archived_node();
@@ -395,8 +397,12 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
         result.extend_from_slice(vs);
         next = vn.next_vector_pointer.deserialize_item_pointer();
     }
-    let sq = Array3::from_shape_vec((rpn.dim_0 as usize, rpn.dim_1 as usize, rpn.dim_2 as usize), result).unwrap();
-    Pq::new( None,  sq)
+    let sq = Array3::from_shape_vec(
+        (rpn.dim_0 as usize, rpn.dim_1 as usize, rpn.dim_2 as usize),
+        result,
+    )
+    .unwrap();
+    Pq::new(None, sq)
 }
 
 pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
@@ -440,6 +446,5 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
         let index_pointer: IndexPointer = pqv_node.write(&mut tape);
         prev = index_pointer;
         prev_vec = b.clone().to_vec();
-
     }
 }

@@ -1,10 +1,12 @@
-use ndarray::{Array, Array1, Axis, Ix1};
+extern crate blas_src;
+
 use std::{cmp::Ordering, collections::HashSet};
 
-use crate::access_method::{build, model};
-use pgrx::{info, PgRelation};
+use ndarray::{Array, Array1, Axis, Ix1};
+use pgrx::PgRelation;
 use reductive::linalg::SquaredEuclideanDistance;
-extern crate blas_src;
+
+use crate::access_method::{build, model};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
@@ -31,10 +33,11 @@ fn distance(a: &[f32], b: &[f32]) -> f32 {
     norm.sqrt()
 }
 
+// TODO: This function could return a table that fits in SIMD registers.
 unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32>> {
     let meta_page = build::read_meta_page(index);
     if !meta_page.get_use_pq() {
-        return vec![]
+        return vec![];
     }
     let pq_ids = meta_page.get_pq_ids().unwrap();
     let ip = pq_ids[0];
@@ -44,16 +47,16 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32
     let mut distance_table: Vec<Vec<f32>> = Vec::new();
     let clusters: Vec<_> = sq.axis_iter(Axis(0)).collect();
     let ds = query.len() / shape.0;
-    for m in 0..shape.0  {
-        let mut res =  Vec::with_capacity(shape.1);
+    for m in 0..shape.0 {
+        let mut res = Vec::with_capacity(shape.1);
         let ks: Vec<_> = clusters[m].axis_iter(Axis(0)).collect();
-        for k in 0..shape.1  {
+        for k in 0..shape.1 {
             let sl = &query[m * ds..(m + 1) * ds];
             let subset: Array<f32, Ix1> = Array1::from(sl.to_vec());
             let dist = ks[k].squared_euclidean_distance(subset);
             res.push(dist);
         }
-        distance_table.push( res);
+        distance_table.push(res);
     }
 
     distance_table
@@ -162,9 +165,9 @@ impl ListSearchResult {
         let mut d = 0.0;
 
         if self.try_pq && !self.distance_table.is_empty() {
-            let len = node.pq_vector.len() - 1;
             self.stats.pq_distance_comparisons += 1;
-            for m in 0..len {
+            // maybe we should unroll this loop?
+            for m in 0..node.pq_vector.len() {
                 d += self.distance_table[m][node.pq_vector[m] as usize];
             }
         } else {
