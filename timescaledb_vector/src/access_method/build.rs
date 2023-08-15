@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use ndarray::Array2;
-use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
+use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use reductive::pq::{Pq, TrainPq};
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
@@ -10,9 +10,9 @@ use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
+use crate::util::*;
 use crate::util::page;
 use crate::util::tape::Tape;
-use crate::util::*;
 
 use super::builder_graph::BuilderGraph;
 use super::model::{self};
@@ -21,7 +21,7 @@ const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 const MIN_PQ_DIMENSIONS: u32 = 63;
-const NUM_KMEANS_REPS_PQ: usize = 12;
+const NUM_KMEANS_REPS_PQ: usize = 1;
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]
@@ -122,7 +122,7 @@ impl BuildState {
         let training_set = self.vectors.iter().map(|x| x.to_vec()).flatten().collect();
         let shape = (self.vectors.len(), self.vectors[0].len());
         let instances = Array2::<f32>::from_shape_vec(shape, training_set).unwrap();
-        Pq::train_pq(8, 8, 1, 1, instances).unwrap()
+        Pq::train_pq(8, 8, NUM_KMEANS_REPS_PQ, 1, instances).unwrap()
     }
 }
 
@@ -391,7 +391,6 @@ unsafe fn build_callback_internal(
     state.stats.combine(new_stats);
     old_context.set_as_current();
     state.memcxt.reset();
-
 }
 
 #[cfg(any(test, feature = "pg_test"))]

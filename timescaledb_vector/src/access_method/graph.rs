@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::HashSet};
 use crate::access_method::{build, model};
 use pgrx::{info, PgRelation};
 use reductive::linalg::SquaredEuclideanDistance;
-
+extern crate blas_src;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{

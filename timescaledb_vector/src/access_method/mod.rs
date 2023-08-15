@@ -1,5 +1,4 @@
 use pgrx::*;
-
 mod build;
 mod builder_graph;
 mod cost_estimate;
