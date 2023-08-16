@@ -47,10 +47,10 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32
     let mut distance_table: Vec<Vec<f32>> = Vec::new();
     let clusters: Vec<_> = sq.axis_iter(Axis(0)).collect();
     let ds = query.len() / shape.0;
-    for m in 0..shape.0 {
+    for m in 0..clusters.len() {
         let mut res = Vec::with_capacity(shape.1);
         let ks: Vec<_> = clusters[m].axis_iter(Axis(0)).collect();
-        for k in 0..shape.1 {
+        for k in 0..ks.len() {
             let sl = &query[m * ds..(m + 1) * ds];
             let subset: Array<f32, Ix1> = Array1::from(sl.to_vec());
             let dist = ks[k].squared_euclidean_distance(subset);
@@ -58,7 +58,6 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32
         }
         distance_table.push(res);
     }
-
     distance_table
 }
 

@@ -21,11 +21,11 @@ const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 const MIN_PQ_DIMENSIONS: u32 = 63;
-const PQ_TRAINING_ITERATIONS: usize = 4;
+const PQ_TRAINING_ITERATIONS: usize = 10;
 const NUM_SUBQUANTIZERS: usize = 8;
 const NUM_SUBQUANTIZER_BITS: u32 = 8;
 
-const NUM_TRAINING_ATTEMPTS: usize = 2;
+const NUM_TRAINING_ATTEMPTS: usize = 1;
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]

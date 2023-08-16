@@ -1,4 +1,4 @@
-use pgrx::{*, pg_sys::InvalidOffsetNumber};
+use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{disk_index_graph::DiskIndexGraph, model::PgVector},
@@ -115,8 +115,7 @@ pub extern "C" fn amrescan(
     }
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
-    let state =
-        unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+    let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
 
     if nkeys > 0 {
         scan.xs_recheck = true;

@@ -95,7 +95,6 @@ unsafe fn build_relopts(
         NUM_REL_OPTS as i32,
     );
 
-
     rdopts as *mut pg_sys::bytea
 }
 

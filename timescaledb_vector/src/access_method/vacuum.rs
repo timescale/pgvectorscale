@@ -1,11 +1,11 @@
-use pgrx::{*, pg_sys::FirstOffsetNumber};
+use pgrx::{pg_sys::FirstOffsetNumber, *};
 
 use crate::{
     access_method::model::ArchivedNode,
     util::{
-        ItemPointer,
         page::{PageType, WritablePage},
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
+        ItemPointer,
     },
 };
 
