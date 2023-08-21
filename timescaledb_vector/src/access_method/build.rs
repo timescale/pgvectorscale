@@ -3,6 +3,7 @@ use std::time::Instant;
 use ndarray::{Array1, Array2};
 use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
+use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
@@ -26,6 +27,8 @@ const NUM_SUBQUANTIZERS: usize = 8;
 const NUM_SUBQUANTIZER_BITS: u32 = 8;
 
 const NUM_TRAINING_ATTEMPTS: usize = 1;
+
+const NUM_TRAINING_SET_SIZE: usize = 100000;
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]
@@ -84,13 +87,13 @@ impl TsvMetaPage {
         let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
         Some(vec![ptr])
     }
-    pub fn get_pq_ids(&self) -> Option<Vec<IndexPointer>> {
+    pub fn get_pq_id(&self) -> Option<IndexPointer> {
         if !self.use_pq || (self.pq_block_number == 0 && self.pq_block_offset == 0) {
             return None;
         }
 
         let ptr = HeapPointer::new(self.pq_block_number, self.pq_block_offset);
-        Some(vec![ptr])
+        Some(ptr)
     }
 }
 
@@ -200,14 +203,12 @@ pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>
     }
 }
 
-pub fn update_meta_page_pq_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
-    assert_eq!(init_ids.len(), 1); //change this if we support multiple
-    let id = init_ids[0];
+pub fn update_meta_page_pq_ids(index: &PgRelation, index_pointer: IndexPointer) {
     unsafe {
         let page = page::WritablePage::modify(index.as_ptr(), 0);
         let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
-        (*meta).pq_block_number = id.block_number;
-        (*meta).pq_block_offset = id.offset;
+        (*meta).pq_block_number = index_pointer.block_number;
+        (*meta).pq_block_offset = index_pointer.offset;
         page.commit()
     }
 }
@@ -246,7 +247,7 @@ pub extern "C" fn ambuild(
         if opt.use_pq {
             let pq = pq_opt.unwrap();
             let index_pointer: IndexPointer = model::write_pq(pq, &index_relation);
-            update_meta_page_pq_ids(&index_relation, vec![index_pointer])
+            update_meta_page_pq_ids(&index_relation, index_pointer)
         }
     }
 
@@ -282,8 +283,8 @@ pub unsafe extern "C" fn aminsert(
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
     if meta_page.use_pq {
-        let ids = meta_page.get_pq_ids().unwrap()[0];
-        let pq = read_pq(&index_relation, &ids);
+        let pq_id = meta_page.get_pq_id().unwrap();
+        let pq = read_pq(&index_relation, &pq_id);
         let og_vec = Array1::from(vector.to_vec());
         node.pq_vector = pq.quantize_vector(og_vec).to_vec();
     }
@@ -321,7 +322,6 @@ fn do_heap_scan<'a>(
     // we train the quantizer and add prepare to write quantized values to the nodes.
     if meta_page.use_pq {
         let v = state.train_pq();
-        notice!("pq trained");
         pq = Some(v)
     }
     let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
@@ -377,6 +377,7 @@ unsafe fn build_callback_internal(
     state: *mut std::os::raw::c_void,
 ) {
     check_for_interrupts!();
+    let mut rng = rand::thread_rng();
 
     let state = (state as *mut BuildState).as_mut().unwrap();
     let mut old_context = state.memcxt.set_as_current();
@@ -397,10 +398,17 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    // We collect the training data.
-    // TODO: Use reservoir sampling to reduce memory use
+    // We collect the training data and reservoir sample into a training buffer of size
+    // NUM_TRAINING_SET_SIZE.
     if state.meta_page.get_use_pq() {
-        state.vectors.push(vector.to_vec());
+        if state.vectors.len() >= NUM_TRAINING_SET_SIZE {
+            let index = rng.gen_range(0..state.ntuples + 1);
+            if index < NUM_TRAINING_SET_SIZE {
+                state.vectors[index] = vector.to_vec();
+            }
+        } else {
+            state.vectors.push(vector.to_vec());
+        }
     }
     let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);

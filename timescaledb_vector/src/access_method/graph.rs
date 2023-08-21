@@ -2,8 +2,8 @@ extern crate blas_src;
 
 use std::{cmp::Ordering, collections::HashSet};
 
-use ndarray::{Array, Array1, Axis, Ix1};
-use pgrx::PgRelation;
+use ndarray::{Array, Array1, ArrayView1, Axis, Ix1};
+use pgrx::{info, PgRelation};
 use reductive::linalg::SquaredEuclideanDistance;
 
 use crate::access_method::{build, model};
@@ -39,25 +39,19 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Vec<Vec<f32
     if !meta_page.get_use_pq() {
         return vec![];
     }
-    let pq_ids = meta_page.get_pq_ids().unwrap();
-    let ip = pq_ids[0];
-    let pq = model::read_pq(&index, &ip);
+    let pq_id = meta_page.get_pq_id().unwrap();
+    let pq = model::read_pq(&index, &pq_id);
     let sq = pq.subquantizers();
-    let shape = sq.dim();
     let mut distance_table: Vec<Vec<f32>> = Vec::new();
-    let clusters: Vec<_> = sq.axis_iter(Axis(0)).collect();
-    let ds = query.len() / shape.0;
+    let clusters: Vec<_> = sq.outer_iter().collect();
+    let ds = query.len() / clusters.len();
     for m in 0..clusters.len() {
-        let mut res = Vec::with_capacity(shape.1);
-        let ks: Vec<_> = clusters[m].axis_iter(Axis(0)).collect();
-        for k in 0..ks.len() {
-            let sl = &query[m * ds..(m + 1) * ds];
-            let subset: Array<f32, Ix1> = Array1::from(sl.to_vec());
-            let dist = ks[k].squared_euclidean_distance(subset);
-            res.push(dist);
-        }
-        distance_table.push(res);
+        let sl = &query[m * ds..(m + 1) * ds];
+        let subset: Array<f32, Ix1> = Array1::from(sl.to_vec());
+        let res = subset.squared_euclidean_distance(clusters[m]);
+        distance_table.push(res.to_vec());
     }
+
     distance_table
 }
 
@@ -165,6 +159,7 @@ impl ListSearchResult {
 
         if self.try_pq && !self.distance_table.is_empty() {
             self.stats.pq_distance_comparisons += 1;
+
             // maybe we should unroll this loop?
             for m in 0..node.pq_vector.len() {
                 d += self.distance_table[m][node.pq_vector[m] as usize];
@@ -173,6 +168,7 @@ impl ListSearchResult {
             let vec = node.vector.as_slice();
             d = distance(vec, query);
         }
+
         self.stats.distance_comparisons += 1;
 
         let neighbor = ListSearchNeighbor::new(
