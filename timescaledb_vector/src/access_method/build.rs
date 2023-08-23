@@ -43,11 +43,11 @@ pub struct TsvMetaPage {
     num_neighbors: u32,
     search_list_size: u32,
     max_alpha: f64,
-    init_ids_block_number: pgrx::pg_sys::BlockNumber,
-    init_ids_offset: pgrx::pg_sys::OffsetNumber,
+    init_ids_block_number: pg_sys::BlockNumber,
+    init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
-    pq_block_number: pgrx::pg_sys::BlockNumber,
-    pq_block_offset: pgrx::pg_sys::OffsetNumber,
+    pq_block_number: pg_sys::BlockNumber,
+    pq_block_offset: pg_sys::OffsetNumber,
 }
 
 impl TsvMetaPage {
@@ -87,7 +87,7 @@ impl TsvMetaPage {
         let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
         Some(vec![ptr])
     }
-    pub fn get_pq_id(&self) -> Option<IndexPointer> {
+    pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
         if !self.use_pq || (self.pq_block_number == 0 && self.pq_block_offset == 0) {
             return None;
         }
@@ -203,12 +203,12 @@ pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>
     }
 }
 
-pub fn update_meta_page_pq_ids(index: &PgRelation, index_pointer: IndexPointer) {
+pub fn update_meta_page_pq_pointer(index: &PgRelation, pq_pointer: IndexPointer) {
     unsafe {
         let page = page::WritablePage::modify(index.as_ptr(), 0);
         let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
-        (*meta).pq_block_number = index_pointer.block_number;
-        (*meta).pq_block_offset = index_pointer.offset;
+        (*meta).pq_block_number = pq_pointer.block_number;
+        (*meta).pq_block_offset = pq_pointer.offset;
         page.commit()
     }
 }
@@ -247,7 +247,7 @@ pub extern "C" fn ambuild(
         if opt.use_pq {
             let pq = pq_opt.unwrap();
             let index_pointer: IndexPointer = model::write_pq(pq, &index_relation);
-            update_meta_page_pq_ids(&index_relation, index_pointer)
+            update_meta_page_pq_pointer(&index_relation, index_pointer)
         }
     }
 
@@ -283,7 +283,7 @@ pub unsafe extern "C" fn aminsert(
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
     if meta_page.use_pq {
-        let pq_id = meta_page.get_pq_id().unwrap();
+        let pq_id = meta_page.get_pq_pointer().unwrap();
         let pq = read_pq(&index_relation, &pq_id);
         let og_vec = Array1::from(vector.to_vec());
         node.pq_vector = pq.quantize_vector(og_vec).to_vec();
