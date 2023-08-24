@@ -2,9 +2,7 @@ extern crate blas_src;
 
 use std::{cmp::Ordering, collections::HashSet};
 
-use ndarray::{Array, Array1, ArrayView1, Axis, Ix1};
-use pgrx::{info, PgRelation};
-use reductive::linalg::SquaredEuclideanDistance;
+use pgrx::PgRelation;
 
 use crate::access_method::{build, model};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -41,7 +39,7 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Option<Vec<
     }
     let pq_id = meta_page.get_pq_pointer();
     if pq_id.is_none() {
-        return None
+        return None;
     }
     let pq = model::read_pq(&index, &pq_id.unwrap());
     let sq = pq.subquantizers();
@@ -49,9 +47,16 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Option<Vec<
     let clusters: Vec<_> = sq.outer_iter().collect();
     let ds = query.len() / clusters.len();
     for m in 0..clusters.len() {
+        let mut res: Vec<f32> = Vec::new();
         let sl = &query[m * ds..(m + 1) * ds];
-        let subset: Array<f32, Ix1> = Array1::from(sl.to_vec());
-        let res = subset.squared_euclidean_distance(clusters[m]);
+        for i in 0..clusters[m].nrows() {
+            let c = clusters[m].row(i).to_vec();
+            let p = sl
+                .iter()
+                .zip(c.iter())
+                .fold(0., |sum, (&ex, &ey)| sum + ((ex - ey).abs()).powf(2.));
+            res.push(p);
+        }
         distance_table.push(res.to_vec());
     }
     Some(distance_table)
