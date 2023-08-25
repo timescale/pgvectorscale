@@ -51,13 +51,14 @@ unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Option<Vec<
         let sl = &query[m * ds..(m + 1) * ds];
         for i in 0..clusters[m].nrows() {
             let c = clusters[m].row(i).to_vec();
-            let p = sl
-                .iter()
-                .zip(c.iter())
-                .fold(0., |sum, (&ex, &ey)| sum + ((ex - ey).abs()).powf(2.));
+            // let p = sl
+            //     .iter()
+            //     .zip(c.iter())
+            //     .fold(0., |sum, (&ex, &ey)| sum + ((ex - ey).abs()).powf(2.));
+            let p = distance(sl, c.as_slice());
             res.push(p);
         }
-        distance_table.push(res.to_vec());
+        distance_table.push(res);
     }
     Some(distance_table)
 }
