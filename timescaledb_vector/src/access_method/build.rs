@@ -21,9 +21,7 @@ use super::model::{self};
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
-const MIN_PQ_DIMENSIONS: u32 = 63;
 const PQ_TRAINING_ITERATIONS: usize = 20;
-const NUM_SUBQUANTIZERS: usize = 8;
 const NUM_SUBQUANTIZER_BITS: u32 = 8;
 
 const NUM_TRAINING_ATTEMPTS: usize = 1;
@@ -46,6 +44,7 @@ pub struct TsvMetaPage {
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
+    num_clusters: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
 }
@@ -61,6 +60,10 @@ impl TsvMetaPage {
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
         self.num_neighbors
+    }
+
+    pub fn get_num_clusters(&self) -> usize {
+        self.num_clusters
     }
 
     pub fn get_search_list_size_for_build(&self) -> u32 {
@@ -130,7 +133,7 @@ impl BuildState {
         let shape = (self.vectors.len(), self.vectors[0].len());
         let instances = Array2::<f32>::from_shape_vec(shape, training_set).unwrap();
         Pq::train_pq(
-            NUM_SUBQUANTIZERS,
+            self.meta_page.num_clusters,
             NUM_SUBQUANTIZER_BITS,
             PQ_TRAINING_ITERATIONS,
             NUM_TRAINING_ATTEMPTS,
@@ -167,6 +170,7 @@ unsafe fn write_meta_page(
     (*meta).search_list_size = (*opt).search_list_size;
     (*meta).max_alpha = (*opt).max_alpha;
     (*meta).use_pq = (*opt).use_pq;
+    (*meta).num_clusters = (*opt).num_clusters;
     (*meta).pq_block_number = 0;
     (*meta).pq_block_offset = 0;
     (*meta).init_ids_block_number = 0;
@@ -224,18 +228,22 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, use_pq={}",
+        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, use_pq={}, num_clusters={}",
         opt.num_neighbors,
         opt.search_list_size,
         opt.max_alpha,
-        opt.use_pq
+        opt.use_pq,
+        opt.num_clusters
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
     // PQ is only applicable to high dimension vectors.
     if opt.use_pq {
-        if dimensions < MIN_PQ_DIMENSIONS as i32 {
-            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", MIN_PQ_DIMENSIONS, dimensions)
+        if dimensions < opt.num_clusters as i32 {
+            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", opt.num_clusters, dimensions)
+        };
+        if dimensions % opt.num_clusters as i32 != 0 {
+            error!("use_pq can only be applied to vectors where the number of dimensions {} is divisible by the number of clusters {} ", dimensions, opt.num_clusters)
         };
     }
     assert!(dimensions > 0 && dimensions < 2000);

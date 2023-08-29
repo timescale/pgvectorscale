@@ -13,7 +13,6 @@ use crate::util::tape::Tape;
 use crate::util::{
     ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
-
 //Ported from pg_vector code
 #[repr(C)]
 #[derive(Debug)]
@@ -97,7 +96,7 @@ impl Node {
         meta_page: &super::build::TsvMetaPage,
     ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
-        let num_pq = if meta_page.get_use_pq() { 8 } else { 0 };
+        let num_pq = if meta_page.get_use_pq() { meta_page.get_num_clusters() } else { 0 };
         Self {
             vector,
             //always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
