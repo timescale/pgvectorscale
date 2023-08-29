@@ -1,0 +1,74 @@
+name: "Setup pgrx"
+description: "Installs cargo-pgrx"
+
+inputs:
+  pg-install-dir:
+    default: postgresql
+  vector-dir:
+    default: .
+  grcov-version:
+    description: "grcov version"
+    default: 0.8.18
+  pgrx-version:
+    description: "pgrx version"
+    # Default version currently isn't unused
+    # default: 0.9.8
+
+runs:
+  using: "composite"
+  steps:
+    - name:
+      id: pg-config
+      shell: bash
+      run: |
+        export PATH=${{ inputs.pg-install-dir }}/bin:$PATH
+        MAJOR_VERSION=`pg_config --version | sed 's/^PostgreSQL \([0-9]\+\).*/\1/g'`
+        BINDIR=`pg_config --bindir`
+        echo "version=$MAJOR_VERSION" >> $GITHUB_OUTPUT
+        echo "bindir=$BINDIR" >> $GITHUB_OUTPUT
+
+    - name:
+      id: rustc
+      shell: bash
+      working-directory: ${{ inputs.vector-dir }}
+      # rustup show active-toolchain installs the toolchain specified via rust-toolchain.yaml if it is not installed
+      run: |
+        cd timescale_vector
+        RUST_VERSION=`rustup show active-toolchain -v | grep rustc | cut -d' ' -f2`
+        NEW_RUST_COMPILER=`rustup toolchain list | grep $RUST_VERSION | cut -d'(' -f1`
+        rustup default $NEW_RUST_COMPILER
+        echo "version=$RUST_VERSION" >> $GITHUB_OUTPUT
+
+    - name: Cache cargo-pgrx installation ${{ inputs.pgrx-version }}
+      id: cache-cargo-pgrx
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/bin/cargo-pgrx
+        key: ${{runner.os}}-cargo-pgrx-${{ inputs.pgrx-version }}-pg${{ steps.pg-config.outputs.version }}-${{ steps.rustc.outputs.version }}
+
+    - name: Install cargo-pgrx ${{ inputs.pgrx-version }}
+      if: steps.cache-cargo-pgrx.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        cargo install cargo-pgrx --version ${{ inputs.pgrx-version }} --force
+
+    - name: Configure pgrx
+      shell: bash
+      run: |
+        export PATH=${{ steps.pg-config.outputs.bindir }}:$PATH
+        export PG_CONFIG=`which pg_config`
+        cargo pgrx init --pg${{ steps.pg-config.outputs.version }}=$PG_CONFIG
+        cat $HOME/.pgrx/config.toml
+
+    - name: Cache cargo-grcov installation ${{ inputs.grcov-version }}
+      id: cache-cargo-grcov
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/bin/grcov
+        key: ${{runner.os}}-cargo-grcov-${{ inputs.grcov-version }}-${{ steps.rustc.outputs.version }}
+
+    - name: Install grcov
+      if: steps.cache-cargo-grcov.outputs.cache-hit != 'true'
+      id:  install-cargo-grcov
+      shell: bash
+      run: cargo install grcov --version ${{ inputs.grcov-version }} --force

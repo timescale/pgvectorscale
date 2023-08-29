@@ -1,0 +1,26 @@
+name: Run code checks
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  fmt:
+    runs-on: ubuntu-latest
+
+    container:
+      image: timescaledev/rust-builder:ubuntu-1.65
+
+    steps:
+      - name: Checkout Timescale Vector
+        uses: actions/checkout@v3
+        # extension is small so we do the hacky thing.
+#      - name: Run Cargo tests
+#        run: cd timescaledb_vector && cargo install --locked cargo-pgrx && cargo pgrx init && cargo pgrx test && cd ..
+
+      - name: Verify formatting
+        run: cd timescaledb_vector && cargo fmt --check
+
+      - name: Check formatting failure
+        if: failure()
+        run: |
+          echo "cargo version is"
+          cargo --version
+
+
