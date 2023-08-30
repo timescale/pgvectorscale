@@ -9,7 +9,7 @@ PG_VERSION = $(shell ${PG_CONFIG} --version | awk -F'[ \.]' '{print $$2}')
 ##TODO error out if this is not PG14???
 PGRX_HOME?= ${HOME}/.pgrx
 PGRX_VERSION=0.9.8
-VECTOR_VERSION?=$(shell sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' timescale_vector/Cargo.toml)
+VECTOR_VERSION?=$(shell sed -n 's/^[[:space:]]*version[[:space:]]*=[[:space:]]*"\(.*\)"/\1/p' timescaledb_vector/Cargo.toml)
 PG_DATA=${PGRX_HOME}/data-${PG_VERSION}
 
 PG_PKGLIBDIR=$(shell ${PG_CONFIG} --pkglibdir)
