@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
+use std::mem::size_of;
 use std::pin::Pin;
 
 use ndarray::Array3;
-use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
+use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ};
 use pgrx::*;
 use reductive::pq::Pq;
 use rkyv::vec::ArchivedVec;
@@ -13,6 +14,7 @@ use crate::util::tape::Tape;
 use crate::util::{
     ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
+
 //Ported from pg_vector code
 #[repr(C)]
 #[derive(Debug)]
@@ -150,6 +152,7 @@ impl Node {
             *past_last_distance = Distance::NAN;
         }
 
+        assert!(vector.len() == archived.pq_vector.len());
         for i in 0..=vector.len() - 1 {
             let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
             *pgv = vector[i];
@@ -306,7 +309,6 @@ pub struct PqQuantizerDef {
     dim_1: usize,
     dim_2: usize,
     vec_len: usize,
-    vec: Vec<f32>,
     next_vector_pointer: ItemPointer,
 }
 
@@ -318,7 +320,6 @@ impl PqQuantizerDef {
                 dim_1,
                 dim_2,
                 vec_len,
-                vec: vec![],
                 next_vector_pointer: ItemPointer {
                     block_number: 0,
                     offset: 0,
@@ -387,9 +388,7 @@ impl ReadablePqVectorNode {
 pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
     let rpq = PqQuantizerDef::read(index, &index_pointer);
     let rpn = rpq.get_archived_node();
-    let v = rpn.vec.as_slice();
     let mut result: Vec<f32> = Vec::new();
-    result.extend_from_slice(v);
     let mut next = rpn.next_vector_pointer.deserialize_item_pointer();
     loop {
         if next.offset == 0 && next.block_number == 0 {
@@ -413,16 +412,8 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
     let vec = pq.subquantizers().to_slice_memory_order().unwrap().to_vec();
     let shape = pq.subquantizers().dim();
     let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());
-    // start writing first entries in the first page.
-    let i = if vec.len() > 2000 { 2000 } else { vec.len() };
-    let (before, after) = vec.split_at(i);
-    pq_node.vec = before.to_vec();
 
     let mut pqt = Tape::new((*index).as_ptr(), PageType::PqQuantizerDef);
-
-    if after.len() == 0 {
-        return pq_node.write(&mut pqt);
-    }
 
     // write out the large vector bits.
     // we write "from the back"
@@ -430,7 +421,10 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
         block_number: 0,
         offset: 0,
     };
-    let mut prev_vec = after.to_vec().clone();
+    let mut prev_vec = vec;
+
+    // get numbers that can fit in a page by subtracting the item pointer.
+    let block_fit = (BLCKSZ as usize / size_of::<f32>()) - size_of::<ItemPointer>() - 64;
 
     loop {
         let l = prev_vec.len();
@@ -438,8 +432,8 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
             pq_node.next_vector_pointer = prev;
             return pq_node.write(&mut pqt);
         }
-        let lv = prev_vec.clone();
-        let ni = if l > 2000 { l - 2000 } else { 0 };
+        let lv = prev_vec;
+        let ni = if l > block_fit { l - block_fit } else { 0 };
         let (b, a) = lv.split_at(ni);
 
         let pqv_node = PqQuantizerVector {

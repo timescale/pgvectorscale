@@ -17,9 +17,7 @@ pgrx = "=0.9.8"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0"}
 reductive = { version = "0.9.0"}
-ndarray = { version = "0.15", features = [ "approx", "rayon" , "blas"] }
-blas-src = { version = "0.9.0", features = ["openblas"] }
-openblas-src = { version = "0.10", features = ["cblas", "system"] }
+ndarray = { version = "0.15", features = [ "approx"] }
 rand = { version = "0.8", features = [ "small_rng" ] }
 rand_chacha = "0.3"
 rand_core = "0.6"

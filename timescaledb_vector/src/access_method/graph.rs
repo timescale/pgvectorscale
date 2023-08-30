@@ -1,5 +1,3 @@
-extern crate blas_src;
-
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
