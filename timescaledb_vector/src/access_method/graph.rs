@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
 
-use crate::access_method::{build, model};
+use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
@@ -29,38 +29,6 @@ fn distance(a: &[f32], b: &[f32]) -> f32 {
         .sum();
     assert!(norm >= 0.);
     norm.sqrt()
-}
-
-// TODO: This function could return a table that fits in SIMD registers.
-unsafe fn build_distance_table(index: &PgRelation, query: &[f32]) -> Option<Vec<Vec<f32>>> {
-    let meta_page = build::read_meta_page(index);
-    if !meta_page.get_use_pq() {
-        return None;
-    }
-    let pq_id = meta_page.get_pq_pointer();
-    if pq_id.is_none() {
-        return None;
-    }
-    let pq = model::read_pq(&index, &pq_id.unwrap());
-    let sq = pq.subquantizers();
-    let mut distance_table: Vec<Vec<f32>> = Vec::new();
-    let clusters: Vec<_> = sq.outer_iter().collect();
-    let ds = query.len() / clusters.len();
-    for m in 0..clusters.len() {
-        let mut res: Vec<f32> = Vec::new();
-        let sl = &query[m * ds..(m + 1) * ds];
-        for i in 0..clusters[m].nrows() {
-            let c = clusters[m].row(i).to_vec();
-            // let p = sl
-            //     .iter()
-            //     .zip(c.iter())
-            //     .fold(0., |sum, (&ex, &ey)| sum + ((ex - ey).abs()).powf(2.));
-            let p = distance(sl, c.as_slice());
-            res.push(p);
-        }
-        distance_table.push(res);
-    }
-    Some(distance_table)
 }
 
 struct ListSearchNeighbor {
@@ -97,7 +65,7 @@ pub struct ListSearchResult {
     best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
-    distance_table: Option<Vec<Vec<f32>>>,
+    pq_distance_calculator: Option<DistanceCalculator>,
     pub stats: GreedySearchStats,
 }
 
@@ -107,12 +75,13 @@ impl ListSearchResult {
             best_candidate: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
-            distance_table: None,
+            pq_distance_calculator: None,
             stats: GreedySearchStats::new(),
         }
     }
 
     fn new<G>(
+        meta_page: &TsvMetaPage,
         index: &PgRelation,
         max_history_size: Option<usize>,
         graph: &G,
@@ -122,14 +91,18 @@ impl ListSearchResult {
     where
         G: Graph + ?Sized,
     {
-        let dt = unsafe { build_distance_table(index, query) };
+        let dc = if meta_page.get_use_pq() && meta_page.get_pq_pointer().is_some() {
+            Some(PgPq::new(meta_page, index).distance_calculator(query.to_vec(), distance))
+        } else {
+            None
+        };
 
         let mut res = Self {
             best_candidate: Vec::new(),
             inserted: HashSet::new(),
             max_history_size,
             stats: GreedySearchStats::new(),
-            distance_table: dt,
+            pq_distance_calculator: dc,
         };
         res.stats.calls += 1;
         for index_pointer in init_ids {
@@ -156,15 +129,10 @@ impl ListSearchResult {
         self.stats.node_reads += 1;
         let node = data_node.get_archived_node();
 
-        let d = match &self.distance_table {
-            Some(dt) => {
-                let mut d = 0.0;
+        let d = match &self.pq_distance_calculator {
+            Some(dc) => {
                 self.stats.pq_distance_comparisons += 1;
-                // maybe we should unroll this loop?
-                for m in 0..node.pq_vector.len() {
-                    d += dt[m][node.pq_vector[m] as usize];
-                }
-                d
+                dc.distance(node.pq_vector.to_vec())
             }
             None => {
                 let vec = node.vector.as_slice();
@@ -275,6 +243,7 @@ pub trait Graph {
             return (ListSearchResult::empty(), None);
         }
         let mut l = ListSearchResult::new(
+            self.get_meta_page(index),
             index,
             Some(search_list_size),
             self,
@@ -297,7 +266,14 @@ pub trait Graph {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        ListSearchResult::new(index, None, self, init_ids.unwrap(), query)
+        ListSearchResult::new(
+            self.get_meta_page(index),
+            index,
+            None,
+            self,
+            init_ids.unwrap(),
+            query,
+        )
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.

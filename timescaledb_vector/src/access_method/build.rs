@@ -1,16 +1,15 @@
 use std::time::Instant;
 
-use ndarray::{Array1, Array2};
 use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
-use rand::Rng;
-use reductive::pq::{Pq, QuantizeVector, TrainPq};
+use reductive::pq::Pq;
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
-use crate::access_method::model::{read_pq, PgVector};
+use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
+use crate::access_method::pq::{PgPq, PqTrainer};
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -21,12 +20,7 @@ use super::model::{self};
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
-const PQ_TRAINING_ITERATIONS: usize = 20;
-const NUM_SUBQUANTIZER_BITS: u32 = 8;
 
-const NUM_TRAINING_ATTEMPTS: usize = 1;
-
-const NUM_TRAINING_SET_SIZE: usize = 100000;
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]
@@ -108,12 +102,13 @@ struct BuildState {
     node_builder: BuilderGraph,
     started: Instant,
     stats: InsertStats,
-    vectors: Vec<Vec<f32>>,
+    pq_trainer: PqTrainer,
 }
 
 impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
+        let pq = PqTrainer::new(&meta_page.clone());
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
@@ -123,23 +118,8 @@ impl BuildState {
             node_builder: BuilderGraph::new(meta_page),
             started: Instant::now(),
             stats: InsertStats::new(),
-            vectors: Vec::new(),
+            pq_trainer: pq,
         }
-    }
-
-    fn train_pq(&self) -> Pq<f32> {
-        notice!("Training pq with {} vectors", self.vectors.len());
-        let training_set = self.vectors.iter().map(|x| x.to_vec()).flatten().collect();
-        let shape = (self.vectors.len(), self.vectors[0].len());
-        let instances = Array2::<f32>::from_shape_vec(shape, training_set).unwrap();
-        Pq::train_pq(
-            self.meta_page.num_clusters,
-            NUM_SUBQUANTIZER_BITS,
-            PQ_TRAINING_ITERATIONS,
-            NUM_TRAINING_ATTEMPTS,
-            instances,
-        )
-        .unwrap()
     }
 }
 
@@ -290,11 +270,9 @@ pub unsafe extern "C" fn aminsert(
     let meta_page = read_meta_page(&index_relation);
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
-    if meta_page.use_pq {
-        let pq_id = meta_page.get_pq_pointer().unwrap();
-        let pq = read_pq(&index_relation, &pq_id);
-        let og_vec = Array1::from(vector.to_vec());
-        node.pq_vector = pq.quantize_vector(og_vec).to_vec();
+    if meta_page.get_use_pq() {
+        let pq = PgPq::new(&meta_page, &index_relation);
+        node.pq_vector = pq.quantize(vector.to_vec());
     }
 
     let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
@@ -328,10 +306,10 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    if meta_page.use_pq {
-        let v = state.train_pq();
-        pq = Some(v)
+    if meta_page.get_use_pq() {
+        pq = Some(state.pq_trainer.train_pq())
     }
+
     let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
@@ -385,7 +363,6 @@ unsafe fn build_callback_internal(
     state: *mut std::os::raw::c_void,
 ) {
     check_for_interrupts!();
-    let mut rng = rand::thread_rng();
 
     let state = (state as *mut BuildState).as_mut().unwrap();
     let mut old_context = state.memcxt.set_as_current();
@@ -406,17 +383,8 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    // We collect the training data and reservoir sample into a training buffer of size
-    // NUM_TRAINING_SET_SIZE.
     if state.meta_page.get_use_pq() {
-        if state.vectors.len() >= NUM_TRAINING_SET_SIZE {
-            let index = rng.gen_range(0..state.ntuples + 1);
-            if index < NUM_TRAINING_SET_SIZE {
-                state.vectors[index] = vector.to_vec();
-            }
-        } else {
-            state.vectors.push(vector.to_vec());
-        }
+        state.pq_trainer.add_sample(vector.to_vec());
     }
     let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);

@@ -78,7 +78,7 @@ pub unsafe extern "C" fn amoptions(
             optname: "num_clusters".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_clusters) as i32,
-        }
+        },
     ];
 
     build_relopts(reloptions, validate, tab)

@@ -96,11 +96,16 @@ impl Node {
         meta_page: &super::build::TsvMetaPage,
     ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
-        let num_pq = if meta_page.get_use_pq() { meta_page.get_num_clusters() } else { 0 };
+        let num_pq = if meta_page.get_use_pq() {
+            meta_page.get_num_clusters()
+        } else {
+            0
+        };
         Self {
             vector,
-            //always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
+            // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
             pq_vector: (0..num_pq).map(|_| 0u8).collect(),
+            // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
             neighbor_index_pointers: (0..num_neighbors).map(|_| ItemPointer::new(0, 0)).collect(),
             neighbor_distances: (0..num_neighbors).map(|_| Distance::NAN).collect(),
             heap_item_pointer,
