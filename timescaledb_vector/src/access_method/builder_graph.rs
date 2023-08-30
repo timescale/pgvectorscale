@@ -59,20 +59,23 @@ impl BuilderGraph {
                 neighbors
             };
             stats.num_neighbors += neighbors.len();
-            //Node::update_neighbors(index, *index_pointer, neighbors, self.get_meta_page(index));
 
-            if self.meta_page.get_use_pq() {
-                let pqv = BuilderGraph::get_pq_vector(index, index_pointer, pq.clone().unwrap());
-                Node::update_neighbors_and_pq(
+            let pqv = if self.meta_page.get_use_pq() {
+                Some(BuilderGraph::get_pq_vector(
                     index,
-                    *index_pointer,
-                    neighbors,
-                    self.get_meta_page(index),
-                    pqv,
-                );
+                    index_pointer,
+                    pq.clone().unwrap(),
+                ))
             } else {
-                Node::update_neighbors(index, *index_pointer, neighbors, self.get_meta_page(index));
-            }
+                None
+            };
+            Node::update_neighbors_and_pq(
+                index,
+                *index_pointer,
+                neighbors,
+                self.get_meta_page(index),
+                pqv,
+            );
         }
         stats
     }

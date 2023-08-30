@@ -102,13 +102,13 @@ struct BuildState {
     node_builder: BuilderGraph,
     started: Instant,
     stats: InsertStats,
-    pq_trainer: PqTrainer,
+    pq_trainer: Option<PqTrainer>,
 }
 
 impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
-        let pq = PqTrainer::new(&meta_page.clone());
+        let pq = if meta_page.get_use_pq()  { Some(PqTrainer::new(&meta_page.clone()))} else {None};
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
@@ -294,7 +294,6 @@ fn do_heap_scan<'a>(
     meta_page: TsvMetaPage,
 ) -> (usize, Option<Pq<f32>>) {
     let mut state = BuildState::new(index_relation, meta_page.clone());
-    let mut pq: Option<Pq<f32>> = None;
     unsafe {
         pg_sys::IndexBuildHeapScan(
             heap_relation.as_ptr(),
@@ -306,9 +305,10 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    if meta_page.get_use_pq() {
-        pq = Some(state.pq_trainer.train_pq())
-    }
+    let pq = match state.pq_trainer{
+        Some(pqt) => {Some(pqt.train_pq())}
+        None => {None}
+    };
 
     let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
     assert_eq!(write_stats.num_nodes, state.ntuples);
@@ -383,9 +383,9 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    if state.meta_page.get_use_pq() {
-        state.pq_trainer.add_sample(vector.to_vec());
-    }
+        let pqt = state.pq_trainer.as_mut();
+        let _= pqt.is_some_and(|pqt| {pqt.add_sample(vector.to_vec()); true});
+
     let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
     let new_stats = state.node_builder.insert(&index, index_pointer, vector);

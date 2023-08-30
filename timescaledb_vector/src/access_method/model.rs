@@ -129,7 +129,7 @@ impl Node {
         index_pointer: ItemPointer,
         neighbors: &Vec<NeighborWithDistance>,
         meta_page: &super::build::TsvMetaPage,
-        vector: Vec<u8>,
+        vector: Option<Vec<u8>>,
     ) {
         let node = Node::modify(index, index_pointer);
         let mut archived = node.get_archived_node();
@@ -152,43 +152,19 @@ impl Node {
             *past_last_distance = Distance::NAN;
         }
 
-        assert!(vector.len() == archived.pq_vector.len());
-        for i in 0..=vector.len() - 1 {
-            let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
-            *pgv = vector[i];
+        match vector {
+            Some(v) => {
+                assert!(v.len() == archived.pq_vector.len());
+                for i in 0..=v.len() - 1 {
+                    let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
+                    *pgv = v[i];
+                }
+            }
+            None => {}
         }
+
         node.commit()
     }
-
-    pub unsafe fn update_neighbors(
-        index: &PgRelation,
-        index_pointer: ItemPointer,
-        neighbors: &Vec<NeighborWithDistance>,
-        meta_page: &super::build::TsvMetaPage,
-    ) {
-        let node = Node::modify(index, index_pointer);
-        let mut archived = node.get_archived_node();
-        for (i, new_neighbor) in neighbors.iter().enumerate() {
-            //TODO: why do we need to recreate the archive?
-            let mut a_index_pointer = archived.as_mut().neighbor_index_pointer().index_pin(i);
-            //TODO hate that we have to set each field like this
-            a_index_pointer.block_number =
-                new_neighbor.get_index_pointer_to_neighbor().block_number;
-            a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
-
-            let mut a_distance = archived.as_mut().neighbor_distances().index_pin(i);
-            *a_distance = new_neighbor.get_distance() as Distance;
-        }
-        //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            //TODO: why do we need to recreate the archive?
-            let archived = node.get_archived_node();
-            let mut past_last_distance = archived.neighbor_distances().index_pin(neighbors.len());
-            *past_last_distance = Distance::NAN;
-        }
-        node.commit()
-    }
-
     pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
         let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
         tape.write(&bytes)
@@ -225,10 +201,6 @@ impl ArchivedNode {
 
     pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
-    }
-
-    pub fn vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<f32>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.vector) }
     }
 
     pub fn num_neighbors(&self) -> usize {

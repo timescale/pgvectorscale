@@ -59,11 +59,12 @@ impl Graph for DiskIndexGraph {
             self.meta_page = read_meta_page(index);
         }
         unsafe {
-            Node::update_neighbors(
+            Node::update_neighbors_and_pq(
                 index,
                 neighbors_of,
                 &new_neighbors,
                 self.get_meta_page(index),
+                None,
             );
         }
     }
