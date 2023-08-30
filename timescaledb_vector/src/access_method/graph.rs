@@ -89,10 +89,10 @@ impl ListSearchResult {
     where
         G: Graph + ?Sized,
     {
-        let dc = if meta_page.get_use_pq() && meta_page.get_pq_pointer().is_some() {
-            Some(PgPq::new(meta_page, index).distance_calculator(query.to_vec(), distance))
-        } else {
-            None
+        let pq = PgPq::new(meta_page, index);
+        let dc = match pq {
+            Some(pgpq) => Some(pgpq.distance_calculator(query.to_vec(), distance)),
+            None => None,
         };
 
         let mut res = Self {

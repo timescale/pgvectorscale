@@ -94,10 +94,18 @@ pub struct PgPq {
 }
 
 impl PgPq {
-    pub fn new(meta_page: &super::build::TsvMetaPage, index_relation: &PgRelation) -> PgPq {
-        let pq_id = meta_page.get_pq_pointer().unwrap();
-        let pq = unsafe { read_pq(&index_relation, &pq_id) };
-        PgPq { pq }
+    pub fn new(meta_page: &super::build::TsvMetaPage, index_relation: &PgRelation) -> Option<PgPq> {
+        if !meta_page.get_use_pq() {
+            return None;
+        }
+        let pq_id = meta_page.get_pq_pointer();
+        match pq_id {
+            None => None,
+            Some(pq_id) => {
+                let pq = unsafe { read_pq(&index_relation, &pq_id) };
+                Some(PgPq { pq })
+            }
+        }
     }
     /// quantize produces a quantized vector from the raw pg vector.
     pub fn quantize(self, vector: Vec<f32>) -> Vec<u8> {

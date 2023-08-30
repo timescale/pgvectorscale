@@ -274,10 +274,12 @@ pub unsafe extern "C" fn aminsert(
     let meta_page = read_meta_page(&index_relation);
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
-    if meta_page.get_use_pq() {
-        let pq = PgPq::new(&meta_page, &index_relation);
+
+    let pq = PgPq::new(&meta_page, &index_relation);
+    let _ = pq.is_some_and(|pq| {
         node.pq_vector = pq.quantize(vector.to_vec());
-    }
+        true
+    });
 
     let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);

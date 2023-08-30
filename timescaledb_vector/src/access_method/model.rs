@@ -356,7 +356,6 @@ impl ReadablePqVectorNode {
     }
 }
 
-//TODO: Make defensive.
 pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
     let rpq = PqQuantizerDef::read(index, &index_pointer);
     let rpn = rpq.get_archived_node();
