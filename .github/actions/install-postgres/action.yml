@@ -1,0 +1,44 @@
+name: "Setup PostgreSQL"
+description: "Builds and installs PostgreSQL"
+
+inputs:
+  pg-version:
+    required: true
+    description: "PostgreSQL version"
+  pg-src-dir:
+    default: pgbuild
+  pg-install-dir:
+    default: postgresql
+
+runs:
+  using: "composite"
+  steps:
+    - name: Cache PostgreSQL ${{ inputs.pg-version }}
+      id: cache-postgresql
+      uses: actions/cache@v3
+      with:
+       path: ${{ inputs.pg-src-dir }}
+       key: ${{ runner.os }}-postgresql-${{ inputs.pg-version }}
+
+    - name: Build PostgreSQL
+      if: steps.cache-postgresql.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        pg_build_args: --enable-debug --enable-cassert
+        llvm_config: llvm-config-14
+        CC: gcc
+        CXX: g++
+      run: |
+        wget -q -O postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v${{ inputs.pg-version }}/postgresql-${{ inputs.pg-version }}.tar.bz2
+        mkdir -p ${{ inputs.pg-src-dir }}
+        tar --extract --file postgresql.tar.bz2 --directory ${{ inputs.pg-src-dir }} --strip-components 1
+        cd ${{ inputs.pg-src-dir }}
+        PG_INSTALL_DIR=`readlink -f ${{ inputs.pg-install-dir }}`
+        echo ">>>>>>> $PG_INSTALL_DIR"
+        ./configure --prefix=${PG_INSTALL_DIR} ${pg_build_args} --with-llvm LLVM_CONFIG=${llvm_config} --with-openssl --without-readline --without-zlib --without-libxml
+        make -j$(nproc)
+
+    - name: Install PostgreSQL ${{ inputs.pg-version }}
+      shell: bash
+      run: |
+        make -C ${{ inputs.pg-src-dir }} install

@@ -1,0 +1,75 @@
+name: Deb packager
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag'
+        required: true
+        default: ''
+      PG:
+        description: 'PG major version. Default: 15'
+        required: false
+        default: '15'
+      PG_MIN:
+        description: 'PG minor version. Default: 4'
+        required: false
+        default: '4'
+
+jobs:
+  packager:
+    runs-on: ubuntu-latest
+    env:
+      PG_VER: ${{ github.event.inputs.PG }}
+      PG_MIN_VER: ${{ github.event.inputs.PG_MIN }}
+      PG_SRC_DIR: pgbuild 
+      PG_INSTALL_DIR: postgresql
+      MAKE_JOBS: 6
+      PG_CONFIG_PATH: postgresql/bin/pg_config
+      TAG: ${{ github.event.inputs.tag }}
+      TAG_DIR: timescaledb_vector
+
+    steps:
+    - name: Checkout Timescale Vector
+      uses: actions/checkout@v3
+
+    - name: Install Linux Packages
+      uses: ./.github/actions/install-packages
+    
+    - name: Install Deb builder specific packages
+      run: |
+        sudo apt-get install dpkg-dev debhelper
+
+    - name: Install PostgreSQL ${{ env.PG_VER }}
+      uses: ./.github/actions/install-postgres
+      with:
+        pg-version: ${{ env.PG_VER }}.${{ env.PG_MIN_VER }}
+        pg-src-dir: ~/${{ env.PG_SRC_DIR }}
+        pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+
+    - name: Checkout Timescale Vector ${{ env.TAG }}
+      uses: actions/checkout@v3
+      with:
+        repository: timescale/timescaledb-vector
+        ref: '${{ env.TAG }}'
+        path: ${{ env.TAG_DIR }}
+  
+    - name: Install pgrx
+      uses: ./.github/actions/install-pgrx
+      with:
+        pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+        pgrx-version: 0.9.8
+
+    - name: Build Deb
+      id: debbuild
+      run: |
+        export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
+        (cd ${{ env.TAG_DIR }} && make package)
+        bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ env.PG_VER }}"
+
+  # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
+  # The artifact will have a TTL of 90 days
+    - name: Upload deb as Artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: vector-${{ env.TAG }}-pg${{ env.PG_VER }}
+        path: pkgdump/timescaledb-vector-*${{ env.TAG }}*.deb
