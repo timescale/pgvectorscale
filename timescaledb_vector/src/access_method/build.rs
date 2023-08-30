@@ -108,7 +108,11 @@ struct BuildState {
 impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
-        let pq = if meta_page.get_use_pq()  { Some(PqTrainer::new(&meta_page.clone()))} else {None};
+        let pq = if meta_page.get_use_pq() {
+            Some(PqTrainer::new(&meta_page.clone()))
+        } else {
+            None
+        };
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
@@ -305,9 +309,9 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    let pq = match state.pq_trainer{
-        Some(pqt) => {Some(pqt.train_pq())}
-        None => {None}
+    let pq = match state.pq_trainer {
+        Some(pqt) => Some(pqt.train_pq()),
+        None => None,
     };
 
     let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
@@ -383,8 +387,11 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-        let pqt = state.pq_trainer.as_mut();
-        let _= pqt.is_some_and(|pqt| {pqt.add_sample(vector.to_vec()); true});
+    let pqt = state.pq_trainer.as_mut();
+    let _ = pqt.is_some_and(|pqt| {
+        pqt.add_sample(vector.to_vec());
+        true
+    });
 
     let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
