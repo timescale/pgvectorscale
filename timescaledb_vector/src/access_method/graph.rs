@@ -134,8 +134,7 @@ impl ListSearchResult {
             }
             None => {
                 let vec = node.vector.as_slice();
-                let d = distance(vec, query);
-                d
+                distance(vec, query)
             }
         };
 
