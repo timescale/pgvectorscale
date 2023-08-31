@@ -109,7 +109,7 @@ impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
         let pq = if meta_page.get_use_pq() {
-            Some(PqTrainer::new(&meta_page.clone()))
+            Some(PqTrainer::new(&meta_page))
         } else {
             None
         };

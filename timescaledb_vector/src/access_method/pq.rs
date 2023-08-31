@@ -117,10 +117,10 @@ impl PgPq {
     }
     pub fn distance_calculator(
         self,
-        query: Vec<f32>,
+        query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> DistanceCalculator {
-        DistanceCalculator::new(self.pq, distance_fn, query)
+        DistanceCalculator::new(&self.pq, distance_fn, query)
     }
 }
 
@@ -129,7 +129,7 @@ impl PgPq {
 /// can be fast.
 // TODO: This function could return a table that fits in SIMD registers.
 fn build_distance_table(
-    pq: Pq<f32>,
+    pq: &Pq<f32>,
     query: &[f32],
     distance_fn: fn(&[f32], &[f32]) -> f32,
 ) -> Vec<Vec<f32>> {
@@ -157,17 +157,17 @@ pub struct DistanceCalculator {
 
 impl DistanceCalculator {
     pub fn new(
-        pq: Pq<f32>,
+        pq: &Pq<f32>,
         distance_fn: fn(&[f32], &[f32]) -> f32,
-        query: Vec<f32>,
+        query: &[f32],
     ) -> DistanceCalculator {
         DistanceCalculator {
-            distance_table: build_distance_table(pq, query.as_slice(), distance_fn),
+            distance_table: build_distance_table(pq, query, distance_fn),
         }
     }
 
     /// distance emits the sum of distances between each centroid in the quantized vector.
-    pub fn distance(&self, pq_vector: Vec<u8>) -> f32 {
+    pub fn distance(&self, pq_vector: &[u8]) -> f32 {
         let mut d = 0.0;
         // maybe we should unroll this loop?
         for m in 0..pq_vector.len() {

@@ -91,7 +91,7 @@ impl ListSearchResult {
     {
         let pq = PgPq::new(meta_page, index);
         let dc = match pq {
-            Some(pgpq) => Some(pgpq.distance_calculator(query.to_vec(), distance)),
+            Some(pgpq) => Some(pgpq.distance_calculator(query, distance)),
             None => None,
         };
 
@@ -130,7 +130,7 @@ impl ListSearchResult {
         let d = match &self.pq_distance_calculator {
             Some(dc) => {
                 self.stats.pq_distance_comparisons += 1;
-                dc.distance(node.pq_vector.to_vec())
+                dc.distance(node.pq_vector.as_slice())
             }
             None => {
                 let vec = node.vector.as_slice();
