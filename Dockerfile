@@ -67,7 +67,7 @@ RUN set -ex \
 
 ## Install pgrx taking into account selected rust toolchain version.
 ## Making this a separate step to improve layer caching
-COPY --chown=postgres:postgres timescaledb_vector/rust-toolchain.toml /build/timescaledb-vector/timescaledb_vector/rust-toolchain.toml
+#COPY --chown=postgres:postgres timescaledb_vector/rust-toolchain.toml /build/timescaledb-vector/timescaledb_vector/rust-toolchain.toml
 COPY --chown=postgres:postgres scripts /build/timescaledb-vector/scripts
 USER postgres
 WORKDIR /build/timescaledb-vector/timescaledb_vector

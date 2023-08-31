@@ -36,8 +36,11 @@ runs:
         cd timescaledb_vector
         which rustup
         RUST_VERSION=`rustup show active-toolchain -v | grep rustc | cut -d' ' -f2`
+        echo RUST_VERSION >> $GITHUB_OUTPUT
         NEW_RUST_COMPILER=`rustup toolchain list | grep $RUST_VERSION | cut -d'(' -f1`
+        echo $NEW_RUST_COMPILER >> $GITHUB_OUTPUT
         rustup default $NEW_RUST_COMPILER
+        echo "rustup done" >> $GITHUB_OUTPUT
         echo "version=$RUST_VERSION" >> $GITHUB_OUTPUT
 
     - name: Cache cargo-pgrx installation ${{ inputs.pgrx-version }}
