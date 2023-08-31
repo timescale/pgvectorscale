@@ -2,6 +2,7 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
 
+use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
@@ -52,7 +53,7 @@ impl ListSearchNeighbor {
         Self {
             index_pointer,
             heap_pointer,
-            distance: distance,
+            distance,
             visited: false,
         }
     }
@@ -62,6 +63,7 @@ pub struct ListSearchResult {
     best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
+    pq_distance_calculator: Option<DistanceCalculator>,
     pub stats: GreedySearchStats,
 }
 
@@ -71,11 +73,13 @@ impl ListSearchResult {
             best_candidate: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
+            pq_distance_calculator: None,
             stats: GreedySearchStats::new(),
         }
     }
 
     fn new<G>(
+        meta_page: &TsvMetaPage,
         index: &PgRelation,
         max_history_size: Option<usize>,
         graph: &G,
@@ -85,11 +89,18 @@ impl ListSearchResult {
     where
         G: Graph + ?Sized,
     {
+        let pq = PgPq::new(meta_page, index);
+        let dc = match pq {
+            Some(pgpq) => Some(pgpq.distance_calculator(query, distance)),
+            None => None,
+        };
+
         let mut res = Self {
             best_candidate: Vec::new(),
             inserted: HashSet::new(),
-            max_history_size: max_history_size,
+            max_history_size,
             stats: GreedySearchStats::new(),
+            pq_distance_calculator: dc,
         };
         res.stats.calls += 1;
         for index_pointer in init_ids {
@@ -115,14 +126,24 @@ impl ListSearchResult {
         let data_node = graph.read(index, index_pointer);
         self.stats.node_reads += 1;
         let node = data_node.get_archived_node();
-        let vec = node.vector.as_slice();
-        let distance = distance(vec, query);
+
+        let d = match &self.pq_distance_calculator {
+            Some(dc) => {
+                self.stats.pq_distance_comparisons += 1;
+                dc.distance(node.pq_vector.as_slice())
+            }
+            None => {
+                let vec = node.vector.as_slice();
+                distance(vec, query)
+            }
+        };
+
         self.stats.distance_comparisons += 1;
 
         let neighbor = ListSearchNeighbor::new(
             index_pointer,
             node.heap_item_pointer.deserialize_item_pointer(),
-            distance,
+            d,
         );
         self._insert_neighbor(neighbor);
     }
@@ -219,6 +240,7 @@ pub trait Graph {
             return (ListSearchResult::empty(), None);
         }
         let mut l = ListSearchResult::new(
+            self.get_meta_page(index),
             index,
             Some(search_list_size),
             self,
@@ -241,7 +263,14 @@ pub trait Graph {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        ListSearchResult::new(index, None, self, init_ids.unwrap(), query)
+        ListSearchResult::new(
+            self.get_meta_page(index),
+            index,
+            None,
+            self,
+            init_ids.unwrap(),
+            query,
+        )
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
@@ -260,7 +289,7 @@ pub trait Graph {
         let mut neighbors = Vec::<NeighborWithDistance>::with_capacity(
             self.get_meta_page(index).get_num_neighbors() as _,
         );
-        while let Some((index_pointer, distance, pos)) = lsr.visit_closest(visit_n_closest) {
+        while let Some((index_pointer, distance, _)) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
             let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
             if !neighbors_existed {
@@ -271,7 +300,7 @@ pub trait Graph {
                 lsr.insert(
                     index,
                     self,
-                    neighbor_index_pointer.get_index_pointer_to_neigbor(),
+                    neighbor_index_pointer.get_index_pointer_to_neighbor(),
                     query,
                 )
             }
@@ -304,10 +333,10 @@ pub trait Graph {
 
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
-            .map(|c| c.get_index_pointer_to_neigbor())
+            .map(|c| c.get_index_pointer_to_neighbor())
             .collect();
         for n in new_neigbors {
-            if hash.insert(n.get_index_pointer_to_neigbor()) {
+            if hash.insert(n.get_index_pointer_to_neighbor()) {
                 candidates.push(n);
             }
         }
@@ -316,7 +345,7 @@ pub trait Graph {
             //prevent self-loops
             let index = candidates
                 .iter()
-                .position(|x| x.get_index_pointer_to_neigbor() == index_pointer)
+                .position(|x| x.get_index_pointer_to_neighbor() == index_pointer)
                 .unwrap();
             candidates.remove(index);
         }
@@ -355,7 +384,7 @@ pub trait Graph {
                 let existing_neighbor = neighbor;
 
                 //TODO make lazy
-                let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neigbor());
+                let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neighbor());
                 stats.node_reads += 1;
                 let existing_neighbor_node = data_node.get_archived_node();
                 let existing_neighbor_vec = existing_neighbor_node.vector.as_slice();
@@ -368,7 +397,7 @@ pub trait Graph {
                     }
 
                     let data_node =
-                        self.read(index, candidate_neighbor.get_index_pointer_to_neigbor());
+                        self.read(index, candidate_neighbor.get_index_pointer_to_neighbor());
                     stats.node_reads += 1;
                     let candidate_node = data_node.get_archived_node();
                     let candidate_vec = candidate_node.vector.as_slice();
@@ -400,7 +429,6 @@ pub trait Graph {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
         let meta_page = self.get_meta_page(index);
-
         if self.is_empty() {
             self.set_neighbors(
                 index,
@@ -431,7 +459,7 @@ pub trait Graph {
         for neighbor in neighbor_list {
             let (needed_prune, backpointer_stats) = self.update_back_pointer(
                 index,
-                neighbor.get_index_pointer_to_neigbor(),
+                neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
             );
@@ -442,8 +470,8 @@ pub trait Graph {
         }
         //info!("pruned {} neighbors", cnt);
         return InsertStats {
-            prune_neighbor_stats: prune_neighbor_stats,
-            greedy_search_stats: greedy_search_stats,
+            prune_neighbor_stats,
+            greedy_search_stats,
         };
     }
 
@@ -501,6 +529,7 @@ pub struct GreedySearchStats {
     pub calls: usize,
     pub distance_comparisons: usize,
     pub node_reads: usize,
+    pub pq_distance_comparisons: usize,
 }
 
 impl GreedySearchStats {
@@ -509,6 +538,7 @@ impl GreedySearchStats {
             calls: 0,
             distance_comparisons: 0,
             node_reads: 0,
+            pq_distance_comparisons: 0,
         }
     }
 
@@ -516,6 +546,7 @@ impl GreedySearchStats {
         self.calls += other.calls;
         self.distance_comparisons += other.distance_comparisons;
         self.node_reads += other.node_reads;
+        self.pq_distance_comparisons += other.pq_distance_comparisons;
     }
 }
 

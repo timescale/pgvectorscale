@@ -37,7 +37,7 @@ simdeez::simd_runtime_generate!(
 
         let mut dist = S::horizontal_add_ps(res);
 
-        // compute for the rmaining elements
+        // compute for the remaining elements
         for i in 0..x.len() {
             let diff = x[i] - y[i];
             dist += diff * diff;

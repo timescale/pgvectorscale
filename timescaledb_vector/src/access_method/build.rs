@@ -2,12 +2,14 @@ use std::time::Instant;
 
 use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
 use pgrx::*;
+use reductive::pq::Pq;
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
+use crate::access_method::pq::{PgPq, PqTrainer};
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -18,6 +20,7 @@ use super::model::{self};
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
+
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
 #[derive(Clone)]
@@ -32,8 +35,12 @@ pub struct TsvMetaPage {
     num_neighbors: u32,
     search_list_size: u32,
     max_alpha: f64,
-    init_ids_block_number: pgrx::pg_sys::BlockNumber,
-    init_ids_offset: pgrx::pg_sys::OffsetNumber,
+    init_ids_block_number: pg_sys::BlockNumber,
+    init_ids_offset: pg_sys::OffsetNumber,
+    use_pq: bool,
+    pq_vector_length: usize,
+    pq_block_number: pg_sys::BlockNumber,
+    pq_block_offset: pg_sys::OffsetNumber,
 }
 
 impl TsvMetaPage {
@@ -49,12 +56,20 @@ impl TsvMetaPage {
         self.num_neighbors
     }
 
+    pub fn get_pq_vector_length(&self) -> usize {
+        self.pq_vector_length
+    }
+
     pub fn get_search_list_size_for_build(&self) -> u32 {
         self.search_list_size
     }
 
     pub fn get_max_alpha(&self) -> f64 {
         self.max_alpha
+    }
+
+    pub fn get_use_pq(&self) -> bool {
+        self.use_pq
     }
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
@@ -69,6 +84,14 @@ impl TsvMetaPage {
         let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
         Some(vec![ptr])
     }
+    pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
+        if !self.use_pq || (self.pq_block_number == 0 && self.pq_block_offset == 0) {
+            return None;
+        }
+
+        let ptr = IndexPointer::new(self.pq_block_number, self.pq_block_offset);
+        Some(ptr)
+    }
 }
 
 struct BuildState {
@@ -79,20 +102,27 @@ struct BuildState {
     node_builder: BuilderGraph,
     started: Instant,
     stats: InsertStats,
+    pq_trainer: Option<PqTrainer>,
 }
 
 impl BuildState {
     fn new(index_relation: &PgRelation, meta_page: TsvMetaPage) -> Self {
         let tape = unsafe { Tape::new((**index_relation).as_ptr(), page::PageType::Node) };
+        let pq = if meta_page.get_use_pq() {
+            Some(PqTrainer::new(&meta_page))
+        } else {
+            None
+        };
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
             ntuples: 0,
             meta_page: meta_page.clone(),
-            tape: tape,
+            tape,
             node_builder: BuilderGraph::new(meta_page),
             started: Instant::now(),
             stats: InsertStats::new(),
+            pq_trainer: pq,
         }
     }
 }
@@ -123,6 +153,10 @@ unsafe fn write_meta_page(
     (*meta).num_neighbors = (*opt).num_neighbors;
     (*meta).search_list_size = (*opt).search_list_size;
     (*meta).max_alpha = (*opt).max_alpha;
+    (*meta).use_pq = (*opt).use_pq;
+    (*meta).pq_vector_length = (*opt).pq_vector_length;
+    (*meta).pq_block_number = 0;
+    (*meta).pq_block_offset = 0;
     (*meta).init_ids_block_number = 0;
     (*meta).init_ids_offset = 0;
     let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
@@ -145,7 +179,7 @@ pub fn read_meta_page(index: &PgRelation) -> TsvMetaPage {
 }
 
 pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
-    assert!(init_ids.len() == 1); //change this if we support multiple
+    assert_eq!(init_ids.len(), 1); //change this if we support multiple
     let id = init_ids[0];
 
     unsafe {
@@ -153,6 +187,16 @@ pub fn update_meta_page_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>
         let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
         (*meta).init_ids_block_number = id.block_number;
         (*meta).init_ids_offset = id.offset;
+        page.commit()
+    }
+}
+
+pub fn update_meta_page_pq_pointer(index: &PgRelation, pq_pointer: IndexPointer) {
+    unsafe {
+        let page = page::WritablePage::modify(index.as_ptr(), 0);
+        let meta = page_get_meta(*page, *(*(page.get_buffer())), false);
+        (*meta).pq_block_number = pq_pointer.block_number;
+        (*meta).pq_block_offset = pq_pointer.offset;
         page.commit()
     }
 }
@@ -168,17 +212,36 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}",
+        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, use_pq={}, pq_vector_length={}",
         opt.num_neighbors,
         opt.search_list_size,
-        opt.max_alpha
+        opt.max_alpha,
+        opt.use_pq,
+        opt.pq_vector_length
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
+    // PQ is only applicable to high dimension vectors.
+    if opt.use_pq {
+        if dimensions < opt.pq_vector_length as i32 {
+            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", opt.pq_vector_length, dimensions)
+        };
+        if dimensions % opt.pq_vector_length as i32 != 0 {
+            error!("use_pq can only be applied to vectors where the number of dimensions {} is divisible by the pq_vector_length {} ", dimensions, opt.pq_vector_length)
+        };
+    }
     assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, opt) };
+    let meta_page = unsafe { write_meta_page(indexrel, dimensions as _, opt.clone()) };
+    let (ntuples, pq_opt) = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
-    let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
+    // When using PQ, we initialize a node to store the model we use to quantize the vectors.
+    unsafe {
+        if opt.use_pq {
+            let pq = pq_opt.unwrap();
+            let index_pointer: IndexPointer = model::write_pq(pq, &index_relation);
+            update_meta_page_pq_pointer(&index_relation, index_pointer)
+        }
+    }
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
     result.heap_tuples = ntuples as f64;
@@ -210,7 +273,16 @@ pub unsafe extern "C" fn aminsert(
     let mut graph = DiskIndexGraph::new(&index_relation);
     let meta_page = read_meta_page(&index_relation);
 
-    let node = model::Node::new(vector, heap_pointer, &meta_page);
+    let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
+
+    // Populate the PQ version of the vector if it exists.
+    let pq = PgPq::new(&meta_page, &index_relation);
+    match pq {
+        None => {}
+        Some(pq) => {
+            node.pq_vector = pq.quantize(vector.to_vec());
+        }
+    }
 
     let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);
@@ -229,9 +301,8 @@ fn do_heap_scan<'a>(
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
     meta_page: TsvMetaPage,
-) -> usize {
-    let mut state = BuildState::new(index_relation, meta_page);
-
+) -> (usize, Option<Pq<f32>>) {
+    let mut state = BuildState::new(index_relation, meta_page.clone());
     unsafe {
         pg_sys::IndexBuildHeapScan(
             heap_relation.as_ptr(),
@@ -242,8 +313,11 @@ fn do_heap_scan<'a>(
         );
     }
 
-    let write_stats = unsafe { state.node_builder.write(index_relation) };
-    assert!(write_stats.num_nodes == state.ntuples);
+    // we train the quantizer and add prepare to write quantized values to the nodes.
+    let pq = state.pq_trainer.map(|pq| pq.train_pq());
+
+    let write_stats = unsafe { state.node_builder.write(index_relation, &pq) };
+    assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
@@ -267,7 +341,7 @@ fn do_heap_scan<'a>(
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
-    ntuples
+    (ntuples, pq)
 }
 
 #[pg_guard]
@@ -315,11 +389,19 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    let node = model::Node::new(vector, heap_pointer, &state.meta_page);
+    match &state.pq_trainer {
+        Some(_) => {
+            let pqt = state.pq_trainer.as_mut();
+            pqt.expect("error adding sample")
+                .add_sample(vector.to_vec())
+        }
+        None => {}
+    }
+
+    let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
     let new_stats = state.node_builder.insert(&index, index_pointer, vector);
     state.stats.combine(new_stats);
-
     old_context.set_as_current();
     state.memcxt.reset();
 }
@@ -345,6 +427,58 @@ mod tests {
             select * from test order by embedding <=> '[0,0,0]';
             explain analyze select * from test order by embedding <=> '[0,0,0]';
             drop index idxtest;
+            ",
+        ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_pq_index_creation() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_pq (
+                embedding vector (1536)
+            );
+
+           -- generate 300 vectors
+            INSERT INTO test_pq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 300) i
+                GROUP BY
+                    i % 300) g;
+
+            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, pq_vector_length = 64);
+
+            ;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_pq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            EXPLAIN ANALYZE
+            SELECT
+                *
+            FROM
+                test_pq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            DROP INDEX idx_tsv_pq;
             ",
         ))?;
         Ok(())

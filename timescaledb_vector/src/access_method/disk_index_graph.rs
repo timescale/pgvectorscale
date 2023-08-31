@@ -9,7 +9,7 @@ use super::{
 };
 
 pub struct DiskIndexGraph {
-    meta_page: super::build::TsvMetaPage,
+    meta_page: TsvMetaPage,
 }
 
 impl DiskIndexGraph {
@@ -20,12 +20,12 @@ impl DiskIndexGraph {
 }
 
 impl Graph for DiskIndexGraph {
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        self.meta_page.get_init_ids()
-    }
-
     fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
         unsafe { Node::read(index, &index_pointer) }
+    }
+
+    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
+        self.meta_page.get_init_ids()
     }
 
     fn get_neighbors(
@@ -35,7 +35,7 @@ impl Graph for DiskIndexGraph {
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let rn = self.read(index, neighbors_of);
-        rn.get_archived_node().apply_to_neightbors(|dist, n| {
+        rn.get_archived_node().apply_to_neighbors(|dist, n| {
             result.push(NeighborWithDistance::new(
                 n.deserialize_item_pointer(),
                 dist,
@@ -44,8 +44,8 @@ impl Graph for DiskIndexGraph {
         true
     }
 
-    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
-        &self.meta_page
+    fn is_empty(&self) -> bool {
+        self.meta_page.get_init_ids().is_none()
     }
 
     fn set_neighbors(
@@ -59,16 +59,17 @@ impl Graph for DiskIndexGraph {
             self.meta_page = read_meta_page(index);
         }
         unsafe {
-            Node::update_neighbors(
+            Node::update_neighbors_and_pq(
                 index,
                 neighbors_of,
                 &new_neighbors,
                 self.get_meta_page(index),
+                None,
             );
         }
     }
 
-    fn is_empty(&self) -> bool {
-        self.meta_page.get_init_ids().is_none()
+    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
+        &self.meta_page
     }
 }

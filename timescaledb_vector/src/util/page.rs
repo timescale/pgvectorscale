@@ -24,6 +24,8 @@ pub const TSV_PAGE_ID: u16 = 0xAE24; /* magic number, generated randomly */
 pub enum PageType {
     Meta = 0,
     Node = 1,
+    PqQuantizerDef = 2,
+    PqQuantizerVector = 3,
 }
 
 impl PageType {
@@ -31,6 +33,8 @@ impl PageType {
         match value {
             0 => PageType::Meta,
             1 => PageType::Node,
+            2 => PageType::PqQuantizerDef,
+            3 => PageType::PqQuantizerVector,
             _ => panic!("Unknown PageType number {}", value),
         }
     }

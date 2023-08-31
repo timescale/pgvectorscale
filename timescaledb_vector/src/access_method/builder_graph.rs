@@ -1,13 +1,15 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use ndarray::Array1;
 use pgrx::*;
+use reductive::pq::{Pq, QuantizeVector};
 
-use crate::util::{IndexPointer, ItemPointer};
+use crate::util::ItemPointer;
 
 use super::build::TsvMetaPage;
-use super::graph::{Graph, GreedySearchStats, PruneNeighborStats};
-use super::model::{Distance, NeighborWithDistance, Node, ReadableNode};
+use super::graph::Graph;
+use super::model::*;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -16,20 +18,33 @@ use super::model::{Distance, NeighborWithDistance, Node, ReadableNode};
 /// the neighbors to the right pages.
 pub struct BuilderGraph {
     //maps node's pointer to the representation on disk
-    neighbor_map: std::collections::HashMap<ItemPointer, Vec<NeighborWithDistance>>,
-    meta_page: super::build::TsvMetaPage,
+    neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
+    meta_page: TsvMetaPage,
 }
 
 impl BuilderGraph {
-    pub fn new(meta_page: super::build::TsvMetaPage) -> Self {
+    pub fn new(meta_page: TsvMetaPage) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
-            meta_page: meta_page,
+            meta_page,
         }
     }
 
-    pub unsafe fn write(&self, index: &PgRelation) -> WriteStats {
+    unsafe fn get_pq_vector(
+        index: &PgRelation,
+        index_pointer: &ItemPointer,
+        pq: &Pq<f32>,
+    ) -> Vec<u8> {
+        let node = Node::read(index, index_pointer);
+        // todo: deal with clone
+        let copy: Vec<f32> = node.get_archived_node().vector.iter().map(|f| *f).collect();
+        let og_vec = Array1::from(copy);
+        pq.quantize_vector(og_vec).to_vec()
+    }
+
+    pub unsafe fn write(&self, index: &PgRelation, pq: &Option<Pq<f32>>) -> WriteStats {
         let mut stats = WriteStats::new();
+
         //TODO: OPT: do this in order of item pointers
         for (index_pointer, neighbors) in &self.neighbor_map {
             stats.num_nodes += 1;
@@ -45,20 +60,30 @@ impl BuilderGraph {
             };
             stats.num_neighbors += neighbors.len();
 
-            Node::update_neighbors(index, *index_pointer, neighbors, self.get_meta_page(index));
+            let pqv = match pq {
+                Some(pq) => Some(BuilderGraph::get_pq_vector(index, index_pointer, pq)),
+                None => None,
+            };
+            Node::update_neighbors_and_pq(
+                index,
+                *index_pointer,
+                neighbors,
+                self.get_meta_page(index),
+                pqv,
+            );
         }
         stats
     }
 }
 
 impl Graph for BuilderGraph {
+    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
+        unsafe { Node::read(index, &index_pointer) }
+    }
+
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
         //returns a vector for generality
         self.meta_page.get_init_ids()
-    }
-
-    fn read(&self, index: &PgRelation, index_pointer: ItemPointer) -> ReadableNode {
-        unsafe { Node::read(index, &index_pointer) }
     }
 
     fn get_neighbors(
@@ -79,8 +104,8 @@ impl Graph for BuilderGraph {
         }
     }
 
-    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
-        &self.meta_page
+    fn is_empty(&self) -> bool {
+        self.neighbor_map.len() == 0
     }
 
     fn set_neighbors(
@@ -97,8 +122,8 @@ impl Graph for BuilderGraph {
         self.neighbor_map.insert(neighbors_of, new_neighbors);
     }
 
-    fn is_empty(&self) -> bool {
-        self.neighbor_map.len() == 0
+    fn get_meta_page(&self, _index: &PgRelation) -> &TsvMetaPage {
+        &self.meta_page
     }
 }
 

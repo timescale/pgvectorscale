@@ -14,6 +14,8 @@ pub struct TSVIndexOptions {
     pub num_neighbors: u32,
     pub search_list_size: u32,
     pub max_alpha: f64,
+    pub use_pq: bool,
+    pub pq_vector_length: usize,
 }
 
 impl TSVIndexOptions {
@@ -26,6 +28,8 @@ impl TSVIndexOptions {
             ops.num_neighbors = 50;
             ops.search_list_size = 65;
             ops.max_alpha = 1.0;
+            ops.use_pq = false;
+            ops.pq_vector_length = 64;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -39,7 +43,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 3;
+const NUM_REL_OPTS: usize = 5;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
@@ -64,6 +68,16 @@ pub unsafe extern "C" fn amoptions(
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "use_pq".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
+            offset: offset_of!(TSVIndexOptions, use_pq) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "pq_vector_length".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            offset: offset_of!(TSVIndexOptions, pq_vector_length) as i32,
         },
     ];
 
@@ -123,6 +137,22 @@ pub unsafe fn init() {
         5.0,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
+    pg_sys::add_bool_reloption(
+        RELOPT_KIND_TSV,
+        "use_pq".as_pg_cstr(),
+        "Enable product quantization".as_pg_cstr(),
+        false,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+    pg_sys::add_int_reloption(
+        RELOPT_KIND_TSV,
+        "pq_vector_length".as_pg_cstr(),
+        "Length of the quantized vector representation".as_pg_cstr(),
+        64,
+        8,
+        256,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -165,6 +195,8 @@ mod tests {
         assert_eq!(options.num_neighbors, 50);
         assert_eq!(options.search_list_size, 65);
         assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.use_pq, false);
+        assert_eq!(options.pq_vector_length, 64);
         Ok(())
     }
 }
