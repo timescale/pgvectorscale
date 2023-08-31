@@ -314,9 +314,7 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    let pq = match state.pq_trainer {
-        Some(pqt) => Some(pqt.train_pq()),
-        None => None,
+    let pq = state.pq_trainer.map(|pq| pq.train_pq())
     };
 
     let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
