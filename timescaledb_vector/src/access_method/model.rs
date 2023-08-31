@@ -99,7 +99,7 @@ impl Node {
     ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
         let num_pq = if meta_page.get_use_pq() {
-            meta_page.get_num_clusters()
+            meta_page.get_pq_vector_length()
         } else {
             0
         };
@@ -396,7 +396,7 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
 
     // get numbers that can fit in a page by subtracting the item pointer.
     let block_fit = (BLCKSZ as usize / size_of::<f32>()) - size_of::<ItemPointer>() - 64;
-
+    let mut tape = Tape::new((*index).as_ptr(), PageType::PqQuantizerVector);
     loop {
         let l = prev_vec.len();
         if l == 0 {
@@ -411,7 +411,6 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
             vec: a.to_vec(),
             next_vector_pointer: prev,
         };
-        let mut tape = Tape::new((*index).as_ptr(), PageType::PqQuantizerVector);
         let index_pointer: IndexPointer = pqv_node.write(&mut tape);
         prev = index_pointer;
         prev_vec = b.clone().to_vec();

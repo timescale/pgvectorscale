@@ -38,7 +38,7 @@ pub struct TsvMetaPage {
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
-    pq_num_clusters: usize,
+    pq_vector_length: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
 }
@@ -56,8 +56,8 @@ impl TsvMetaPage {
         self.num_neighbors
     }
 
-    pub fn get_num_clusters(&self) -> usize {
-        self.num_clusters
+    pub fn get_pq_vector_length(&self) -> usize {
+        self.pq_vector_length
     }
 
     pub fn get_search_list_size_for_build(&self) -> u32 {
@@ -154,7 +154,7 @@ unsafe fn write_meta_page(
     (*meta).search_list_size = (*opt).search_list_size;
     (*meta).max_alpha = (*opt).max_alpha;
     (*meta).use_pq = (*opt).use_pq;
-    (*meta).num_clusters = (*opt).num_clusters;
+    (*meta).pq_vector_length = (*opt).pq_vector_length;
     (*meta).pq_block_number = 0;
     (*meta).pq_block_offset = 0;
     (*meta).init_ids_block_number = 0;
@@ -212,22 +212,22 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, use_pq={}, num_clusters={}",
+        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, use_pq={}, pq_vector_length={}",
         opt.num_neighbors,
         opt.search_list_size,
         opt.max_alpha,
         opt.use_pq,
-        opt.num_clusters
+        opt.pq_vector_length
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
     // PQ is only applicable to high dimension vectors.
     if opt.use_pq {
-        if dimensions < opt.num_clusters as i32 {
-            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", opt.num_clusters, dimensions)
+        if dimensions < opt.pq_vector_length as i32 {
+            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", opt.pq_vector_length, dimensions)
         };
-        if dimensions % opt.num_clusters as i32 != 0 {
-            error!("use_pq can only be applied to vectors where the number of dimensions {} is divisible by the number of clusters {} ", dimensions, opt.num_clusters)
+        if dimensions % opt.pq_vector_length as i32 != 0 {
+            error!("use_pq can only be applied to vectors where the number of dimensions {} is divisible by the pq_vector_length {} ", dimensions, opt.pq_vector_length)
         };
     }
     assert!(dimensions > 0 && dimensions < 2000);
@@ -314,10 +314,9 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    let pq = state.pq_trainer.map(|pq| pq.train_pq())
-    };
+    let pq = state.pq_trainer.map(|pq| pq.train_pq());
 
-    let write_stats = unsafe { state.node_builder.write(index_relation, pq.clone()) };
+    let write_stats = unsafe { state.node_builder.write(index_relation, &pq) };
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
@@ -452,7 +451,7 @@ mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, num_clusters = 64);
+            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, pq_vector_length = 64);
 
             ;
 

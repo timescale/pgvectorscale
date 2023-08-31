@@ -15,7 +15,7 @@ pub struct TSVIndexOptions {
     pub search_list_size: u32,
     pub max_alpha: f64,
     pub use_pq: bool,
-    pub num_clusters: usize,
+    pub pq_vector_length: usize,
 }
 
 impl TSVIndexOptions {
@@ -29,7 +29,7 @@ impl TSVIndexOptions {
             ops.search_list_size = 65;
             ops.max_alpha = 1.0;
             ops.use_pq = false;
-            ops.num_clusters = 64;
+            ops.pq_vector_length = 64;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -75,9 +75,9 @@ pub unsafe extern "C" fn amoptions(
             offset: offset_of!(TSVIndexOptions, use_pq) as i32,
         },
         pg_sys::relopt_parse_elt {
-            optname: "num_clusters".as_pg_cstr(),
+            optname: "pq_vector_length".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, num_clusters) as i32,
+            offset: offset_of!(TSVIndexOptions, pq_vector_length) as i32,
         },
     ];
 
@@ -146,8 +146,8 @@ pub unsafe fn init() {
     );
     pg_sys::add_int_reloption(
         RELOPT_KIND_TSV,
-        "num_clusters".as_pg_cstr(),
-        "Number of kmeans clusters to train Product Quantization on".as_pg_cstr(),
+        "pq_vector_length".as_pg_cstr(),
+        "Length of the quantized vector representation".as_pg_cstr(),
         64,
         8,
         256,
@@ -196,7 +196,7 @@ mod tests {
         assert_eq!(options.search_list_size, 65);
         assert_eq!(options.max_alpha, 1.0);
         assert_eq!(options.use_pq, false);
-        assert_eq!(options.num_clusters, 64);
+        assert_eq!(options.pq_vector_length, 64);
         Ok(())
     }
 }

@@ -32,9 +32,9 @@ pub struct PqTrainer {
     /// considered_samples is the number of samples we considered for the training set.
     /// It is useful for reservoir sampling as we add samples.
     considered_samples: usize,
-    /// num_clusters is the number of kmeans clusters we want to partition the vectors into.
+    /// num_subquantizers is the number of independent kmeans we want to partition the vectors into.
     /// the more we have the more accurate the PQ, but the more space we use in memory.
-    num_clusters: usize,
+    num_subquantizers: usize,
     // rng is the random number generator for reservoir sampling
     //rng: ThreadRng,
 }
@@ -43,7 +43,7 @@ impl PqTrainer {
     pub fn new(meta_page: &super::build::TsvMetaPage) -> PqTrainer {
         PqTrainer {
             training_set: Vec::with_capacity(NUM_TRAINING_SET_SIZE),
-            num_clusters: meta_page.get_num_clusters(),
+            num_subquantizers: meta_page.get_pq_vector_length(),
             considered_samples: 0,
         }
     }
@@ -81,7 +81,7 @@ impl PqTrainer {
         let shape = (self.training_set.len(), self.training_set[0].len());
         let instances = Array2::<f32>::from_shape_vec(shape, training_set).unwrap();
         Pq::train_pq(
-            self.num_clusters,
+            self.num_subquantizers,
             NUM_SUBQUANTIZER_BITS,
             PQ_TRAINING_ITERATIONS,
             NUM_TRAINING_ATTEMPTS,

@@ -33,7 +33,7 @@ impl BuilderGraph {
     unsafe fn get_pq_vector(
         index: &PgRelation,
         index_pointer: &ItemPointer,
-        pq: Pq<f32>,
+        pq: &Pq<f32>,
     ) -> Vec<u8> {
         let node = Node::read(index, index_pointer);
         // todo: deal with clone
@@ -42,7 +42,7 @@ impl BuilderGraph {
         pq.quantize_vector(og_vec).to_vec()
     }
 
-    pub unsafe fn write(&self, index: &PgRelation, pq: Option<Pq<f32>>) -> WriteStats {
+    pub unsafe fn write(&self, index: &PgRelation, pq: &Option<Pq<f32>>) -> WriteStats {
         let mut stats = WriteStats::new();
 
         //TODO: OPT: do this in order of item pointers
@@ -60,14 +60,9 @@ impl BuilderGraph {
             };
             stats.num_neighbors += neighbors.len();
 
-            let pqv = if self.meta_page.get_use_pq() {
-                Some(BuilderGraph::get_pq_vector(
-                    index,
-                    index_pointer,
-                    pq.clone().unwrap(),
-                ))
-            } else {
-                None
+            let pqv = match pq {
+                Some(pq) => Some(BuilderGraph::get_pq_vector(index, index_pointer, pq)),
+                None => None,
             };
             Node::update_neighbors_and_pq(
                 index,
