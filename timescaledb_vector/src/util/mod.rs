@@ -13,7 +13,7 @@ use self::{
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
 #[archive(check_bytes)]
-#[repr(C)]
+#[repr(C)] // Added this so we can compute size via sizeof
 pub struct ItemPointer {
     pub block_number: pgrx::pg_sys::BlockNumber,
     pub offset: pgrx::pg_sys::OffsetNumber,
