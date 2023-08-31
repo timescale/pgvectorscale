@@ -1,5 +1,5 @@
 use ndarray::{Array1, Array2};
-use pgrx::{notice, PgRelation};
+use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
@@ -69,6 +69,9 @@ impl PqTrainer {
             "Training Product Quantization with {} vectors",
             self.training_set.len()
         );
+        if (self.training_set.len() as i32) < (2_i32.pow(NUM_SUBQUANTIZER_BITS)) {
+            error!("training set is too small, please run with use_pq as false.")
+        }
         let training_set = self
             .training_set
             .iter()

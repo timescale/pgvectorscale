@@ -275,11 +275,14 @@ pub unsafe extern "C" fn aminsert(
 
     let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
 
+    // Populate the PQ version of the vector if it exists.
     let pq = PgPq::new(&meta_page, &index_relation);
-    let _ = pq.is_some_and(|pq| {
-        node.pq_vector = pq.quantize(vector.to_vec());
-        true
-    });
+    match pq {
+        None => {}
+        Some(pq) => {
+            node.pq_vector = pq.quantize(vector.to_vec());
+        }
+    }
 
     let mut tape = unsafe { Tape::new((*index_relation).as_ptr(), page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);
@@ -389,11 +392,14 @@ unsafe fn build_callback_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(ctid);
 
-    let pqt = state.pq_trainer.as_mut();
-    let _ = pqt.is_some_and(|pqt| {
-        pqt.add_sample(vector.to_vec());
-        true
-    });
+    match &state.pq_trainer {
+        Some(_) => {
+            let pqt = state.pq_trainer.as_mut();
+            pqt.expect("error adding sample")
+                .add_sample(vector.to_vec())
+        }
+        None => {}
+    }
 
     let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
@@ -424,6 +430,25 @@ mod tests {
             select * from test order by embedding <=> '[0,0,0]';
             explain analyze select * from test order by embedding <=> '[0,0,0]';
             drop index idxtest;
+            ",
+        ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_pq_index_creation() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_pq(embedding vector(1536));
+
+            INSERT INTO test_pq(embedding) select * from (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 * 300) i group by i % 300) g;
+
+            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors =64,  search_list_size=125, max_alpha=1.0, use_pq=true, num_clusters=64);;
+
+            set enable_seqscan =0;
+            select * from test_pq order by embedding <=> (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 ));
+            explain analyze select * from test_pq order by embedding <=> (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 ));
+;
+            drop index idx_tsv_pq;
             ",
         ))?;
         Ok(())
