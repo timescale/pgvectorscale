@@ -89,7 +89,7 @@ impl TsvMetaPage {
             return None;
         }
 
-        let ptr = HeapPointer::new(self.pq_block_number, self.pq_block_offset);
+        let ptr = IndexPointer::new(self.pq_block_number, self.pq_block_offset);
         Some(ptr)
     }
 }
