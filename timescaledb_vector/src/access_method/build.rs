@@ -38,7 +38,7 @@ pub struct TsvMetaPage {
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
-    num_clusters: usize,
+    pq_num_clusters: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
 }
