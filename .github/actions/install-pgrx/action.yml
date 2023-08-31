@@ -34,6 +34,7 @@ runs:
       # rustup show active-toolchain installs the toolchain specified via rust-toolchain.yaml if it is not installed
       run: |
         cd timescaledb_vector
+        which rustup
         RUST_VERSION=`rustup show active-toolchain -v | grep rustc | cut -d' ' -f2`
         NEW_RUST_COMPILER=`rustup toolchain list | grep $RUST_VERSION | cut -d'(' -f1`
         rustup default $NEW_RUST_COMPILER
