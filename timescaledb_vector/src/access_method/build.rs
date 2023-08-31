@@ -438,17 +438,50 @@ mod tests {
     #[pg_test]
     unsafe fn test_pq_index_creation() -> spi::Result<()> {
         Spi::run(&format!(
-            "CREATE TABLE test_pq(embedding vector(1536));
+            "CREATE TABLE test_pq (
+                embedding vector (1536)
+            );
 
-            INSERT INTO test_pq(embedding) select * from (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 * 300) i group by i % 300) g;
+           -- generate 300 vectors
+            INSERT INTO test_pq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 300) i
+                GROUP BY
+                    i % 300) g;
 
-            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors =64,  search_list_size=125, max_alpha=1.0, use_pq=true, num_clusters=64);;
+            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, num_clusters = 64);
 
-            set enable_seqscan =0;
-            select * from test_pq order by embedding <=> (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 ));
-            explain analyze select * from test_pq order by embedding <=> (select ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector as embedding from generate_series(1, 1536 ));
-;
-            drop index idx_tsv_pq;
+            ;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_pq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            EXPLAIN ANALYZE
+            SELECT
+                *
+            FROM
+                test_pq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            DROP INDEX idx_tsv_pq;
             ",
         ))?;
         Ok(())
