@@ -12,6 +12,8 @@ pub mod options;
 mod scan;
 mod vacuum;
 
+extern crate blas_src;
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
 mod pq;
