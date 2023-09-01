@@ -40,7 +40,7 @@ Source: timescaledb-vector
 Maintainer: $maintainer
 Homepage: https://github.com/timescale/timescaledb-vector
 Rules-Requires-Root: no
-Section: Timescale Vector
+Section: vector
 Priority: extra
 Build-Depends: debhelper-compat (= $DEBHELPER_COMPAT)
 EOF
