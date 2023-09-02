@@ -17,12 +17,15 @@ pgrx = "=0.9.8"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0"}
 reductive = { version = "0.9.0"}
-ndarray = { version = "0.15", features = [ "approx"] }
+ndarray = { version = "0.15.0", features = ["blas"] }
+blas-src = { version = "0.8", features = ["openblas"] }
+openblas-src = { version = "0.10", features = ["cblas", "system"] }
 rand = { version = "0.8", features = [ "small_rng" ] }
 rand_chacha = "0.3"
 rand_core = "0.6"
 rand_xorshift = "0.3"
 rayon = "1"
+
 
 [dev-dependencies]
 pgrx-tests = "=0.9.8"
