@@ -26,7 +26,8 @@ RUN apt-get install -y \
     equivs \
     git \
     libkrb5-dev \
-    libblas-dev \
+    libopenblas-dev \
+    libopenblas-base \
     libperl-dev \
     make \
     cmake
