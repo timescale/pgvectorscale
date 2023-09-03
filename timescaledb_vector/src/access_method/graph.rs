@@ -15,7 +15,7 @@ use super::{
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn distance(a: &[f32], b: &[f32]) -> f32 {
-    distance::cosine(a, b)
+    distance::l2_dist(a, b)
 }
 
 //TODO: use slow L2 for now. Make pluggable and simd
