@@ -363,7 +363,7 @@ impl<'a> ReadablePqVectorNode<'a> {
 pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
     let rpq = PqQuantizerDef::read(index, &index_pointer);
     let rpn = rpq.get_archived_node();
-    let mut result: Vec<f32> = Vec::new();
+    let mut result: Vec<f32> = Vec::with_capacity(rpn.vec_len as usize);
     let mut next = rpn.next_vector_pointer.deserialize_item_pointer();
     loop {
         if next.offset == 0 && next.block_number == 0 {

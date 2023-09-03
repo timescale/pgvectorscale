@@ -1,6 +1,9 @@
+use ndarray::Array1;
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
+use crate::access_method::distance;
+
 
 use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -12,22 +15,28 @@ use super::{
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn distance(a: &[f32], b: &[f32]) -> f32 {
-    super::distance_x86::distance_opt_runtime_select(a, b)
+    distance::cosine(a, b)
 }
 
 //TODO: use slow L2 for now. Make pluggable and simd
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-fn distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
+// #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+// fn distance(a: &[f32], b: &[f32]) -> f32 {
+//     assert_eq!(a.len(), b.len());
+//
+//     let norm: f32 = a
+//         .iter()
+//         .zip(b.iter())
+//         .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+//         .sum();
+//     assert!(norm >= 0.);
+//     norm.sqrt()
+// }
 
-    let norm: f32 = a
-        .iter()
-        .zip(b.iter())
-        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
-        .sum();
-    assert!(norm >= 0.);
-    norm.sqrt()
+#[cfg(any(target_arch = "aarch64"))]
+fn distance(a: &[f32], b: &[f32]) -> f32 {
+    distance::l2_dist(a, b)
 }
+
 
 struct ListSearchNeighbor {
     index_pointer: IndexPointer,

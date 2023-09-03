@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Axis};
 use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
@@ -138,14 +138,14 @@ fn build_distance_table(
 ) -> Vec<Vec<f32>> {
     let sq = pq.subquantizers();
     let mut distance_table: Vec<Vec<f32>> = Vec::new();
-    let clusters: Vec<_> = sq.outer_iter().collect();
+    let clusters: Vec<_> = sq.axis_iter(Axis(0)).collect();
     let ds = query.len() / clusters.len();
     for m in 0..clusters.len() {
         let mut res: Vec<f32> = Vec::new();
         let sl = &query[m * ds..(m + 1) * ds];
         for i in 0..clusters[m].nrows() {
-            let c = clusters[m].row(i).to_vec();
-            let p = distance_fn(sl, c.as_slice());
+            let c = clusters[m].row(i);
+            let p = distance_fn(sl, c.to_slice().unwrap());
             res.push(p);
         }
         distance_table.push(res);
