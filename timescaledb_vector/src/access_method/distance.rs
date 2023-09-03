@@ -1,5 +1,5 @@
-use crate::access_method::distance::aarch64::neon::norm_l2;
-use std::ops::{Mul, Sub};
+
+use std::ops::{Div, Mul, Sub};
 
 #[inline]
 pub fn dot(from: &[f32], to: &[f32]) -> f32 {
@@ -14,6 +14,16 @@ pub fn dot(from: &[f32], to: &[f32]) -> f32 {
         .zip(to.iter())
         .map(|(a, b)| (a.sub(*b).powi(2)))
         .sum::<f32>()
+}
+
+/// Fallback non-SIMD implementation
+#[allow(dead_code)] // Does not fallback on aarch64.
+#[inline]
+fn cosine_scalar(x: &[f32], x_norm: f32, y: &[f32]) -> f32 {
+    let y_sq = dot(y, y);
+    let xy = dot(x, y);
+    // 1 - xy / (sqrt(x_sq) * sqrt(y_sq))
+    f32::one().sub(xy.div(x_norm.mul(y_sq.sqrt())))
 }
 
 #[inline]
@@ -43,14 +53,26 @@ pub fn l2_dist(from: &[f32], to: &[f32]) -> f32 {
 
 #[inline]
 pub fn cosine(from: &[f32], to: &[f32]) -> f32 {
-    let x_norm = norm_l2(from);
-    cosine_fast(x_norm, from, to)
+    #[cfg(target_arch = "aarch64")] {
+        use crate::access_method::distance::aarch64::neon::norm_l2;
+        let x_norm = norm_l2(from);
+        cosine_fast(x_norm, from, to)
+    }
+
+
+    #[cfg(target_arch = "x86_64")] {
+        use crate::access_method::distance::x86_64::avx::norm_l2_f32;
+        let x_norm = norm_l2(from);
+        cosine_fast(x_norm, from, to)
+    }
+
 }
 
 #[inline]
 fn cosine_fast(x_norm: f32, from: &[f32], other: &[f32]) -> f32 {
     #[cfg(target_arch = "aarch64")]
     {
+        use crate::access_method::distance::aarch64::neon::norm_l2;
         aarch64::neon::cosine_f32(from, other, x_norm)
     }
 
@@ -92,8 +114,6 @@ mod x86_64 {
         #[inline]
         pub fn cosine_f32(x_vector: &[f32], y_vector: &[f32], x_norm: f32) -> f32 {
             unsafe {
-                use crate::linalg::x86_64::avx::add_f32_register;
-
                 let len = x_vector.len() / 8 * 8;
                 let mut xy = _mm256_setzero_ps();
                 let mut y_sq = _mm256_setzero_ps();
