@@ -108,6 +108,20 @@ mod x86_64 {
             _mm256_storeu_ps(results.as_mut_ptr(), sums);
             results[0]
         }
+
+        pub fn norm_l2_f32(vector: &[f32]) -> f32 {
+            let len = vector.len() / 8 * 8;
+            let mut sum = unsafe {
+                let mut sums = _mm256_setzero_ps();
+                vector.chunks_exact(8).for_each(|chunk| {
+                    let x = _mm256_loadu_ps(chunk.as_ptr());
+                    sums = _mm256_fmadd_ps(x, x, sums);
+                });
+                add_f32_register(sums)
+            };
+            sum += vector[len..].iter().map(|v| v * v).sum::<f32>();
+            sum.sqrt()
+        }
         #[inline]
         pub fn cosine_f32(x_vector: &[f32], y_vector: &[f32], x_norm: f32) -> f32 {
             unsafe {
@@ -122,9 +136,9 @@ mod x86_64 {
                 }
                 // handle remaining elements
                 let mut dotprod = add_f32_register(xy);
-                dotprod += dot(&x_vector[len..], &y_vector[len..]);
+                dotprod += dot_f32(&x_vector[len..], &y_vector[len..]);
                 let mut y_sq_sum = add_f32_register(y_sq);
-                y_sq_sum += norm_l2(&y_vector[len..]).powi(2);
+                y_sq_sum += norm_l2_f32(&y_vector[len..]).powi(2);
                 1.0 - dotprod / (x_norm * y_sq_sum.sqrt())
             }
         }
@@ -177,19 +191,6 @@ mod x86_64 {
                 .map(|(a, b)| a * b)
                 .sum::<f32>();
             sum
-        }
-        pub fn norm_l2_f32(vector: &[f32]) -> f32 {
-            let len = vector.len() / 8 * 8;
-            let mut sum = unsafe {
-                let mut sums = _mm256_setzero_ps();
-                vector.chunks_exact(8).for_each(|chunk| {
-                    let x = _mm256_loadu_ps(chunk.as_ptr());
-                    sums = _mm256_fmadd_ps(x, x, sums);
-                });
-                add_f32_register(sums)
-            };
-            sum += vector[len..].iter().map(|v| v * v).sum::<f32>();
-            sum.sqrt()
         }
     }
 }
