@@ -35,9 +35,8 @@ impl BuilderGraph {
         index_pointer: ItemPointer,
         pq: &Pq<f32>,
     ) -> Vec<u8> {
-        let node = Node::read(index, index_pointer);
         // todo: deal with clone
-        let copy: Vec<f32> = node.get_archived_node().vector.iter().map(|f| *f).collect();
+        let copy: Vec<f32> =Node::raw_vector(index, index_pointer);
         let og_vec = Array1::from(copy);
         pq.quantize_vector(og_vec).to_vec()
     }

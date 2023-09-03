@@ -28,7 +28,7 @@ unsafe fn print_graph_from_disk_visitor(
 ) {
     let data_node = Node::read(&index, index_pointer);
     let node = data_node.get_archived_node();
-    let v = node.vector.as_slice();
+    let v = Node::raw_vector(index, index_pointer);
     let copy: Vec<f32> = v.iter().map(|f| *f).collect();
     let name = format!("node {:?}", &copy);
 

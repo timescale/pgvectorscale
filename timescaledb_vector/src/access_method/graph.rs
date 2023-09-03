@@ -1,8 +1,9 @@
 use ndarray::Array1;
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::PgRelation;
+use pgrx::{info, PgRelation};
 use crate::access_method::distance;
+use crate::access_method::model::Node;
 
 
 use crate::access_method::pq::{DistanceCalculator, PgPq};
@@ -141,9 +142,9 @@ impl ListSearchResult {
                 self.stats.pq_distance_comparisons += 1;
                 dc.distance(node.pq_vector.as_slice())
             }
-            None => {
-                let vec = node.vector.as_slice();
-                distance(vec, query)
+            None => unsafe {
+                let vec = Node::raw_vector(index, index_pointer);
+                distance(vec.as_slice(), query)
             }
         };
 
@@ -388,15 +389,12 @@ pub trait Graph {
                 max_factors[i] = f64::MAX;
                 results.push(neighbor.clone());
 
-                //we've now added this to the results so it's going to be a neighbor
-                //rename for clarity.
-                let existing_neighbor = neighbor;
 
                 //TODO make lazy
-                let data_node = self.read(index, existing_neighbor.get_index_pointer_to_neighbor());
                 stats.node_reads += 1;
-                let existing_neighbor_node = data_node.get_archived_node();
-                let existing_neighbor_vec = existing_neighbor_node.vector.as_slice();
+
+                let vec = unsafe{ Node::raw_vector(index,  neighbor.get_index_pointer_to_neighbor())};
+                let existing_neighbor_vec = vec.as_slice();
 
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
@@ -405,11 +403,9 @@ pub trait Graph {
                         continue;
                     }
 
-                    let data_node =
-                        self.read(index, candidate_neighbor.get_index_pointer_to_neighbor());
                     stats.node_reads += 1;
-                    let candidate_node = data_node.get_archived_node();
-                    let candidate_vec = candidate_node.vector.as_slice();
+                    let cv  = unsafe {Node::raw_vector(index, candidate_neighbor.get_index_pointer_to_neighbor())};
+                    let candidate_vec = cv.as_slice();
                     let distance_between_candidate_and_existing_neighbor =
                         distance(existing_neighbor_vec, candidate_vec);
                     stats.distance_comparisons += 1;

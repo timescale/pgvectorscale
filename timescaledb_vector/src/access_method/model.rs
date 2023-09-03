@@ -5,6 +5,7 @@ use std::pin::Pin;
 use ndarray::Array3;
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ};
 use pgrx::*;
+use rayon::result;
 use reductive::pq::Pq;
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Archived, Deserialize, Serialize};
@@ -57,11 +58,11 @@ impl PgVector {
 #[derive(Archive, Deserialize, Serialize)]
 #[archive(check_bytes)]
 pub struct Node {
-    pub vector: Vec<f32>,
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
     neighbor_distances: Vec<Distance>,
     pub heap_item_pointer: HeapPointer,
+    vector_pointer: ItemPointer
 }
 
 //ReadableNode ties an archive node to it's underlying buffer
@@ -94,15 +95,20 @@ impl<'a> WritableNode<'a> {
 }
 
 impl Node {
-    pub fn new(vector: Vec<f32>, heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
+    pub fn new(vector: Vec<f32>, index: &PgRelation, heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
         let num_pq = if meta_page.get_use_pq() {
             meta_page.get_pq_vector_length()
         } else {
             0
         };
+
+        let vector_pointer =  unsafe {
+              write_vector(index, vector)
+        };
+
         Self {
-            vector,
+            vector_pointer,
             // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
             pq_vector: (0..num_pq).map(|_| 0u8).collect(),
             // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
@@ -120,6 +126,13 @@ impl Node {
     pub unsafe fn modify(index: &PgRelation, index_pointer: ItemPointer) -> WritableNode {
         let wb = index_pointer.modify_bytes(index);
         WritableNode { wb: wb }
+    }
+
+    pub unsafe fn raw_vector(index: &PgRelation, index_pointer: ItemPointer) -> Vec<f32> {
+        let node = Node::read(index, index_pointer);
+        let archived = node.get_archived_node();
+        let vp = archived.vector_pointer.deserialize_item_pointer();
+        read_vector(index, vp)
     }
 
     pub unsafe fn update_neighbors_and_pq(
@@ -327,12 +340,12 @@ impl<'a> ReadablePqQuantizerDef<'a> {
 #[derive(Archive, Deserialize, Serialize)]
 #[archive(check_bytes)]
 #[repr(C)]
-pub struct PqQuantizerVector {
+pub struct RawVector {
     vec: Vec<f32>,
     next_vector_pointer: ItemPointer,
 }
 
-impl PqQuantizerVector {
+impl RawVector {
     pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
         let bytes = rkyv::to_bytes::<_, 8192>(self).unwrap();
         tape.write(&bytes)
@@ -340,41 +353,31 @@ impl PqQuantizerVector {
     pub unsafe fn read<'a>(
         index: &'a PgRelation,
         index_pointer: &ItemPointer,
-    ) -> ReadablePqVectorNode<'a> {
+    ) -> RawVectorNode<'a> {
         let rb = index_pointer.read_bytes(index);
-        ReadablePqVectorNode { _rb: rb }
+        RawVectorNode { _rb: rb }
     }
 }
 
 //ReadablePqNode ties an archive node to it's underlying buffer
-pub struct ReadablePqVectorNode<'a> {
+pub struct RawVectorNode<'a> {
     _rb: ReadableBuffer<'a>,
 }
 
-impl<'a> ReadablePqVectorNode<'a> {
-    pub fn get_archived_node(&self) -> &ArchivedPqQuantizerVector {
+impl<'a> RawVectorNode<'a> {
+    pub fn get_archived_node(&self) -> &ArchivedRawVector {
         // checking the code here is expensive during build, so skip it.
         // TODO: should we check the data during queries?
         //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
-        unsafe { rkyv::archived_root::<PqQuantizerVector>(self._rb.get_data_slice()) }
+        unsafe { rkyv::archived_root::<RawVector>(self._rb.get_data_slice()) }
     }
 }
 
 pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
     let rpq = PqQuantizerDef::read(index, &index_pointer);
     let rpn = rpq.get_archived_node();
-    let mut result: Vec<f32> = Vec::with_capacity(rpn.vec_len as usize);
-    let mut next = rpn.next_vector_pointer.deserialize_item_pointer();
-    loop {
-        if next.offset == 0 && next.block_number == 0 {
-            break;
-        }
-        let qvn = PqQuantizerVector::read(index, &next);
-        let vn = qvn.get_archived_node();
-        let vs = vn.vec.as_slice();
-        result.extend_from_slice(vs);
-        next = vn.next_vector_pointer.deserialize_item_pointer();
-    }
+    let ip = rpn.next_vector_pointer.deserialize_item_pointer();
+    let result = read_vector(index, ip);
     let sq = Array3::from_shape_vec(
         (rpn.dim_0 as usize, rpn.dim_1 as usize, rpn.dim_2 as usize),
         result,
@@ -383,15 +386,22 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
     Pq::new(None, sq)
 }
 
-pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
-    let vec = pq.subquantizers().to_slice_memory_order().unwrap().to_vec();
-    let shape = pq.subquantizers().dim();
-    let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());
+unsafe fn read_vector(index: &PgRelation, vec_pointer: ItemPointer) -> Vec<f32> {
+    let mut result: Vec<f32> = Vec::new();
+    let mut next = vec_pointer;
+    loop {
+        if next.offset == 0 && next.block_number == 0 {
+            return result;
+        }
+        let qvn = RawVector::read(index, &next);
+        let vn = qvn.get_archived_node();
+        let vs = vn.vec.as_slice();
+        result.extend_from_slice(vs);
+        next = vn.next_vector_pointer.deserialize_item_pointer();
+    }
+}
 
-    let mut pqt = Tape::new(index, PageType::PqQuantizerDef);
-
-    // write out the large vector bits.
-    // we write "from the back"
+unsafe fn write_vector(index: &PgRelation, vec: Vec<f32>) -> ItemPointer {
     let mut prev: IndexPointer = ItemPointer {
         block_number: 0,
         offset: 0,
@@ -404,14 +414,13 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
     loop {
         let l = prev_vec.len();
         if l == 0 {
-            pq_node.next_vector_pointer = prev;
-            return pq_node.write(&mut pqt);
+            return prev
         }
         let lv = prev_vec;
         let ni = if l > block_fit { l - block_fit } else { 0 };
         let (b, a) = lv.split_at(ni);
 
-        let pqv_node = PqQuantizerVector {
+        let pqv_node = RawVector {
             vec: a.to_vec(),
             next_vector_pointer: prev,
         };
@@ -419,4 +428,13 @@ pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
         prev = index_pointer;
         prev_vec = b.clone().to_vec();
     }
+}
+
+pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
+    let vec = pq.subquantizers().to_slice_memory_order().unwrap().to_vec();
+    let shape = pq.subquantizers().dim();
+    let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());
+    let mut pqt = Tape::new(index, PageType::PqQuantizerDef);
+    pq_node.next_vector_pointer =  write_vector(index, vec);
+    pq_node.write(&mut pqt)
 }

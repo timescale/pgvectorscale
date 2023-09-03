@@ -122,7 +122,7 @@ pub unsafe extern "C" fn aminsert(
     let mut graph = DiskIndexGraph::new(&index_relation);
     let meta_page = MetaPage::read(&index_relation);
 
-    let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
+    let mut node = model::Node::new(vector.to_vec(), &index_relation, heap_pointer, &meta_page);
 
     // Populate the PQ version of the vector if it exists.
     let pq = PgPq::new(&meta_page, &index_relation);
@@ -250,7 +250,7 @@ fn build_callback_internal(
         None => {}
     }
 
-    let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
+    let node = model::Node::new(vector.to_vec(), &index, heap_pointer, &state.meta_page);
     let index_pointer: IndexPointer = node.write(&mut state.tape);
     let new_stats = state.node_builder.insert(&index, index_pointer, vector);
     state.stats.combine(new_stats);
