@@ -19,11 +19,11 @@ pub fn dot(from: &[f32], to: &[f32]) -> f32 {
 /// Fallback non-SIMD implementation
 #[allow(dead_code)] // Does not fallback on aarch64.
 #[inline]
-fn cosine_scalar(x: &[f32], x_norm: f32, y: &[f32]) -> f32 {
+fn cosine_scalar(x: &[f32], y: &[f32], x_norm: f32) -> f32 {
     let y_sq = dot(y, y);
     let xy = dot(x, y);
     // 1 - xy / (sqrt(x_sq) * sqrt(y_sq))
-    f32::one().sub(xy.div(x_norm.mul(y_sq.sqrt())))
+    1f32.sub(xy.div(x_norm.mul(y_sq.sqrt())))
 }
 
 #[inline]
@@ -62,7 +62,7 @@ pub fn cosine(from: &[f32], to: &[f32]) -> f32 {
 
     #[cfg(target_arch = "x86_64")] {
         use crate::access_method::distance::x86_64::avx::norm_l2_f32;
-        let x_norm = norm_l2(from);
+        let x_norm = norm_l2_f32(from);
         cosine_fast(x_norm, from, to)
     }
 
@@ -90,12 +90,9 @@ fn cosine_fast(x_norm: f32, from: &[f32], other: &[f32]) -> f32 {
 #[cfg(target_arch = "x86_64")]
 mod x86_64 {
     use std::arch::x86_64::*;
-
-    use super::dot;
-    use super::norm_l2;
-
     pub mod avx {
         use super::*;
+        use crate::access_method::distance::l2_scalar;
         #[inline]
         pub unsafe fn add_f32_register(x: std::arch::x86_64::__m256) -> f32 {
             use std::arch::x86_64::*;
