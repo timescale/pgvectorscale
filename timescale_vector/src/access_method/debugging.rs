@@ -34,7 +34,7 @@ unsafe fn print_graph_from_disk_visitor(
 
     map.insert(index_pointer, copy);
 
-    node.apply_to_neighbors(|_dist, neighbor_pointer| {
+    node.apply_to_neighbors(|neighbor_pointer| {
         let p = neighbor_pointer.deserialize_item_pointer();
         if !map.contains_key(&p) {
             print_graph_from_disk_visitor(index, p, map, sb, level + 1);
@@ -42,12 +42,12 @@ unsafe fn print_graph_from_disk_visitor(
     });
     sb.push_str(&name);
     sb.push_str("\n");
-    node.apply_to_neighbors(|dist, neighbor_pointer| {
+    node.apply_to_neighbors(|neighbor_pointer| {
         let ip: ItemPointer = (neighbor_pointer)
             .deserialize(&mut rkyv::Infallible)
             .unwrap();
         let neighbor = map.get(&ip).unwrap();
-        sb.push_str(&format!("->{:?} dist({})\n", neighbor, dist))
+        sb.push_str(&format!("->{:?}\n", neighbor))
     });
     sb.push_str("\n")
 }

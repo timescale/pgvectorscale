@@ -63,6 +63,7 @@ pub struct VectorProvider<'a> {
     calc_distance_with_pq: bool,
     heap_rel: Option<&'a PgRelation>,
     heap_attr_number: Option<pg_sys::AttrNumber>,
+    distance_fn: fn(&[f32], &[f32]) -> f32,
 }
 
 impl<'a> VectorProvider<'a> {
@@ -77,6 +78,7 @@ impl<'a> VectorProvider<'a> {
             calc_distance_with_pq,
             heap_rel,
             heap_attr_number,
+            distance_fn: distance,
         }
     }
 
@@ -161,16 +163,13 @@ impl<'a> VectorProvider<'a> {
         }
     }
 
-    unsafe fn get_distance_pair_for_full_vectors<F>(
+    pub unsafe fn get_distance_pair_for_full_vectors(
         &self,
         index: &PgRelation,
         index_pointer1: IndexPointer,
         index_pointer2: IndexPointer,
-        distancefn: F,
     ) -> f32
-    where
-        F: Fn(&[f32], &[f32]) -> f32,
-    {
+where {
         assert!(!self.calc_distance_with_pq);
 
         if self.pq_enabled {
@@ -180,7 +179,7 @@ impl<'a> VectorProvider<'a> {
             let slot2 = TableSlot::new(self.heap_rel.unwrap());
             let slice1 = self.get_slice(&slot1, heap_pointer1);
             let slice2 = self.get_slice(&slot2, heap_pointer2);
-            distancefn(slice1, slice2)
+            (self.distance_fn)(slice1, slice2)
         } else {
             let rn1 = Node::read(index, index_pointer1);
             let rn2 = Node::read(index, index_pointer2);
@@ -190,7 +189,7 @@ impl<'a> VectorProvider<'a> {
             assert!(node1.vector.len() == node2.vector.len());
             let vec1 = node1.vector.as_slice();
             let vec2 = node2.vector.as_slice();
-            distancefn(vec1, vec2)
+            (self.distance_fn)(vec1, vec2)
         }
     }
 }
@@ -383,6 +382,12 @@ pub trait Graph {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
+        result: &mut Vec<IndexPointer>,
+    ) -> bool;
+    fn get_neighbors_with_distances(
+        &self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool;
 
@@ -487,9 +492,8 @@ pub trait Graph {
     {
         //OPT: Only build v when needed.
         let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
-        let mut neighbors = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page(index).get_num_neighbors() as _,
-        );
+        let mut neighbors =
+            Vec::<IndexPointer>::with_capacity(self.get_meta_page(index).get_num_neighbors() as _);
         while let Some((index_pointer, distance)) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
             let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
@@ -498,12 +502,7 @@ pub trait Graph {
             }
 
             for neighbor_index_pointer in &neighbors {
-                lsr.insert(
-                    index,
-                    self,
-                    neighbor_index_pointer.get_index_pointer_to_neighbor(),
-                    query,
-                )
+                lsr.insert(index, self, *neighbor_index_pointer, query)
             }
             v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
@@ -530,7 +529,7 @@ pub trait Graph {
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
             (self.get_meta_page(index).get_num_neighbors() as usize) + new_neigbors.len(),
         );
-        self.get_neighbors(index, index_pointer, &mut candidates);
+        self.get_neighbors_with_distances(index, index_pointer, &mut candidates);
 
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
@@ -599,7 +598,6 @@ pub trait Graph {
                             index,
                             existing_neighbor.get_index_pointer_to_neighbor(),
                             candidate_neighbor.get_index_pointer_to_neighbor(),
-                            distance,
                         )
                     };
                     stats.node_reads += 2;
@@ -683,7 +681,7 @@ pub trait Graph {
         distance: f32,
     ) -> (bool, PruneNeighborStats) {
         let mut current_links = Vec::<NeighborWithDistance>::new();
-        self.get_neighbors(index, from, &mut current_links);
+        self.get_neighbors_with_distances(index, from, &mut current_links);
 
         if current_links.len() < current_links.capacity() as _ {
             current_links.push(NeighborWithDistance::new(to, distance));
