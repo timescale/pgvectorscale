@@ -18,26 +18,6 @@ pub extern "C" fn _PG_fini() {
     // noop
 }
 
-#[pg_extern]
-fn hello_timescaledb_vector() -> &'static str {
-    "Hello, timescaledb_vector"
-}
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pg_schema]
-mod tests {
-    use pgrx::prelude::*;
-
-    #[pg_test]
-    fn test_hello_timescaledb_vector() -> Result<(), spi::Error> {
-        assert_eq!(
-            "Hello, timescaledb_vector",
-            crate::hello_timescaledb_vector()
-        );
-        Ok(())
-    }
-}
-
 /// This module is required by `cargo pgrx test` invocations.
 /// It must be visible at the root of your extension crate.
 #[cfg(test)]

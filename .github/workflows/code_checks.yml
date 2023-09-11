@@ -12,10 +12,10 @@ jobs:
         uses: actions/checkout@v3
         # extension is small so we do the hacky thing.
 #      - name: Run Cargo tests
-#        run: cd timescaledb_vector && cargo install --locked cargo-pgrx && cargo pgrx init && cargo pgrx test && cd ..
+#        run: cd timescale_vector && cargo install --locked cargo-pgrx && cargo pgrx init && cargo pgrx test && cd ..
 
       - name: Verify formatting
-        run: cd timescaledb_vector && cargo fmt --check
+        run: cd timescale_vector && cargo fmt --check
 
       - name: Check formatting failure
         if: failure()
