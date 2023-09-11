@@ -5,7 +5,7 @@ use ndarray::Array1;
 use pgrx::*;
 use reductive::pq::{Pq, QuantizeVector};
 
-use crate::util::ItemPointer;
+use crate::util::{IndexPointer, ItemPointer};
 
 use super::graph::{Graph, VectorProvider};
 use super::meta_page::MetaPage;
@@ -89,6 +89,24 @@ impl<'a> Graph for BuilderGraph<'a> {
     }
 
     fn get_neighbors(
+        &self,
+        _index: &PgRelation,
+        neighbors_of: ItemPointer,
+        result: &mut Vec<IndexPointer>,
+    ) -> bool {
+        let neighbors = self.neighbor_map.get(&neighbors_of);
+        match neighbors {
+            Some(n) => {
+                for nwd in n {
+                    result.push(nwd.get_index_pointer_to_neighbor());
+                }
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn get_neighbors_with_distances(
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,

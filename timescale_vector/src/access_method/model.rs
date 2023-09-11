@@ -60,7 +60,6 @@ pub struct Node {
     pub vector: Vec<f32>,
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_distances: Vec<Distance>,
     pub heap_item_pointer: HeapPointer,
 }
 
@@ -110,8 +109,9 @@ impl Node {
             // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
             pq_vector,
             // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
-            neighbor_index_pointers: (0..num_neighbors).map(|_| ItemPointer::new(0, 0)).collect(),
-            neighbor_distances: (0..num_neighbors).map(|_| Distance::NAN).collect(),
+            neighbor_index_pointers: (0..num_neighbors)
+                .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
+                .collect(),
             heap_item_pointer,
         }
     }
@@ -142,16 +142,15 @@ impl Node {
             a_index_pointer.block_number =
                 new_neighbor.get_index_pointer_to_neighbor().block_number;
             a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
-
-            let mut a_distance = archived.as_mut().neighbor_distances().index_pin(i);
-            *a_distance = new_neighbor.get_distance() as Distance;
         }
         //set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
             //TODO: why do we need to recreate the archive?
             let archived = node.get_archived_node();
-            let mut past_last_distance = archived.neighbor_distances().index_pin(neighbors.len());
-            *past_last_distance = Distance::NAN;
+            let mut past_last_index_pointers =
+                archived.neighbor_index_pointer().index_pin(neighbors.len());
+            past_last_index_pointers.block_number = InvalidBlockNumber;
+            past_last_index_pointers.offset = InvalidOffsetNumber;
         }
 
         match vector {
@@ -197,29 +196,24 @@ impl ArchivedNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    pub fn neighbor_distances(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<Distance>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_distances) }
-    }
-
     pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
     }
 
     pub fn num_neighbors(&self) -> usize {
-        self.neighbor_distances
+        self.neighbor_index_pointers
             .iter()
-            .position(|&f| f.is_nan())
-            .unwrap_or(self.neighbor_distances.len())
+            .position(|f| f.block_number == InvalidBlockNumber)
+            .unwrap_or(self.neighbor_index_pointers.len())
     }
 
     pub fn apply_to_neighbors<F>(&self, mut f: F)
     where
-        F: FnMut(Distance, &ArchivedItemPointer),
+        F: FnMut(&ArchivedItemPointer),
     {
         for i in 0..self.num_neighbors() {
-            let dist = self.neighbor_distances[i];
             let neighbor = &self.neighbor_index_pointers[i];
-            f(dist, neighbor);
+            f(neighbor);
         }
     }
 }

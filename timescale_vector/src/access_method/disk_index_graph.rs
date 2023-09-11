@@ -1,6 +1,6 @@
 use pgrx::PgRelation;
 
-use crate::util::ItemPointer;
+use crate::util::{IndexPointer, ItemPointer};
 
 use super::{
     graph::{Graph, VectorProvider},
@@ -40,14 +40,28 @@ impl<'h> Graph for DiskIndexGraph<'h> {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
+        result: &mut Vec<IndexPointer>,
+    ) -> bool {
+        let rn = self.read(index, neighbors_of);
+        rn.get_archived_node().apply_to_neighbors(|n| {
+            let n = n.deserialize_item_pointer();
+            result.push(n)
+        });
+        true
+    }
+
+    fn get_neighbors_with_distances(
+        &self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let rn = self.read(index, neighbors_of);
-        rn.get_archived_node().apply_to_neighbors(|dist, n| {
-            result.push(NeighborWithDistance::new(
-                n.deserialize_item_pointer(),
-                dist,
-            ))
+        let vp = self.get_vector_provider();
+        rn.get_archived_node().apply_to_neighbors(|n| {
+            let n = n.deserialize_item_pointer();
+            let dist = unsafe { vp.get_distance_pair_for_full_vectors(index, neighbors_of, n) };
+            result.push(NeighborWithDistance::new(n, dist))
         });
         true
     }
