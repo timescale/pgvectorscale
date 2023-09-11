@@ -21,12 +21,12 @@ jobs:
     env:
       PG_VER: ${{ github.event.inputs.PG }}
       PG_MIN_VER: ${{ github.event.inputs.PG_MIN }}
-      PG_SRC_DIR: pgbuild 
+      PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
       MAKE_JOBS: 6
       PG_CONFIG_PATH: postgresql/bin/pg_config
       TAG: ${{ github.event.inputs.tag }}
-      TAG_DIR: timescaledb_vector
+      TAG_DIR: timescale_vector
 
     steps:
     - name: Checkout Timescale Vector
@@ -34,7 +34,7 @@ jobs:
 
     - name: Install Linux Packages
       uses: ./.github/actions/install-packages
-    
+
     - name: Install Deb builder specific packages
       run: |
         sudo apt-get install dpkg-dev debhelper
@@ -49,10 +49,10 @@ jobs:
     - name: Checkout Timescale Vector ${{ env.TAG }}
       uses: actions/checkout@v3
       with:
-        repository: timescale/timescaledb-vector
+        repository: timescale/timescale-vector
         ref: '${{ env.TAG }}'
         path: ${{ env.TAG_DIR }}
-  
+
     - name: Install pgrx
       uses: ./.github/actions/install-pgrx
       with:
@@ -72,4 +72,4 @@ jobs:
       uses: actions/upload-artifact@v3
       with:
         name: vector-${{ env.TAG }}-pg${{ env.PG_VER }}
-        path: pkgdump/timescaledb-vector-*${{ env.TAG }}*.deb
+        path: pkgdump/timescale-vector-*${{ env.TAG }}*.deb

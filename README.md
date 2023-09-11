@@ -1,4 +1,4 @@
-TimescaleDB Vector
+Timescale Vector
 
 Say something chat gpt.
 
@@ -30,20 +30,20 @@ Installing from source is also available on macOS and requires the same set of p
 💾 Building and Installing the extension
 Download or clone this repository, and switch to the extension subdirectory, e.g.
 ```shell
-git clone https://github.com/timescale/timescaledb-vector && \
-cd timescaledb-vector/extension
+git clone https://github.com/timescale/timescale-vector && \
+cd timescale-vector/extension
 ```
 
 Then run
 ```shell
-cargo pgrx install --release 
+cargo pgrx install --release
 ```
 
 To initialize the extension after installation, enter the following into psql:
 
-CREATE EXTENSION timescaledb_vector;
+CREATE EXTENSION timescale_vector;
 ✏️ Get Involved
-The TimescaleDB Vecotr project is still in the initial planning stage as we decide our priorities and what to implement first. As such, now is a great time to help shape the project's direction! Have a look at the list of features we're thinking of working on and feel free to comment on the features, expand the list, or hop on the Discussions forum for more in-depth discussions.
+The Timescale Vecotr project is still in the initial planning stage as we decide our priorities and what to implement first. As such, now is a great time to help shape the project's direction! Have a look at the list of features we're thinking of working on and feel free to comment on the features, expand the list, or hop on the Discussions forum for more in-depth discussions.
 
 🔨 Testing
 See above for prerequisites and installation instructions.
@@ -52,7 +52,7 @@ You can run tests against a postgres version pg15 using
 ```shell
 cargo pgrx test ${postgres_version}
 ```
-🐯 About TimescaleDB
+🐯 About Timescale
 TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 million of metrics per second, supports native compression, handles high cardinality, and offers native time-series capabilities, such as data retention policies, continuous aggregate views, downsampling, data gap-filling and interpolation.
 
 TimescaleDB also supports full SQL, a variety of data types (numerics, text, arrays, JSON, booleans), and ACID semantics. Operationally mature capabilities include high availability, streaming backups, upgrades over time, roles and permissions, and security.
