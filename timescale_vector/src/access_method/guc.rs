@@ -1,6 +1,6 @@
 use pgrx::*;
 
-pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::new(100);
+pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::<i32>::new(100);
 
 pub fn init() {
     GucRegistry::define_int_guc(

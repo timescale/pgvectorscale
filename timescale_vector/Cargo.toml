@@ -13,7 +13,7 @@ pg_test = []
 
 [dependencies]
 memoffset = "0.9.0"
-pgrx = "=0.9.8"
+pgrx = "=0.10.0"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0"}
 reductive = { version = "0.9.0"}
@@ -28,7 +28,7 @@ rayon = "1"
 
 
 [dev-dependencies]
-pgrx-tests = "=0.9.8"
+pgrx-tests = "=0.10.0"
 
 [profile.dev]
 panic = "unwind"
