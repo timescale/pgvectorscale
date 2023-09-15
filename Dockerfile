@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.3-labs
 ARG PG_VERSION=15
 ARG TIMESCALEDB_VERSION_MAJMIN=2.11
-ARG PGRX_VERSION=0.9.8
+ARG PGRX_VERSION=0.10.0
 ARG BASE_IMAGE=timescale/timescaledb-ha:pg${PG_VERSION}-ts${TIMESCALEDB_VERSION_MAJMIN}-all
 
 FROM timescale/timescaledb-ha:pg${PG_VERSION}-ts${TIMESCALEDB_VERSION_MAJMIN}-all AS ha-build-tools
