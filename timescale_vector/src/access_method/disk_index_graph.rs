@@ -58,9 +58,11 @@ impl<'h> Graph for DiskIndexGraph<'h> {
     ) -> bool {
         let rn = self.read(index, neighbors_of);
         let vp = self.get_vector_provider();
+        let dist_state = unsafe { vp.get_full_vector_distance_state(index, neighbors_of) };
         rn.get_archived_node().apply_to_neighbors(|n| {
             let n = n.deserialize_item_pointer();
-            let dist = unsafe { vp.get_distance_pair_for_full_vectors(index, neighbors_of, n) };
+            let dist =
+                unsafe { vp.get_distance_pair_for_full_vectors_from_state(&dist_state, index, n) };
             result.push(NeighborWithDistance::new(n, dist))
         });
         true
