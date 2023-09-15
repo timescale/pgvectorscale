@@ -107,10 +107,6 @@ pub unsafe fn slot_getattr(
 
     if attnum > slot.tts_nvalid {
         pg_sys::slot_getsomeattrs_int(slot.as_ptr(), attnum as _);
-        /*panic!(
-            "invalid attributes not yet handled: {} out of {}",
-            attnum, slot.tts_nvalid
-        );*/
     }
 
     let index = (attnum - 1) as usize;

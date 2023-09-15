@@ -89,11 +89,12 @@ impl<'a> VectorProvider<'a> {
     ) -> Vec<f32> {
         let heap_pointer = self.get_heap_pointer(index, index_pointer);
         let slot = TableSlot::new(self.heap_rel.unwrap());
-        let slice = self.get_slice(&slot, heap_pointer);
+        self.init_slot(&slot, heap_pointer);
+        let slice = self.get_slice(&slot);
         slice.to_vec()
     }
 
-    unsafe fn get_slice<'s>(&self, slot: &'s TableSlot, heap_pointer: HeapPointer) -> &'s [f32] {
+    unsafe fn init_slot(&self, slot: &TableSlot, heap_pointer: HeapPointer) {
         let table_am = self.heap_rel.unwrap().rd_tableam;
         let fetch_row_version = (*table_am).tuple_fetch_row_version.unwrap();
         let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
@@ -106,7 +107,9 @@ impl<'a> VectorProvider<'a> {
             &mut pg_sys::SnapshotAnyData,
             slot.slot.as_ptr(),
         );
+    }
 
+    unsafe fn get_slice<'s>(&self, slot: &'s TableSlot) -> &'s [f32] {
         let vector =
             PgVector::from_datum(slot.get_attribute(self.heap_attr_number.unwrap()).unwrap());
 
@@ -147,7 +150,8 @@ impl<'a> VectorProvider<'a> {
             let heap_pointer = self.get_heap_pointer(index, index_pointer);
             stats.node_reads += 1;
             let slot = TableSlot::new(self.heap_rel.unwrap());
-            let slice = self.get_slice(&slot, heap_pointer);
+            self.init_slot(&slot, heap_pointer);
+            let slice = self.get_slice(&slot);
             stats.distance_comparisons += 1;
             return (dm.get_full_vector_distance(slice, query), heap_pointer);
         } else {
@@ -163,26 +167,44 @@ impl<'a> VectorProvider<'a> {
         }
     }
 
-    pub unsafe fn get_distance_pair_for_full_vectors(
+    pub unsafe fn get_full_vector_distance_state<'i>(
         &self,
-        index: &PgRelation,
-        index_pointer1: IndexPointer,
-        index_pointer2: IndexPointer,
-    ) -> f32
-where {
-        assert!(!self.calc_distance_with_pq);
-
+        index: &'i PgRelation,
+        index_pointer: IndexPointer,
+    ) -> FullVectorDistanceState<'i> {
         if self.pq_enabled {
-            let heap_pointer1 = self.get_heap_pointer(index, index_pointer1);
-            let heap_pointer2 = self.get_heap_pointer(index, index_pointer2);
-            let slot1 = TableSlot::new(self.heap_rel.unwrap());
-            let slot2 = TableSlot::new(self.heap_rel.unwrap());
-            let slice1 = self.get_slice(&slot1, heap_pointer1);
-            let slice2 = self.get_slice(&slot2, heap_pointer2);
+            let heap_pointer = self.get_heap_pointer(index, index_pointer);
+            let slot = TableSlot::new(self.heap_rel.unwrap());
+            self.init_slot(&slot, heap_pointer);
+            FullVectorDistanceState {
+                table_slot: Some(slot),
+                readable_node: None,
+            }
+        } else {
+            let rn = Node::read(index, index_pointer);
+            FullVectorDistanceState {
+                table_slot: None,
+                readable_node: Some(rn),
+            }
+        }
+    }
+
+    pub unsafe fn get_distance_pair_for_full_vectors_from_state(
+        &self,
+        state: &FullVectorDistanceState,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+    ) -> f32 {
+        if self.pq_enabled {
+            let heap_pointer = self.get_heap_pointer(index, index_pointer);
+            let slot = TableSlot::new(self.heap_rel.unwrap());
+            self.init_slot(&slot, heap_pointer);
+            let slice1 = self.get_slice(&slot);
+            let slice2 = self.get_slice(state.table_slot.as_ref().unwrap());
             (self.distance_fn)(slice1, slice2)
         } else {
-            let rn1 = Node::read(index, index_pointer1);
-            let rn2 = Node::read(index, index_pointer2);
+            let rn1 = Node::read(index, index_pointer);
+            let rn2 = state.readable_node.as_ref().unwrap();
             let node1 = rn1.get_archived_node();
             let node2 = rn2.get_archived_node();
             assert!(node1.vector.len() > 0);
@@ -192,6 +214,11 @@ where {
             (self.distance_fn)(vec1, vec2)
         }
     }
+}
+
+pub struct FullVectorDistanceState<'a> {
+    table_slot: Option<TableSlot>,
+    readable_node: Option<ReadableNode<'a>>,
 }
 
 pub struct DistanceMeasure {
@@ -584,6 +611,12 @@ pub trait Graph {
                 let existing_neighbor = neighbor;
 
                 let vp = self.get_vector_provider();
+                let dist_state = unsafe {
+                    vp.get_full_vector_distance_state(
+                        index,
+                        existing_neighbor.get_index_pointer_to_neighbor(),
+                    )
+                };
 
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
@@ -594,9 +627,9 @@ pub trait Graph {
 
                     //todo handle the non-pq case
                     let distance_between_candidate_and_existing_neighbor = unsafe {
-                        vp.get_distance_pair_for_full_vectors(
+                        vp.get_distance_pair_for_full_vectors_from_state(
+                            &dist_state,
                             index,
-                            existing_neighbor.get_index_pointer_to_neighbor(),
                             candidate_neighbor.get_index_pointer_to_neighbor(),
                         )
                     };
