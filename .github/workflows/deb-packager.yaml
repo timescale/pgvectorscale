@@ -57,7 +57,7 @@ jobs:
       uses: ./.github/actions/install-pgrx
       with:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-        pgrx-version: 0.9.8
+        pgrx-version: 0.10.0
 
     - name: Build Deb
       id: debbuild
