@@ -67,12 +67,9 @@ impl<'a> LockedBufferExclusive<'a> {
         unsafe { Self::read_unchecked(index, InvalidBlockNumber) }
     }
 
-    /// Safety: Safe because it checks the block number
+    /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
-        let nblocks = unsafe {
-            pg_sys::RelationGetNumberOfBlocksInFork(index.as_ptr(), pg_sys::ForkNumber_MAIN_FORKNUM)
-        };
-        assert!(block < nblocks);
+        assert!(block < pg_sys::RELSEG_SIZE);
         unsafe { Self::read_unchecked(index, block) }
     }
 
@@ -155,13 +152,11 @@ impl<'a> LockedBufferShare<'a> {
     ///
     /// The returned block will be pinned and locked in share mode
     ///
-    /// Safety: Safe because it checks the block number is within range
+    /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
 
-        let nblocks =
-            unsafe { pg_sys::RelationGetNumberOfBlocksInFork(index.as_ptr(), fork_number) };
-        assert!(block < nblocks);
+        assert!(block < pg_sys::RELSEG_SIZE);
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
