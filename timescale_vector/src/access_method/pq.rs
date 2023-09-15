@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Axis};
 use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
@@ -135,27 +135,32 @@ fn build_distance_table(
     pq: &Pq<f32>,
     query: &[f32],
     distance_fn: fn(&[f32], &[f32]) -> f32,
-) -> Vec<Vec<f32>> {
+) -> Vec<f32> {
     let sq = pq.subquantizers();
-    let mut distance_table: Vec<Vec<f32>> = Vec::new();
-    let clusters: Vec<_> = sq.outer_iter().collect();
-    let ds = query.len() / clusters.len();
-    for m in 0..clusters.len() {
-        let mut res: Vec<f32> = Vec::new();
-        let sl = &query[m * ds..(m + 1) * ds];
-        for i in 0..clusters[m].nrows() {
-            let c = clusters[m].row(i).to_vec();
-            let p = distance_fn(sl, c.as_slice());
-            res.push(p);
+    let num_centroids = pq.n_quantizer_centroids();
+    let num_subquantizers = sq.len_of(Axis(0));
+    let dt_size = num_subquantizers * num_centroids;
+    let mut distance_table = vec![0.0; dt_size];
+
+    let ds = query.len() / num_subquantizers;
+    let mut elements_for_assert = 0;
+    for (subquantizer_index, subquantizer) in sq.outer_iter().enumerate() {
+        let sl = &query[subquantizer_index * ds..(subquantizer_index + 1) * ds];
+        for (centroid_index, c) in subquantizer.outer_iter().enumerate() {
+            let dist = distance_fn(sl, c.to_slice().unwrap());
+            assert!(subquantizer_index < num_subquantizers);
+            assert!(centroid_index * num_subquantizers + subquantizer_index < dt_size);
+            distance_table[centroid_index * num_subquantizers + subquantizer_index] = dist;
+            elements_for_assert += 1;
         }
-        distance_table.push(res);
     }
+    assert_eq!(dt_size, elements_for_assert);
     distance_table
 }
 
 /// DistanceCalculator encapsulates the code to generate distances between a PQ vector and a query.
 pub struct DistanceCalculator {
-    distance_table: Vec<Vec<f32>>,
+    distance_table: Vec<f32>,
 }
 
 impl DistanceCalculator {
@@ -172,9 +177,12 @@ impl DistanceCalculator {
     /// distance emits the sum of distances between each centroid in the quantized vector.
     pub fn distance(&self, pq_vector: &[u8]) -> f32 {
         let mut d = 0.0;
+        let num_subquantizers = pq_vector.len();
         // maybe we should unroll this loop?
-        for m in 0..pq_vector.len() {
-            d += self.distance_table[m][pq_vector[m] as usize];
+        for subquantizer_index in 0..num_subquantizers {
+            let centroid_index = pq_vector[subquantizer_index] as usize;
+            d += self.distance_table[centroid_index * num_subquantizers + subquantizer_index]
+            //d += self.distance_table[m][pq_vector[m] as usize];
         }
         d
     }
