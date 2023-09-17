@@ -69,7 +69,6 @@ impl<'a> LockedBufferExclusive<'a> {
 
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
-        assert!(block < pg_sys::RELSEG_SIZE);
         unsafe { Self::read_unchecked(index, block) }
     }
 
@@ -155,8 +154,6 @@ impl<'a> LockedBufferShare<'a> {
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
-
-        assert!(block < pg_sys::RELSEG_SIZE);
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
