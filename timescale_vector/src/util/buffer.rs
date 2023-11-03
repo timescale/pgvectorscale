@@ -140,7 +140,7 @@ impl<'a> Deref for LockedBufferExclusive<'a> {
 /// LockedBufferShare is an RAII-guarded buffer that
 /// has been locked for share access.
 ///
-/// It is probably not a good idea to hold on to this too long.
+/// This lock uses a LWLock so it really should not be held for too long.
 pub struct LockedBufferShare<'a> {
     _relation: &'a PgRelation,
     buffer: Buffer,
@@ -190,5 +190,53 @@ impl<'a> Deref for LockedBufferShare<'a> {
     type Target = Buffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
+    }
+}
+
+/// PinnerBuffer is an RAII-guarded buffer that
+/// has been pinned but not locked.
+///
+/// It is probably not a good idea to hold on to this too long except during an index scan.
+/// Does not use a LWLock.
+pub struct PinnedBufferShare<'a> {
+    _relation: &'a PgRelation,
+    buffer: Buffer,
+}
+
+impl<'a> PinnedBufferShare<'a> {
+    /// read return buffer for the given blockNumber in a relation.
+    ///
+    /// The returned block will be pinned
+    ///
+    /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
+    pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
+        let fork_number = ForkNumber_MAIN_FORKNUM;
+
+        unsafe {
+            let buf = pg_sys::ReadBufferExtended(
+                index.as_ptr(),
+                fork_number,
+                block,
+                ReadBufferMode_RBM_NORMAL,
+                std::ptr::null_mut(),
+            );
+            PinnedBufferShare {
+                _relation: index,
+                buffer: buf,
+            }
+        }
+    }
+}
+
+impl<'a> Drop for PinnedBufferShare<'a> {
+    /// drop both unlock and unpins the buffer.
+    fn drop(&mut self) {
+        unsafe {
+            // Only unlock while in a transaction state. Should not be unlocking during abort or commit.
+            // During abort, the system will unlock stuff itself. During commit, the release should have already happened.
+            if pgrx::pg_sys::IsTransactionState() {
+                pg_sys::ReleaseBuffer(self.buffer);
+            }
+        }
     }
 }
