@@ -5,7 +5,7 @@ use crate::{
         disk_index_graph::DiskIndexGraph, graph::VectorProvider, meta_page::MetaPage,
         model::PgVector,
     },
-    util::{buffer::LockedBufferShare, HeapPointer},
+    util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
 use super::graph::ListSearchResult;
@@ -15,7 +15,7 @@ struct TSVResponseIterator<'a> {
     lsr: ListSearchResult,
     search_list_size: usize,
     current: usize,
-    last_buffer: Option<LockedBufferShare<'a>>,
+    last_buffer: Option<PinnedBufferShare<'a>>,
 }
 
 impl<'a> TSVResponseIterator<'a> {
@@ -59,7 +59,7 @@ impl<'a> TSVResponseIterator<'a> {
                      * https://www.postgresql.org/docs/current/index-locking.html
                      */
                     self.last_buffer =
-                        Some(LockedBufferShare::read(index, index_pointer.block_number));
+                        Some(PinnedBufferShare::read(index, index_pointer.block_number));
 
                     self.current = self.current + 1;
                     if heap_pointer.offset == InvalidOffsetNumber {
