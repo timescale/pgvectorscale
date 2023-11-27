@@ -165,8 +165,25 @@ pub extern "C" fn amgettuple(
 }
 
 #[pg_guard]
-pub extern "C" fn amendscan(_scan: pg_sys::IndexScanDesc) {
-    // nothing to do here
+pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
+    let min_level = unsafe {
+        let l = pg_sys::log_min_messages;
+        let c = pg_sys::client_min_messages;
+        std::cmp::min(l, c)
+    };
+    if min_level <= pg_sys::DEBUG1 as _ {
+        let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
+        let state =
+            unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+        let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
+        debug1!(
+        "Query stats - node reads:{}, calls: {}, distance comparisons: {}, pq distance comparisons: {}",
+        iter.lsr.stats.node_reads,
+        iter.lsr.stats.calls,
+        iter.lsr.stats.distance_comparisons,
+        iter.lsr.stats.pq_distance_comparisons,
+    );
+    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]
