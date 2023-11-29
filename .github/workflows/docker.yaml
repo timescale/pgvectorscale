@@ -17,11 +17,11 @@ jobs:
       fail-fast: false
       matrix:
         cloud_image_tag_prefix:
-        - pg15
+        - pg16
         pgversion:
-        - 15
+        - 16
         tsversion:
-        - 2.11
+        - 2.13
     steps:
       - name: Checkout Timescale Vector
         uses: actions/checkout@v3

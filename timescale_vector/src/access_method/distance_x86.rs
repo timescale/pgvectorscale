@@ -3,7 +3,6 @@
 use simdeez::scalar::*;
 use simdeez::sse2::*;
 use simdeez::sse41::*;
-use simdeez::*;
 //use simdeez::avx::*;
 use simdeez::avx2::*;
 

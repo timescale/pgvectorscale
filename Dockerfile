@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.3-labs
-ARG PG_VERSION=15
-ARG TIMESCALEDB_VERSION_MAJMIN=2.11
-ARG PGRX_VERSION=0.10.0
+ARG PG_VERSION=16
+ARG TIMESCALEDB_VERSION_MAJMIN=2.13
+ARG PGRX_VERSION=0.11.1
 ARG BASE_IMAGE=timescale/timescaledb-ha:pg${PG_VERSION}-ts${TIMESCALEDB_VERSION_MAJMIN}-all
 
 FROM timescale/timescaledb-ha:pg${PG_VERSION}-ts${TIMESCALEDB_VERSION_MAJMIN}-all AS ha-build-tools
@@ -87,8 +87,8 @@ WORKDIR /build/timescale-vector
 RUN PG_CONFIG="/usr/lib/postgresql/${PG_VERSION}/bin/pg_config" make package
 
 ## COPY over the new files to the image. Done as a seperate stage so we don't
-## ship the build tools. Fixed pg15 image is intentional. The image ships with
-## PG 12, 13, 14 and 15 binaries. The PATH environment variable below is used
+## ship the build tools. Fixed pg16 image is intentional. The image ships with
+## PG 12, 13, 14, 15 and 16 binaries. The PATH environment variable below is used
 ## to specify the runtime version.
 FROM ${BASE_IMAGE}
 ARG PG_VERSION

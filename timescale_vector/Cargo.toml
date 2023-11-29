@@ -7,13 +7,14 @@ edition = "2021"
 crate-type = ["cdylib"]
 
 [features]
-default = ["pg15"]
+default = ["pg16"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
+pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg_test = []
 
 [dependencies]
 memoffset = "0.9.0"
-pgrx = "=0.10.0"
+pgrx = "=0.11.1"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0"}
 reductive = { version = "0.9.0"}
@@ -28,7 +29,7 @@ rayon = "1"
 
 
 [dev-dependencies]
-pgrx-tests = "=0.10.0"
+pgrx-tests = "=0.11.1"
 
 [profile.dev]
 panic = "unwind"
