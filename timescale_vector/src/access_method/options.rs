@@ -1,7 +1,5 @@
 use memoffset::*;
-use pgrx::pg_sys::AsPgCStr;
-use pgrx::prelude::*;
-use pgrx::*;
+use pgrx::{pg_sys::AsPgCStr, prelude::*, set_varsize, PgRelation};
 use std::fmt::Debug;
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -84,7 +82,7 @@ pub unsafe extern "C" fn amoptions(
     build_relopts(reloptions, validate, tab)
 }
 
-#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
+#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,
     validate: bool,

@@ -10,7 +10,7 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 and build tools, the postgres headers, in the preferred manner for your system. You may also need to install OpenSSl. For Ubuntu you can follow the postgres install instructions then run
 
 ```shell
-sudo apt-get install make gcc pkg-config clang postgresql-server-dev-15 libssl-dev
+sudo apt-get install make gcc pkg-config clang postgresql-server-dev-16 libssl-dev
 ```
 
 Next you need cargo-pgx, which can be installed with
@@ -22,7 +22,7 @@ You must reinstall cargo-pgx whenever you update your Rust compiler, since cargo
 
 Finally, setup the pgx development environment with
 ```shell
-cargo pgrx init --pg15 pg_config
+cargo pgrx init --pg16 pg_config
 ```
 
 Installing from source is also available on macOS and requires the same set of prerequisites and set up commands listed above.
@@ -48,7 +48,7 @@ The Timescale Vecotr project is still in the initial planning stage as we decide
 🔨 Testing
 See above for prerequisites and installation instructions.
 
-You can run tests against a postgres version pg15 using
+You can run tests against a postgres version pg16 using
 ```shell
 cargo pgrx test ${postgres_version}
 ```

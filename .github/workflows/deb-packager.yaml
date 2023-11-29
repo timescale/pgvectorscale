@@ -7,13 +7,13 @@ on:
         required: true
         default: ''
       PG:
-        description: 'PG major version. Default: 15'
+        description: 'PG major version. Default: 16'
         required: false
-        default: '15'
+        default: '16'
       PG_MIN:
-        description: 'PG minor version. Default: 4'
+        description: 'PG minor version. Default: 1'
         required: false
-        default: '4'
+        default: '1'
 
 jobs:
   packager:
