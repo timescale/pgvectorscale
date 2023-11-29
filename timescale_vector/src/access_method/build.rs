@@ -10,6 +10,7 @@ use crate::access_method::graph::VectorProvider;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pq::{PgPq, PqTrainer};
+use crate::access_method::starting_ids::StartingIds;
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -170,7 +171,8 @@ fn do_heap_scan<'a>(
         meta_page.get_use_pq(),
         false,
     );
-    let bg = BuilderGraph::new(meta_page.clone(), vp);
+    let starting_ids = StartingIds::new(index_relation, meta_page.get_num_dimensions());
+    let bg = BuilderGraph::new(meta_page.clone(), vp, starting_ids);
     let mut state = BuildState::new(index_relation, meta_page.clone(), bg);
     unsafe {
         pg_sys::IndexBuildHeapScan(

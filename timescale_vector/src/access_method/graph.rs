@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::pg_sys::{Datum, TupleTableSlot};
-use pgrx::{pg_sys, PgBox, PgRelation};
+use pgrx::{notice, pg_sys, PgBox, PgRelation};
 
 use crate::access_method::model::Node;
 use crate::access_method::pq::{DistanceCalculator, PgPq};
@@ -404,7 +404,13 @@ impl ListSearchResult {
 
 pub trait Graph {
     fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a>;
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>>;
+    fn get_starting_ids(&mut self, query: &[f32]) -> Vec<ItemPointer>;
+    fn get_or_init_starting_ids(
+        &mut self,
+        index: &PgRelation,
+        ip: ItemPointer,
+        query: &[f32],
+    ) -> Vec<ItemPointer>;
     fn get_neighbors(
         &self,
         index: &PgRelation,
@@ -458,15 +464,17 @@ pub trait Graph {
         index: &PgRelation,
         query: &[f32],
         search_list_size: usize,
-    ) -> (ListSearchResult, Option<HashSet<NeighborWithDistance>>)
+        item_pointer: ItemPointer,
+    ) -> (ListSearchResult, HashSet<NeighborWithDistance>)
     where
         Self: Graph,
     {
-        let init_ids = self.get_init_ids();
-        if let None = init_ids {
+        let init_ids = self.get_or_init_starting_ids(index, item_pointer, query);
+        //todo is this needed?
+        /*if init_ids.len() == 0 {
             //no nodes in the graph
             return (ListSearchResult::empty(), None);
-        }
+        }*/
         let dm = {
             self.get_distance_measure(
                 index,
@@ -474,14 +482,7 @@ pub trait Graph {
                 self.get_vector_provider().calc_distance_with_pq,
             )
         };
-        let mut l = ListSearchResult::new(
-            index,
-            Some(search_list_size),
-            self,
-            init_ids.unwrap(),
-            query,
-            dm,
-        );
+        let mut l = ListSearchResult::new(index, Some(search_list_size), self, init_ids, query, dm);
         let v = self.greedy_search_iterate(&mut l, index, query, search_list_size);
         return (l, v);
     }
@@ -493,8 +494,9 @@ pub trait Graph {
         index: &PgRelation,
         query: &[f32],
     ) -> ListSearchResult {
-        let init_ids = self.get_init_ids();
-        if let None = init_ids {
+        let init_ids = self.get_starting_ids(&query);
+        //todo: needed?
+        if init_ids.len() == 0 {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
@@ -503,7 +505,7 @@ pub trait Graph {
             query,
             self.get_vector_provider().calc_distance_with_pq,
         );
-        ListSearchResult::new(index, None, self, init_ids.unwrap(), query, dm)
+        ListSearchResult::new(index, None, self, init_ids, query, dm)
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
@@ -513,7 +515,7 @@ pub trait Graph {
         index: &PgRelation,
         query: &[f32],
         visit_n_closest: usize,
-    ) -> Option<HashSet<NeighborWithDistance>>
+    ) -> HashSet<NeighborWithDistance>
     where
         Self: Graph,
     {
@@ -534,7 +536,7 @@ pub trait Graph {
             v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
 
-        Some(v)
+        v
     }
 
     /// Prune neigbors by prefering neighbors closer to the point in question
@@ -660,6 +662,7 @@ pub trait Graph {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
         let meta_page = self.get_meta_page(index);
+        /*notice!("is empty {}", self.is_empty());
         if self.is_empty() {
             self.set_neighbors(
                 index,
@@ -672,14 +675,18 @@ pub trait Graph {
                 prune_neighbor_stats: prune_neighbor_stats,
                 greedy_search_stats: greedy_search_stats,
             };
-        }
+        }*/
 
         //TODO: make configurable?
-        let (l, v) =
-            self.greedy_search(index, vec, meta_page.get_search_list_size_for_build() as _);
+        let (l, v) = self.greedy_search(
+            index,
+            vec,
+            meta_page.get_search_list_size_for_build() as _,
+            index_pointer,
+        );
         greedy_search_stats.combine(l.stats);
         let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());
+            self.prune_neighbors(index, index_pointer, v.into_iter().collect());
         prune_neighbor_stats.combine(forward_stats);
 
         //set forward pointers

@@ -9,7 +9,8 @@ use crate::util::{IndexPointer, ItemPointer};
 
 use super::graph::{Graph, VectorProvider};
 use super::meta_page::MetaPage;
-use super::model::*;
+use super::starting_ids::StartingIds;
+use super::{model::*, starting_ids};
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -20,14 +21,16 @@ pub struct BuilderGraph<'a> {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
     meta_page: MetaPage,
+    starting_ids: StartingIds,
     vector_provider: VectorProvider<'a>,
 }
 
 impl<'a> BuilderGraph<'a> {
-    pub fn new(meta_page: MetaPage, vp: VectorProvider<'a>) -> Self {
+    pub fn new(meta_page: MetaPage, vp: VectorProvider<'a>, starting_ids: StartingIds) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
             meta_page,
+            starting_ids: starting_ids,
             vector_provider: vp,
         }
     }
@@ -46,6 +49,7 @@ impl<'a> BuilderGraph<'a> {
 
     pub unsafe fn write(&self, index: &PgRelation, pq: &Option<Pq<f32>>) -> WriteStats {
         let mut stats = WriteStats::new();
+        self.starting_ids.write(index);
 
         //TODO: OPT: do this in order of item pointers
         for (index_pointer, neighbors) in &self.neighbor_map {
@@ -83,9 +87,18 @@ impl<'a> Graph for BuilderGraph<'a> {
         unsafe { Node::read(index, index_pointer) }
     }
 
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        //returns a vector for generality
-        self.meta_page.get_init_ids()
+    fn get_starting_ids(&mut self, query: &[f32]) -> Vec<ItemPointer> {
+        self.starting_ids.get_starting_ids(query)
+    }
+
+    fn get_or_init_starting_ids(
+        &mut self,
+        _index: &PgRelation,
+        item_pointer: ItemPointer,
+        query: &[f32],
+    ) -> Vec<ItemPointer> {
+        self.starting_ids
+            .get_or_init_starting_ids(item_pointer, query)
     }
 
     fn get_neighbors(
@@ -142,11 +155,6 @@ impl<'a> Graph for BuilderGraph<'a> {
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        if self.meta_page.get_init_ids().is_none() {
-            //TODO probably better set off of centeroids
-            MetaPage::update_init_ids(index, vec![neighbors_of]);
-            self.meta_page = MetaPage::read(index);
-        }
         self.neighbor_map.insert(neighbors_of, new_neighbors);
     }
 }

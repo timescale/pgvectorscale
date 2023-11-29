@@ -63,15 +63,6 @@ impl MetaPage {
         return ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize;
     }
 
-    pub fn get_init_ids(&self) -> Option<Vec<IndexPointer>> {
-        if self.init_ids_block_number == 0 && self.init_ids_offset == 0 {
-            return None;
-        }
-
-        let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
-        Some(vec![ptr])
-    }
-
     pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
         if !self.use_pq || (self.pq_block_number == 0 && self.pq_block_offset == 0) {
             return None;
@@ -134,20 +125,6 @@ impl MetaPage {
             let page = page::ReadablePage::read(index, 0);
             let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
             (*meta).clone()
-        }
-    }
-
-    /// Change the init ids for an index.
-    pub fn update_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
-        assert_eq!(init_ids.len(), 1); //change this if we support multiple
-        let id = init_ids[0];
-
-        unsafe {
-            let page = page::WritablePage::modify(index, 0);
-            let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
-            (*meta).init_ids_block_number = id.block_number;
-            (*meta).init_ids_offset = id.offset;
-            page.commit()
         }
     }
 

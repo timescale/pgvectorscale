@@ -6,10 +6,12 @@ use super::{
     graph::{Graph, VectorProvider},
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node, ReadableNode},
+    starting_ids::StartingIds,
 };
 
 pub struct DiskIndexGraph<'a> {
     meta_page: MetaPage,
+    starting_ids: StartingIds,
     vector_provider: VectorProvider<'a>,
 }
 
@@ -18,6 +20,7 @@ impl<'a> DiskIndexGraph<'a> {
         let meta = MetaPage::read(index);
         Self {
             meta_page: meta,
+            starting_ids: StartingIds::read(index),
             vector_provider: vp,
         }
     }
@@ -32,8 +35,21 @@ impl<'h> Graph for DiskIndexGraph<'h> {
         unsafe { Node::read(index, index_pointer) }
     }
 
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
-        self.meta_page.get_init_ids()
+    fn get_starting_ids(&mut self, query: &[f32]) -> Vec<ItemPointer> {
+        self.starting_ids.get_starting_ids(query)
+    }
+
+    fn get_or_init_starting_ids(
+        &mut self,
+        index: &PgRelation,
+        item_pointer: ItemPointer,
+        query: &[f32],
+    ) -> Vec<ItemPointer> {
+        let v = self
+            .starting_ids
+            .get_or_init_starting_ids(item_pointer, query);
+        self.starting_ids.write(index);
+        v
     }
 
     fn get_neighbors(
@@ -69,7 +85,7 @@ impl<'h> Graph for DiskIndexGraph<'h> {
     }
 
     fn is_empty(&self) -> bool {
-        self.meta_page.get_init_ids().is_none()
+        self.starting_ids.get_count() == 0
     }
 
     fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
@@ -82,10 +98,6 @@ impl<'h> Graph for DiskIndexGraph<'h> {
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        if self.meta_page.get_init_ids().is_none() {
-            MetaPage::update_init_ids(index, vec![neighbors_of]);
-            self.meta_page = MetaPage::read(index);
-        }
         unsafe {
             Node::update_neighbors_and_pq(
                 index,

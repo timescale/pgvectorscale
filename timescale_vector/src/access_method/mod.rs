@@ -10,6 +10,7 @@ mod meta_page;
 mod model;
 pub mod options;
 mod scan;
+mod starting_ids;
 mod vacuum;
 
 extern crate blas_src;
