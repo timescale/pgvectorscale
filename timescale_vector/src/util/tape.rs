@@ -26,7 +26,12 @@ impl<'a> Tape<'a> {
 
     pub unsafe fn write(&mut self, data: &[u8]) -> super::ItemPointer {
         let size = data.len();
-        assert!(size < BLCKSZ as usize);
+        assert!(
+            size < BLCKSZ as usize,
+            "size of {} exceeded the block size {}",
+            size,
+            BLCKSZ
+        );
 
         let mut current_page = WritablePage::modify(self.index, self.current);
 

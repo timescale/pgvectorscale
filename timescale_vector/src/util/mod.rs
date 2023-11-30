@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod multiblock_tape;
 pub mod page;
 pub mod ports;
 pub mod tape;

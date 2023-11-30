@@ -3,7 +3,7 @@
 
 use pg_sys::Page;
 use pgrx::{
-    pg_sys::{BlockNumber, BufferGetPage},
+    pg_sys::{BlockNumber, BufferGetPage, InvalidBlockNumber},
     *,
 };
 use std::ops::Deref;
@@ -49,6 +49,8 @@ struct TsvPageOpaqueData {
     page_type: u8, // stores the PageType enum as an integer (u8 because we doubt we'll have more than 256 types).
     _reserved: u8, // don't waste bytes, may be able to reuse later. For now: 0
     page_id: u16, //  A magic ID for debuging to identify the page as a "tsv-owned". Should be last.
+    //TODO should be in a separate opaque data. hack for now.
+    next_block_id: u32,
 }
 
 impl TsvPageOpaqueData {
@@ -57,6 +59,7 @@ impl TsvPageOpaqueData {
             page_type: page_type as u8,
             _reserved: 0,
             page_id: TSV_PAGE_ID,
+            next_block_id: InvalidBlockNumber,
         }
     }
 
@@ -157,6 +160,24 @@ impl<'a> WritablePage<'a> {
             PageType::from_u8((*opaque_data).page_type)
         }
     }
+
+    pub fn set_next_block_number(&self, block: BlockNumber) {
+        unsafe {
+            let opaque_data =
+        //safe to do because self.page was already verified during construction
+        TsvPageOpaqueData::with_page(self.page);
+            (*opaque_data).next_block_id = block;
+        }
+    }
+
+    pub fn get_next_block_number(&self) -> BlockNumber {
+        unsafe {
+            let opaque_data =
+        //safe to do because self.page was already verified during construction
+        TsvPageOpaqueData::with_page(self.page);
+            (*opaque_data).next_block_id
+        }
+    }
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
     pub fn commit(mut self) {
@@ -199,6 +220,15 @@ impl<'a> ReadablePage<'a> {
         Self {
             buffer: buffer,
             page: page,
+        }
+    }
+
+    pub fn get_next_block_number(&self) -> BlockNumber {
+        unsafe {
+            let opaque_data =
+        //safe to do because self.page was already verified during construction
+        TsvPageOpaqueData::with_page(self.page);
+            (*opaque_data).next_block_id
         }
     }
 
