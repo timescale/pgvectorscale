@@ -138,7 +138,7 @@ impl StartingIds {
                     self.init_index_values[*idx],
                     vector[*idx],
                     self.mean[*idx],
-                    self.m2[*idx],
+                    self.m2[*idx] / self.count as f32,
                 )
             })
             .collect();
