@@ -375,7 +375,7 @@ impl ListSearchResult {
         self.best_candidate.insert(idx, n)
     }
 
-    fn visit_closest(&mut self, pos_limit: usize) -> Option<(ItemPointer, f32)> {
+    fn visit_closest(&mut self, pos_limit: usize) -> Option<(usize, ItemPointer, f32)> {
         //OPT: should we optimize this not to do a linear search each time?
         let neighbor_position = self.best_candidate.iter().position(|n| !n.visited);
         match neighbor_position {
@@ -385,13 +385,7 @@ impl ListSearchResult {
                 }
                 let n = &mut self.best_candidate[pos];
                 n.visited = true;
-                debug1!(
-                    "visiting pos {}, distance {} ip {:?}",
-                    pos,
-                    n.distance,
-                    n.index_pointer
-                );
-                Some((n.index_pointer, n.distance))
+                Some((pos, n.index_pointer, n.distance))
             }
             None => None,
         }
@@ -529,13 +523,19 @@ pub trait Graph {
         let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
         let mut neighbors =
             Vec::<IndexPointer>::with_capacity(self.get_meta_page(index).get_num_neighbors() as _);
-        while let Some((index_pointer, distance)) = lsr.visit_closest(visit_n_closest) {
+        while let Some((pos, index_pointer, distance)) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
             let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
             if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
-
+            debug1!(
+                "visiting pos {}, distance {} ip {:?}, neighbors {}",
+                pos,
+                distance,
+                index_pointer,
+                neighbors.len(),
+            );
             for neighbor_index_pointer in &neighbors {
                 lsr.insert(index, self, *neighbor_index_pointer, query)
             }
