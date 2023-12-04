@@ -152,6 +152,7 @@ impl StartingIds {
                     *score,
                     self.init_index_values[*idx],
                     vector[*idx],
+                    self.init_index_pointers[*idx],
                     distance(vector, node.vector.as_slice()),
                     //self.mean[*idx],
                     //self.m2[*idx] / self.count as f32,

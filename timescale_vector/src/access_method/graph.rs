@@ -385,7 +385,12 @@ impl ListSearchResult {
                 }
                 let n = &mut self.best_candidate[pos];
                 n.visited = true;
-                debug1!("visiting pos {}, distance {}", pos, n.distance);
+                debug1!(
+                    "visiting pos {}, distance {} ip {:?}",
+                    pos,
+                    n.distance,
+                    n.index_pointer
+                );
                 Some((n.index_pointer, n.distance))
             }
             None => None,
