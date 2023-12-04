@@ -5,6 +5,7 @@ use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
 use rayon::vec;
 
+use crate::access_method::model::Node;
 use crate::util::multiblock_tape::MultiblockTape;
 use crate::util::tape::Tape;
 use crate::util::{page, IndexPointer, ItemPointer, WritableBuffer};
@@ -45,6 +46,18 @@ impl<'a> WritableStartingIds<'a> {
     }
 }
 */
+
+fn distance(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+
+    let norm: f32 = a
+        .iter()
+        .zip(b.iter())
+        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+        .sum();
+    assert!(norm >= 0.);
+    norm.sqrt()
+}
 
 impl StartingIds {
     pub fn new(index: &PgRelation, num_dims: u32) -> Self {
@@ -119,7 +132,7 @@ impl StartingIds {
     pub fn get_count(&self) -> usize {
         self.count
     }
-    pub fn get_starting_ids(&mut self, vector: &[f32]) -> Vec<ItemPointer> {
+    pub fn get_starting_ids(&mut self, index: &PgRelation, vector: &[f32]) -> Vec<ItemPointer> {
         let count = 10;
         let indexes = self.get_indexes(vector);
         let indexes = indexes
@@ -132,13 +145,16 @@ impl StartingIds {
         let d: Vec<_> = indexes
             .clone()
             .map(|(idx, score)| {
+                let rn = unsafe { Node::read(&index, self.init_index_pointers[*idx]) };
+                let node = rn.get_archived_node();
                 (
                     self.init_index_scores[*idx],
                     *score,
                     self.init_index_values[*idx],
                     vector[*idx],
-                    self.mean[*idx],
-                    self.m2[*idx] / self.count as f32,
+                    distance(vector, node.vector.as_slice()),
+                    //self.mean[*idx],
+                    //self.m2[*idx] / self.count as f32,
                 )
             })
             .collect();

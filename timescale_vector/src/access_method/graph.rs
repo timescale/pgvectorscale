@@ -404,7 +404,7 @@ impl ListSearchResult {
 
 pub trait Graph {
     fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a>;
-    fn get_starting_ids(&mut self, query: &[f32]) -> Vec<ItemPointer>;
+    fn get_starting_ids(&mut self, index: &PgRelation, query: &[f32]) -> Vec<ItemPointer>;
     fn get_or_init_starting_ids(
         &mut self,
         index: &PgRelation,
@@ -494,7 +494,7 @@ pub trait Graph {
         index: &PgRelation,
         query: &[f32],
     ) -> ListSearchResult {
-        let init_ids = self.get_starting_ids(&query);
+        let init_ids = self.get_starting_ids(index, &query);
         //todo: needed?
         if init_ids.len() == 0 {
             //no nodes in the graph

@@ -87,8 +87,8 @@ impl<'a> Graph for BuilderGraph<'a> {
         unsafe { Node::read(index, index_pointer) }
     }
 
-    fn get_starting_ids(&mut self, query: &[f32]) -> Vec<ItemPointer> {
-        self.starting_ids.get_starting_ids(query)
+    fn get_starting_ids(&mut self, index: &PgRelation, query: &[f32]) -> Vec<ItemPointer> {
+        self.starting_ids.get_starting_ids(index, query)
     }
 
     fn get_or_init_starting_ids(
