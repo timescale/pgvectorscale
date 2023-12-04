@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::pg_sys::{Datum, TupleTableSlot};
-use pgrx::{notice, pg_sys, PgBox, PgRelation};
+use pgrx::{debug1, notice, pg_sys, PgBox, PgRelation};
 
 use crate::access_method::model::Node;
 use crate::access_method::pq::{DistanceCalculator, PgPq};
@@ -385,6 +385,7 @@ impl ListSearchResult {
                 }
                 let n = &mut self.best_candidate[pos];
                 n.visited = true;
+                debug1!("visiting pos {}, distance {}", pos, n.distance);
                 Some((n.index_pointer, n.distance))
             }
             None => None,
