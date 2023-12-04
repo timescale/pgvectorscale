@@ -137,6 +137,8 @@ impl StartingIds {
                     *score,
                     self.init_index_values[*idx],
                     vector[*idx],
+                    self.mean[*idx],
+                    self.m2[*idx],
                 )
             })
             .collect();
