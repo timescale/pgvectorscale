@@ -3,6 +3,7 @@ use std::pin::Pin;
 
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
+use rayon::vec;
 
 use crate::util::multiblock_tape::MultiblockTape;
 use crate::util::tape::Tape;
@@ -17,6 +18,8 @@ pub struct StartingIds {
     mean: Vec<f32>,
     m2: Vec<f32>,
     init_index_pointers: Vec<ItemPointer>,
+    init_index_scores: Vec<f32>,
+    init_index_values: Vec<f32>,
 }
 
 /*
@@ -53,6 +56,8 @@ impl StartingIds {
                 ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
                 num_dims as usize
             ],
+            init_index_scores: vec![0.0; num_dims as usize],
+            init_index_values: vec![0.0; num_dims as usize],
         };
 
         //reserve the position
@@ -117,13 +122,29 @@ impl StartingIds {
     pub fn get_starting_ids(&mut self, vector: &[f32]) -> Vec<ItemPointer> {
         let count = 10;
         let indexes = self.get_indexes(vector);
-        indexes
+        let indexes = indexes
             .iter()
             //first filter out the empty starting_ids
-            .filter(|&&idx| self.init_index_pointers[idx].block_number != InvalidBlockNumber)
+            .filter(|(idx, _)| self.init_index_pointers[*idx].block_number != InvalidBlockNumber)
             //then take count -- this guarantees 10 valid ids
-            .take(count)
-            .map(|&idx| self.init_index_pointers[idx])
+            .take(count);
+
+        let d: Vec<_> = indexes
+            .clone()
+            .map(|(idx, score)| {
+                (
+                    self.init_index_scores[*idx],
+                    *score,
+                    self.init_index_values[*idx],
+                    vector[*idx],
+                )
+            })
+            .collect();
+
+        debug1!("starting_ids debug: {:?}", d);
+
+        indexes
+            .map(|(idx, _)| self.init_index_pointers[*idx])
             .collect()
     }
 
@@ -136,17 +157,24 @@ impl StartingIds {
         self.add_to_stats(vector);
         let indexes = self.get_indexes(vector);
         let mut result = vec![];
-        for &idx in indexes.iter().take(count) {
-            if self.init_index_pointers[idx].block_number != InvalidBlockNumber {
-                result.push(self.init_index_pointers[idx])
+        for (idx, score) in indexes.iter().take(count) {
+            if self.init_index_pointers[*idx].block_number != InvalidBlockNumber {
+                result.push(self.init_index_pointers[*idx]);
+                if *score > (self.init_index_scores[*idx] * 1.2) {
+                    self.init_index_pointers[*idx] = index_pointer;
+                    self.init_index_scores[*idx] = *score;
+                    self.init_index_values[*idx] = vector[*idx];
+                }
             } else {
-                self.init_index_pointers[idx] = index_pointer;
+                self.init_index_pointers[*idx] = index_pointer;
+                self.init_index_scores[*idx] = *score;
+                self.init_index_values[*idx] = vector[*idx];
             }
         }
         result
     }
 
-    fn get_indexes(&mut self, vector: &[f32]) -> Vec<usize> {
+    fn get_indexes(&mut self, vector: &[f32]) -> Vec<(usize, f32)> {
         //like a z-score, but without the sqrt
         let variance_scores: Vec<f32> = vector
             .iter()
@@ -168,8 +196,8 @@ impl StartingIds {
             .collect();
         indexed_scores.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         indexed_scores
-            .iter()
-            .map(|(index, _score)| *index)
-            .collect()
+        //  .iter()
+        //.map(|(index, _score)| *index)
+        //      .collect()
     }
 }
