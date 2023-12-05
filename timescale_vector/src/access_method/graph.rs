@@ -546,7 +546,7 @@ pub trait Graph {
                 neighbors.len(),
                 min
             );
-            if min > visit_n_closest {
+            if lsr.max_history_size.is_none() && min > visit_n_closest {
                 //we've visited all the neighbors we need to
                 break;
             }
