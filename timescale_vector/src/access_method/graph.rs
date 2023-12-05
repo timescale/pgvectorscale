@@ -366,7 +366,7 @@ impl ListSearchResult {
                 let last = self.best_candidate.last().unwrap();
                 if n >= *last {
                     //n is too far in the list to be the best candidate.
-                    return usize::MAX;
+                    return 101;
                 }
                 self.best_candidate.pop();
             }
@@ -531,7 +531,7 @@ pub trait Graph {
             if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
-            let mut min = 100;
+            let mut min = 200;
             for neighbor_index_pointer in &neighbors {
                 let idx = lsr.insert(index, self, *neighbor_index_pointer, query);
                 if idx < min {
