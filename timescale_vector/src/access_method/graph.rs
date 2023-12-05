@@ -531,22 +531,22 @@ pub trait Graph {
             if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
-            let mut min = visit_n_closest * 10;
+            let mut min = None;
             for neighbor_index_pointer in &neighbors {
                 let idx = lsr.insert(index, self, *neighbor_index_pointer, query);
-                if idx < min {
-                    min = idx;
+                if min.is_none() || idx < min.unwrap() {
+                    min = Some(idx);
                 }
             }
             debug1!(
-                "visiting pos {}, distance {} ip {:?}, neighbors {} min_pos {}",
+                "visiting pos {}, distance {} ip {:?}, neighbors {} min_pos {:?}",
                 pos,
                 distance,
                 index_pointer,
                 neighbors.len(),
                 min
             );
-            if lsr.max_history_size.is_none() && min > visit_n_closest {
+            if lsr.max_history_size.is_none() && min.is_some() && min.unwrap() > visit_n_closest {
                 //we've visited all the neighbors we need to
                 break;
             }
