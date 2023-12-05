@@ -342,12 +342,13 @@ impl ListSearchResult {
         graph: &G,
         index_pointer: ItemPointer,
         query: &[f32],
-    ) where
+    ) -> usize
+    where
         G: Graph + ?Sized,
     {
         //no point reprocessing a point. Distance calcs are expensive.
         if !self.inserted.insert(index_pointer) {
-            return;
+            return usize::MAX;
         }
 
         let vp = graph.get_vector_provider();
@@ -355,24 +356,25 @@ impl ListSearchResult {
             unsafe { vp.get_distance(index, index_pointer, query, &self.dm, &mut self.stats) };
 
         let neighbor = ListSearchNeighbor::new(index_pointer, heap_pointer, dist);
-        self._insert_neighbor(neighbor);
+        self._insert_neighbor(neighbor)
     }
 
     /// Internal function
-    fn _insert_neighbor(&mut self, n: ListSearchNeighbor) {
+    fn _insert_neighbor(&mut self, n: ListSearchNeighbor) -> usize {
         if let Some(max_size) = self.max_history_size {
             if self.best_candidate.len() >= max_size {
                 let last = self.best_candidate.last().unwrap();
                 if n >= *last {
                     //n is too far in the list to be the best candidate.
-                    return;
+                    return usize::MAX;
                 }
                 self.best_candidate.pop();
             }
         }
         //insert while preserving sort order.
         let idx = self.best_candidate.partition_point(|x| *x < n);
-        self.best_candidate.insert(idx, n)
+        self.best_candidate.insert(idx, n);
+        idx
     }
 
     fn visit_closest(&mut self, pos_limit: usize) -> Option<(usize, ItemPointer, f32)> {
@@ -529,16 +531,21 @@ pub trait Graph {
             if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
+            let mut min = 100;
+            for neighbor_index_pointer in &neighbors {
+                let idx = lsr.insert(index, self, *neighbor_index_pointer, query);
+                if idx < min {
+                    min = idx;
+                }
+            }
             debug1!(
-                "visiting pos {}, distance {} ip {:?}, neighbors {}",
+                "visiting pos {}, distance {} ip {:?}, neighbors {} min_pos {}",
                 pos,
                 distance,
                 index_pointer,
                 neighbors.len(),
+                min
             );
-            for neighbor_index_pointer in &neighbors {
-                lsr.insert(index, self, *neighbor_index_pointer, query)
-            }
             v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
 
