@@ -531,7 +531,7 @@ pub trait Graph {
             if !neighbors_existed {
                 panic!("Nodes in the list search results that aren't in the builder");
             }
-            let mut min = 200;
+            let mut min = visit_n_closest * 10;
             for neighbor_index_pointer in &neighbors {
                 let idx = lsr.insert(index, self, *neighbor_index_pointer, query);
                 if idx < min {
@@ -546,6 +546,10 @@ pub trait Graph {
                 neighbors.len(),
                 min
             );
+            if min > visit_n_closest {
+                //we've visited all the neighbors we need to
+                break;
+            }
             v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
 
