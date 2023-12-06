@@ -3,8 +3,14 @@ pub mod page;
 pub mod ports;
 pub mod tape;
 
-use pgrx::PgRelation;
+use pgrx::{
+    error,
+    pg_sys::{BufferGetPage, ForkNumber_MAIN_FORKNUM, BLCKSZ},
+    PgRelation,
+};
 use rkyv::{Archive, Deserialize, Serialize};
+
+use std::io::Error;
 
 use self::{
     page::{ReadablePage, WritablePage},
@@ -79,6 +85,22 @@ impl ItemPointer {
 
     pub fn to_item_pointer_data(&self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
         pgrx::item_pointer_set_all(ctid, self.block_number, self.offset)
+    }
+
+    pub unsafe fn prefetch(self, index: &PgRelation) {
+        let res = pgrx::pg_sys::PrefetchBuffer(
+            index.as_ptr(),
+            ForkNumber_MAIN_FORKNUM,
+            self.block_number,
+        );
+        if res.recent_buffer > 0 {
+            let ptr = BufferGetPage(res.recent_buffer - 1);
+            let res = libc::madvise(ptr as _, BLCKSZ as usize, libc::MADV_WILLNEED);
+            if res != 0 {
+                let err = Error::last_os_error();
+                error!("Error in madvise: {}", err);
+            }
+        }
     }
 
     pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer {

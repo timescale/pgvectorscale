@@ -529,6 +529,10 @@ pub trait Graph {
             }
 
             for neighbor_index_pointer in &neighbors {
+                unsafe { (*neighbor_index_pointer).prefetch(index) };
+            }
+
+            for neighbor_index_pointer in &neighbors {
                 lsr.insert(index, self, *neighbor_index_pointer, query)
             }
             v.insert(NeighborWithDistance::new(index_pointer, distance));
