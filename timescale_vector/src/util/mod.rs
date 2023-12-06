@@ -94,16 +94,17 @@ impl ItemPointer {
             self.block_number,
         );
         if res.recent_buffer > 0 {
-            let ptr = BufferGetPage(res.recent_buffer - 1);
+            let ptr = BufferGetPage(res.recent_buffer);
             let mres = libc::madvise(ptr as *mut c_void, BLCKSZ as usize, libc::MADV_WILLNEED);
             if mres != 0 {
                 let err = Error::last_os_error();
                 error!(
-                    "Error in madvise: {}. mres: {} buffer: {}, ptr: {:?}, blk {}, flag {}",
+                    "Error in madvise: {}. mres: {} buffer: {}, ptr: {:?} {:?}, blk {}, flag {}",
                     err,
                     mres,
-                    res.recent_buffer - 1,
+                    res.recent_buffer,
                     ptr as *mut c_void,
+                    pgrx::pg_sys::BufferBlocks as *mut c_void,
                     BLCKSZ as usize,
                     libc::MADV_WILLNEED
                 );
