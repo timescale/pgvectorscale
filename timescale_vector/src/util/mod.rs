@@ -10,7 +10,7 @@ use pgrx::{
 };
 use rkyv::{Archive, Deserialize, Serialize};
 
-use std::io::Error;
+use std::{io::Error, os::raw::c_void};
 
 use self::{
     page::{ReadablePage, WritablePage},
@@ -95,10 +95,18 @@ impl ItemPointer {
         );
         if res.recent_buffer > 0 {
             let ptr = BufferGetPage(res.recent_buffer - 1);
-            let res = libc::madvise(ptr as _, BLCKSZ as usize, libc::MADV_WILLNEED);
-            if res != 0 {
+            let mres = libc::madvise(ptr as *mut c_void, BLCKSZ as usize, libc::MADV_WILLNEED);
+            if mres != 0 {
                 let err = Error::last_os_error();
-                error!("Error in madvise: {}", err);
+                error!(
+                    "Error in madvise: {}. mres: {} buffer: {}, ptr: {:?}, blk {}, flag {}",
+                    err,
+                    mres,
+                    res.recent_buffer - 1,
+                    ptr as *mut c_void,
+                    BLCKSZ as usize,
+                    libc::MADV_WILLNEED
+                );
             }
         }
     }
