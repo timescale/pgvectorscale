@@ -98,7 +98,10 @@ impl ItemPointer {
             let ptr = BufferGetPage(res.recent_buffer) as *mut c_void;
             let off = ptr.align_offset(page_size);
             let (ptr, sz) = if off > 0 {
-                (ptr.add(off - page_size), page_size * 3)
+                (
+                    ptr.offset((off as isize) - (page_size as isize)),
+                    page_size * 3,
+                )
             } else {
                 (ptr, page_size * 2)
             };
