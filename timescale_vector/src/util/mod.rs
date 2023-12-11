@@ -94,20 +94,18 @@ impl ItemPointer {
             self.block_number,
         );
         if res.recent_buffer > 0 {
-            let ptr = BufferGetPage(res.recent_buffer);
-            let mres = libc::madvise(ptr as *mut c_void, BLCKSZ as usize, libc::MADV_WILLNEED);
+            let page_size = 4096;
+            let ptr = BufferGetPage(res.recent_buffer) as *mut c_void;
+            let off = ptr.align_offset(page_size);
+            let (ptr, sz) = if off > 0 {
+                (ptr.add(off - page_size), page_size * 3)
+            } else {
+                (ptr, page_size * 2)
+            };
+            let mres = libc::madvise(ptr, sz, libc::MADV_WILLNEED);
             if mres != 0 {
                 let err = Error::last_os_error();
-                error!(
-                    "Error in madvise: {}. mres: {} buffer: {}, ptr: {:?} {:?}, blk {}, flag {}",
-                    err,
-                    mres,
-                    res.recent_buffer,
-                    ptr as *mut c_void,
-                    pgrx::pg_sys::BufferBlocks as *mut c_void,
-                    BLCKSZ as usize,
-                    libc::MADV_WILLNEED
-                );
+                error!("Error in madvise: {}", err);
             }
         }
     }
