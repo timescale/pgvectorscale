@@ -248,7 +248,7 @@ impl DistanceMeasure {
         };
     }
 
-    fn get_pq_distance(&self, vec: &[u8]) -> f32 {
+    fn get_pq_distance(&self, vec: &[super::pq::QuantType]) -> f32 {
         let dc = self.distance_calculator.as_ref().unwrap();
         let distance = dc.distance(vec);
         distance

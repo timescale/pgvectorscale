@@ -16,7 +16,8 @@ const PQ_TRAINING_ITERATIONS: usize = 20;
 
 /// NUM_SUBQUANTIZER_BITS is the number of code words used for quantization. We pin it to 8 so we can
 /// use u8 to represent a subspace.
-const NUM_SUBQUANTIZER_BITS: u32 = 8;
+const NUM_SUBQUANTIZER_BITS: u32 = 10;
+pub type QuantType = u16;
 
 /// NUM_TRAINING_ATTEMPTS is the number of times we'll attempt to train the quantizer.
 const NUM_TRAINING_ATTEMPTS: usize = 1;
@@ -114,7 +115,7 @@ impl PgPq {
         }
     }
     /// quantize produces a quantized vector from the raw pg vector.
-    pub fn quantize(self, vector: Vec<f32>) -> Vec<u8> {
+    pub fn quantize(self, vector: Vec<f32>) -> Vec<QuantType> {
         let og_vec = Array1::from(vector.to_vec());
         self.pq.quantize_vector(og_vec).to_vec()
     }
@@ -175,7 +176,7 @@ impl DistanceCalculator {
     }
 
     /// distance emits the sum of distances between each centroid in the quantized vector.
-    pub fn distance(&self, pq_vector: &[u8]) -> f32 {
+    pub fn distance(&self, pq_vector: &[super::pq::QuantType]) -> f32 {
         let mut d = 0.0;
         let num_subquantizers = pq_vector.len();
         // maybe we should unroll this loop?

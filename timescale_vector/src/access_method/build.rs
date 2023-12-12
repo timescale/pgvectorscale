@@ -309,7 +309,7 @@ mod tests {
                 embedding vector (1536)
             );
 
-           -- generate 300 vectors
+           -- generate 1300 vectors
             INSERT INTO test_pq (embedding)
             SELECT
                 *
@@ -317,9 +317,9 @@ mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 300) i
+                    generate_series(1, 1536 * 1300) i
                 GROUP BY
-                    i % 300) g;
+                    i % 1300) g;
 
             CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, pq_vector_length = 64);
 

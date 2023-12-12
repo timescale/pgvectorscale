@@ -58,7 +58,7 @@ impl PgVector {
 #[archive(check_bytes)]
 pub struct Node {
     pub vector: Vec<f32>,
-    pub pq_vector: Vec<u8>,
+    pub pq_vector: Vec<super::pq::QuantType>,
     neighbor_index_pointers: Vec<ItemPointer>,
     pub heap_item_pointer: HeapPointer,
 }
@@ -99,7 +99,7 @@ impl Node {
             let pq_vec_len = meta_page.get_pq_vector_length();
             (
                 Vec::with_capacity(0),
-                (0..pq_vec_len).map(|_| 0u8).collect(),
+                (0..pq_vec_len).map(|_| 0 as super::pq::QuantType).collect(),
             )
         } else {
             (vector, Vec::with_capacity(0))
@@ -131,7 +131,7 @@ impl Node {
         index_pointer: ItemPointer,
         neighbors: &Vec<NeighborWithDistance>,
         meta_page: &MetaPage,
-        vector: Option<Vec<u8>>,
+        vector: Option<Vec<super::pq::QuantType>>,
     ) {
         let node = Node::modify(index, index_pointer);
         let mut archived = node.get_archived_node();
@@ -196,7 +196,7 @@ impl ArchivedNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
+    pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<super::pq::QuantType>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
     }
 

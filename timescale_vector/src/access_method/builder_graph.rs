@@ -37,7 +37,7 @@ impl<'a> BuilderGraph<'a> {
         index: &PgRelation,
         index_pointer: ItemPointer,
         pq: &Pq<f32>,
-    ) -> Vec<u8> {
+    ) -> Vec<super::pq::QuantType> {
         let vp = self.get_vector_provider();
         let copy = vp.get_full_vector_copy_from_heap(index, index_pointer);
         let og_vec = Array1::from(copy);
