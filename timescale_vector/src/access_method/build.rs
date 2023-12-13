@@ -1,7 +1,6 @@
 use std::time::Instant;
 
 use pgrx::*;
-use reductive::pq::Pq;
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
@@ -9,7 +8,6 @@ use crate::access_method::graph::InsertStats;
 use crate::access_method::graph::VectorProvider;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
-use crate::access_method::pq::{PgPq, PqTrainer};
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -17,6 +15,7 @@ use crate::util::*;
 use super::builder_graph::BuilderGraph;
 use super::meta_page::MetaPage;
 use super::model::{self};
+use super::quantizer::Quantizer;
 
 struct BuildState<'a, 'b> {
     memcxt: PgMemoryContexts,
@@ -26,17 +25,24 @@ struct BuildState<'a, 'b> {
     node_builder: BuilderGraph<'b>,
     started: Instant,
     stats: InsertStats,
-    pq_trainer: Option<PqTrainer>,
+    quantizer: Quantizer,
 }
 
 impl<'a, 'b> BuildState<'a, 'b> {
-    fn new(index_relation: &'a PgRelation, meta_page: MetaPage, bg: BuilderGraph<'b>) -> Self {
+    fn new(
+        index_relation: &'a PgRelation,
+        meta_page: MetaPage,
+        bg: BuilderGraph<'b>,
+        mut quantizer: Quantizer,
+    ) -> Self {
         let tape = unsafe { Tape::new(index_relation, page::PageType::Node) };
-        let pq = if meta_page.get_use_pq() {
-            Some(PqTrainer::new(&meta_page))
-        } else {
-            None
-        };
+
+        match &mut quantizer {
+            Quantizer::None => {}
+            Quantizer::PQ(pq) => {
+                pq.start_training(&meta_page);
+            }
+        }
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
@@ -46,7 +52,7 @@ impl<'a, 'b> BuildState<'a, 'b> {
             node_builder: bg,
             started: Instant::now(),
             stats: InsertStats::new(),
-            pq_trainer: pq,
+            quantizer: quantizer,
         }
     }
 }
@@ -82,16 +88,7 @@ pub extern "C" fn ambuild(
     }
     assert!(dimensions > 0 && dimensions < 2000);
     let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt.clone()) };
-    let (ntuples, pq_opt) = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
-
-    // When using PQ, we initialize a node to store the model we use to quantize the vectors.
-    unsafe {
-        if opt.use_pq {
-            let pq = pq_opt.unwrap();
-            let index_pointer: IndexPointer = model::write_pq(pq, &index_relation);
-            super::meta_page::MetaPage::update_pq_pointer(&index_relation, index_pointer)
-        }
-    }
+    let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
     result.heap_tuples = ntuples as f64;
@@ -122,24 +119,24 @@ pub unsafe extern "C" fn aminsert(
     let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let meta_page = MetaPage::read(&index_relation);
+
+    let mut quantizer = meta_page.get_quantizer();
+    match &mut quantizer {
+        Quantizer::None => {}
+        Quantizer::PQ(pq) => {
+            pq.load(&index_relation, &meta_page);
+        }
+    }
+
     let vp = VectorProvider::new(
         Some(&heap_relation),
         Some(get_attribute_number(index_info)),
-        meta_page.get_use_pq(),
+        &quantizer,
         false,
     );
     let mut graph = DiskIndexGraph::new(&index_relation, vp);
 
-    let mut node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page);
-
-    // Populate the PQ version of the vector if it exists.
-    let pq = PgPq::new(&meta_page, &index_relation);
-    match pq {
-        None => {}
-        Some(pq) => {
-            node.pq_vector = pq.quantize(vector.to_vec());
-        }
-    }
+    let node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page, &quantizer);
 
     let mut tape = unsafe { Tape::new(&index_relation, page::PageType::Node) };
     let index_pointer: IndexPointer = node.write(&mut tape);
@@ -163,15 +160,18 @@ fn do_heap_scan<'a>(
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
     meta_page: MetaPage,
-) -> (usize, Option<Pq<f32>>) {
+) -> usize {
+    let quantizer = meta_page.get_quantizer();
     let vp = VectorProvider::new(
         Some(heap_relation),
         Some(get_attribute_number(index_info)),
-        meta_page.get_use_pq(),
+        &quantizer,
         false,
     );
+
     let bg = BuilderGraph::new(meta_page.clone(), vp);
-    let mut state = BuildState::new(index_relation, meta_page.clone(), bg);
+    let quantizer = meta_page.get_quantizer();
+    let mut state = BuildState::new(index_relation, meta_page.clone(), bg, quantizer);
     unsafe {
         pg_sys::IndexBuildHeapScan(
             heap_relation.as_ptr(),
@@ -183,9 +183,14 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    let pq = state.pq_trainer.map(|pq| pq.train_pq());
+    match &mut state.quantizer {
+        Quantizer::None => {}
+        Quantizer::PQ(pq) => {
+            pq.finish_training();
+        }
+    }
 
-    let write_stats = unsafe { state.node_builder.write(index_relation, &pq) };
+    let write_stats = unsafe { state.node_builder.write(index_relation, &state.quantizer) };
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
@@ -210,7 +215,15 @@ fn do_heap_scan<'a>(
     let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
-    (ntuples, pq)
+
+    match state.quantizer {
+        Quantizer::None => {}
+        Quantizer::PQ(pq) => {
+            pq.write_metadata(index_relation);
+        }
+    }
+
+    ntuples
 }
 
 #[pg_guard]
@@ -261,16 +274,20 @@ fn build_callback_internal(
         );
     }
 
-    match &state.pq_trainer {
-        Some(_) => {
-            let pqt = state.pq_trainer.as_mut();
-            pqt.expect("error adding sample")
-                .add_sample(vector.to_vec())
+    match &mut state.quantizer {
+        Quantizer::None => {}
+        Quantizer::PQ(pq) => {
+            pq.add_sample(vector);
         }
-        None => {}
     }
 
-    let node = model::Node::new(vector.to_vec(), heap_pointer, &state.meta_page);
+    let node = model::Node::new(
+        vector.to_vec(),
+        heap_pointer,
+        &state.meta_page,
+        &state.quantizer,
+    );
+
     let index_pointer: IndexPointer = node.write(&mut state.tape);
     let new_stats = state.node_builder.insert(&index, index_pointer, vector);
     state.stats.combine(new_stats);

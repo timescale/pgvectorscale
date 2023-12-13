@@ -16,6 +16,7 @@ use crate::util::{
 };
 
 use super::meta_page::MetaPage;
+use super::quantizer::Quantizer;
 
 //Ported from pg_vector code
 #[repr(C)]
@@ -93,26 +94,35 @@ impl<'a> WritableNode<'a> {
 }
 
 impl Node {
-    pub fn new(vector: Vec<f32>, heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
+    pub fn new(
+        full_vector: Vec<f32>,
+        heap_item_pointer: ItemPointer,
+        meta_page: &MetaPage,
+        quantizer: &Quantizer,
+    ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
-        let (vector, pq_vector) = if meta_page.get_use_pq() {
-            let pq_vec_len = meta_page.get_pq_vector_length();
-            (
-                Vec::with_capacity(0),
-                (0..pq_vec_len).map(|_| 0u8).collect(),
-            )
-        } else {
-            (vector, Vec::with_capacity(0))
-        };
-        Self {
-            vector,
-            // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
-            pq_vector,
-            // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
-            neighbor_index_pointers: (0..num_neighbors)
-                .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
-                .collect(),
-            heap_item_pointer,
+        // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
+        let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
+            .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
+            .collect();
+
+        match quantizer {
+            Quantizer::None => Self {
+                vector: full_vector,
+                pq_vector: Vec::with_capacity(0),
+                neighbor_index_pointers: neighbor_index_pointers,
+                heap_item_pointer,
+            },
+            Quantizer::PQ(pq) => {
+                let mut node = Self {
+                    vector: Vec::with_capacity(0),
+                    pq_vector: Vec::with_capacity(0),
+                    neighbor_index_pointers: neighbor_index_pointers,
+                    heap_item_pointer,
+                };
+                pq.initialize_node(&mut node, meta_page, full_vector);
+                node
+            }
         }
     }
 
@@ -126,46 +136,6 @@ impl Node {
         WritableNode { wb: wb }
     }
 
-    pub unsafe fn update_neighbors_and_pq(
-        index: &PgRelation,
-        index_pointer: ItemPointer,
-        neighbors: &Vec<NeighborWithDistance>,
-        meta_page: &MetaPage,
-        vector: Option<Vec<u8>>,
-    ) {
-        let node = Node::modify(index, index_pointer);
-        let mut archived = node.get_archived_node();
-        for (i, new_neighbor) in neighbors.iter().enumerate() {
-            //TODO: why do we need to recreate the archive?
-            let mut a_index_pointer = archived.as_mut().neighbor_index_pointer().index_pin(i);
-            //TODO hate that we have to set each field like this
-            a_index_pointer.block_number =
-                new_neighbor.get_index_pointer_to_neighbor().block_number;
-            a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
-        }
-        //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            //TODO: why do we need to recreate the archive?
-            let archived = node.get_archived_node();
-            let mut past_last_index_pointers =
-                archived.neighbor_index_pointer().index_pin(neighbors.len());
-            past_last_index_pointers.block_number = InvalidBlockNumber;
-            past_last_index_pointers.offset = InvalidOffsetNumber;
-        }
-
-        match vector {
-            Some(v) => {
-                assert!(v.len() == archived.pq_vector.len());
-                for i in 0..=v.len() - 1 {
-                    let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
-                    *pgv = v[i];
-                }
-            }
-            None => {}
-        }
-
-        node.commit()
-    }
     pub fn write(&self, tape: &mut Tape) -> ItemPointer {
         let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
         unsafe { tape.write(&bytes) }
@@ -214,6 +184,27 @@ impl ArchivedNode {
         for i in 0..self.num_neighbors() {
             let neighbor = &self.neighbor_index_pointers[i];
             f(neighbor);
+        }
+    }
+
+    pub fn set_neighbors(
+        mut self: Pin<&mut Self>,
+        neighbors: &Vec<NeighborWithDistance>,
+        meta_page: &MetaPage,
+    ) {
+        for (i, new_neighbor) in neighbors.iter().enumerate() {
+            let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
+            //TODO hate that we have to set each field like this
+            a_index_pointer.block_number =
+                new_neighbor.get_index_pointer_to_neighbor().block_number;
+            a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
+        }
+        //set the marker that the list ended
+        if neighbors.len() < meta_page.get_num_neighbors() as _ {
+            let mut past_last_index_pointers =
+                self.neighbor_index_pointer().index_pin(neighbors.len());
+            past_last_index_pointers.block_number = InvalidBlockNumber;
+            past_last_index_pointers.offset = InvalidOffsetNumber;
         }
     }
 }
@@ -381,7 +372,7 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
     Pq::new(None, sq)
 }
 
-pub unsafe fn write_pq(pq: Pq<f32>, index: &PgRelation) -> ItemPointer {
+pub unsafe fn write_pq(pq: &Pq<f32>, index: &PgRelation) -> ItemPointer {
     let vec = pq.subquantizers().to_slice_memory_order().unwrap().to_vec();
     let shape = pq.subquantizers().dim();
     let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());

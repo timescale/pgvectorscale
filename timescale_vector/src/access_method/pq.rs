@@ -1,9 +1,16 @@
+use std::pin::Pin;
+
 use ndarray::{Array1, Array2, Axis};
 use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
-use crate::access_method::model::read_pq;
+use crate::{
+    access_method::model::{self, read_pq},
+    util::IndexPointer,
+};
+
+use super::meta_page::MetaPage;
 
 /// pq aka Product quantization (PQ) is one of the most widely used algorithms for memory-efficient approximated nearest neighbor search,
 /// This module encapsulates a vanilla implementation of PQ that we use for the vector index.
@@ -50,16 +57,16 @@ impl PqTrainer {
 
     /// add_sample adds vectors to the training set via uniform reservoir sampling to keep the
     /// number of vectors within a reasonable memory limit.
-    pub fn add_sample(&mut self, sample: Vec<f32>) {
+    pub fn add_sample(&mut self, sample: &[f32]) {
         if self.training_set.len() >= NUM_TRAINING_SET_SIZE {
             // TODO: Cache this somehow.
             let mut rng = rand::thread_rng();
             let index = rng.gen_range(0..self.considered_samples + 1);
             if index < NUM_TRAINING_SET_SIZE {
-                self.training_set[index] = sample;
+                self.training_set[index] = sample.to_vec();
             }
         } else {
-            self.training_set.push(sample);
+            self.training_set.push(sample.to_vec());
         }
         self.considered_samples += 1;
     }
@@ -88,42 +95,6 @@ impl PqTrainer {
             instances,
         )
         .unwrap()
-    }
-}
-
-/// PgPq encapsulates functions to work with PQ.
-pub struct PgPq {
-    pq: Pq<f32>,
-}
-
-impl PgPq {
-    pub fn new(
-        meta_page: &super::meta_page::MetaPage,
-        index_relation: &PgRelation,
-    ) -> Option<PgPq> {
-        if !meta_page.get_use_pq() {
-            return None;
-        }
-        let pq_id = meta_page.get_pq_pointer();
-        match pq_id {
-            None => None,
-            Some(pq_id) => {
-                let pq = unsafe { read_pq(&index_relation, &pq_id) };
-                Some(PgPq { pq })
-            }
-        }
-    }
-    /// quantize produces a quantized vector from the raw pg vector.
-    pub fn quantize(self, vector: Vec<f32>) -> Vec<u8> {
-        let og_vec = Array1::from(vector.to_vec());
-        self.pq.quantize_vector(og_vec).to_vec()
-    }
-    pub fn distance_calculator(
-        self,
-        query: &[f32],
-        distance_fn: fn(&[f32], &[f32]) -> f32,
-    ) -> DistanceCalculator {
-        DistanceCalculator::new(&self.pq, distance_fn, query)
     }
 }
 
@@ -158,18 +129,103 @@ fn build_distance_table(
     distance_table
 }
 
+pub struct PqQuantizer {
+    pq_trainer: Option<PqTrainer>,
+    pq: Option<Pq<f32>>,
+}
+
+impl PqQuantizer {
+    pub fn new() -> PqQuantizer {
+        Self {
+            pq_trainer: None,
+            pq: None,
+        }
+    }
+
+    pub fn load(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
+        assert!(self.pq_trainer.is_none());
+        let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
+        self.pq = unsafe { Some(read_pq(&index_relation, &pq_item_pointer)) };
+    }
+
+    pub fn initialize_node(
+        &self,
+        node: &mut super::model::Node,
+        meta_page: &MetaPage,
+        full_vector: Vec<f32>,
+    ) {
+        if self.pq_trainer.is_some() {
+            let pq_vec_len = meta_page.get_pq_vector_length();
+            node.pq_vector = (0..pq_vec_len).map(|_| 0u8).collect();
+        } else {
+            assert!(self.pq.is_some());
+            let pq_vec_len = meta_page.get_pq_vector_length();
+            node.pq_vector = self.quantize(full_vector);
+            assert!(node.pq_vector.len() == pq_vec_len);
+        }
+    }
+
+    pub fn update_node_after_traing(
+        &self,
+        archived: &mut Pin<&mut super::model::ArchivedNode>,
+        full_vector: Vec<f32>,
+    ) {
+        let pq_vector = self.quantize(full_vector);
+
+        assert!(pq_vector.len() == archived.pq_vector.len());
+        for i in 0..=pq_vector.len() - 1 {
+            let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
+            *pgv = pq_vector[i];
+        }
+    }
+
+    pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+        self.pq_trainer = Some(PqTrainer::new(meta_page));
+    }
+
+    pub fn add_sample(&mut self, sample: &[f32]) {
+        self.pq_trainer.as_mut().unwrap().add_sample(sample);
+    }
+
+    pub fn finish_training(&mut self) {
+        self.pq = Some(self.pq_trainer.take().unwrap().train_pq());
+    }
+
+    pub fn write_metadata(&self, index: &PgRelation) {
+        assert!(self.pq.is_some());
+        let index_pointer: IndexPointer =
+            unsafe { model::write_pq(self.pq.as_ref().unwrap(), &index) };
+        super::meta_page::MetaPage::update_pq_pointer(&index, index_pointer);
+    }
+
+    pub fn quantize(&self, full_vector: Vec<f32>) -> Vec<u8> {
+        assert!(self.pq.is_some());
+        let pq = self.pq.as_ref().unwrap();
+        let array_vec = Array1::from(full_vector);
+        pq.quantize_vector(array_vec).to_vec()
+    }
+
+    pub fn get_distance_table(
+        &self,
+        query: &[f32],
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+    ) -> PqDistanceTable {
+        PqDistanceTable::new(&self.pq.as_ref().unwrap(), distance_fn, query)
+    }
+}
+
 /// DistanceCalculator encapsulates the code to generate distances between a PQ vector and a query.
-pub struct DistanceCalculator {
+pub struct PqDistanceTable {
     distance_table: Vec<f32>,
 }
 
-impl DistanceCalculator {
+impl PqDistanceTable {
     pub fn new(
         pq: &Pq<f32>,
         distance_fn: fn(&[f32], &[f32]) -> f32,
         query: &[f32],
-    ) -> DistanceCalculator {
-        DistanceCalculator {
+    ) -> PqDistanceTable {
+        PqDistanceTable {
             distance_table: build_distance_table(pq, query, distance_fn),
         }
     }

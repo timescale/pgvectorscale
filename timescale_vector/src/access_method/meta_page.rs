@@ -5,6 +5,9 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
+use super::pq::PqQuantizer;
+use super::quantizer::Quantizer;
+
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
@@ -55,8 +58,16 @@ impl MetaPage {
         self.max_alpha
     }
 
-    pub fn get_use_pq(&self) -> bool {
+    fn get_use_pq(&self) -> bool {
         self.use_pq
+    }
+
+    pub fn get_quantizer(&self) -> Quantizer {
+        if self.get_use_pq() {
+            Quantizer::PQ(PqQuantizer::new())
+        } else {
+            Quantizer::None
+        }
     }
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
