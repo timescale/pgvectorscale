@@ -9,6 +9,7 @@ pub mod guc;
 mod meta_page;
 mod model;
 pub mod options;
+mod quantizer;
 mod scan;
 mod vacuum;
 

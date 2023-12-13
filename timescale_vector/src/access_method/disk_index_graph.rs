@@ -86,14 +86,12 @@ impl<'h> Graph for DiskIndexGraph<'h> {
             MetaPage::update_init_ids(index, vec![neighbors_of]);
             self.meta_page = MetaPage::read(index);
         }
+
         unsafe {
-            Node::update_neighbors_and_pq(
-                index,
-                neighbors_of,
-                &new_neighbors,
-                self.get_meta_page(index),
-                None,
-            );
+            let node = Node::modify(index, neighbors_of);
+            let archived = node.get_archived_node();
+            archived.set_neighbors(&new_neighbors, &self.meta_page);
+            node.commit();
         }
     }
 }

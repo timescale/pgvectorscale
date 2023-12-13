@@ -8,7 +8,7 @@ use crate::{
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
-use super::graph::ListSearchResult;
+use super::{graph::ListSearchResult, quantizer::Quantizer};
 
 struct TSVResponseIterator<'a> {
     query: Vec<f32>,
@@ -16,14 +16,21 @@ struct TSVResponseIterator<'a> {
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
+    quantizer: Quantizer,
 }
 
 impl<'a> TSVResponseIterator<'a> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
         let meta_page = MetaPage::read(&index);
-        let use_pq = meta_page.get_use_pq();
-        let mut graph =
-            DiskIndexGraph::new(&index, VectorProvider::new(None, None, use_pq, use_pq));
+        let mut quantizer = meta_page.get_quantizer();
+        match &mut quantizer {
+            Quantizer::None => {}
+            Quantizer::PQ(pq) => pq.load(index, &meta_page),
+        }
+        let mut graph = DiskIndexGraph::new(
+            &index,
+            VectorProvider::new(None, None, &quantizer, quantizer.is_some()),
+        );
         use super::graph::Graph;
         let lsr = graph.greedy_search_streaming_init(&index, query);
         Self {
@@ -32,16 +39,17 @@ impl<'a> TSVResponseIterator<'a> {
             lsr,
             current: 0,
             last_buffer: None,
+            quantizer,
         }
     }
 }
 
 impl<'a> TSVResponseIterator<'a> {
     fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
-        let meta_page = MetaPage::read(&index);
-        let use_pq = meta_page.get_use_pq();
-        let mut graph =
-            DiskIndexGraph::new(&index, VectorProvider::new(None, None, use_pq, use_pq));
+        let mut graph = DiskIndexGraph::new(
+            &index,
+            VectorProvider::new(None, None, &self.quantizer, self.quantizer.is_some()),
+        );
         use super::graph::Graph;
 
         /* Iterate until we find a non-deleted tuple */

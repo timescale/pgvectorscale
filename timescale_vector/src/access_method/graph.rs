@@ -4,11 +4,11 @@ use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
 use crate::access_method::model::Node;
-use crate::access_method::pq::{DistanceCalculator, PgPq};
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::model::PgVector;
+use super::quantizer::Quantizer;
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
@@ -59,8 +59,8 @@ impl Drop for TableSlot {
 
 #[derive(Clone)]
 pub struct VectorProvider<'a> {
-    pq_enabled: bool,
-    calc_distance_with_pq: bool,
+    quantizer: &'a Quantizer,
+    calc_distance_with_quantizer: bool,
     heap_rel: Option<&'a PgRelation>,
     heap_attr_number: Option<pg_sys::AttrNumber>,
     distance_fn: fn(&[f32], &[f32]) -> f32,
@@ -70,24 +70,22 @@ impl<'a> VectorProvider<'a> {
     pub fn new(
         heap_rel: Option<&'a PgRelation>,
         heap_attr_number: Option<pg_sys::AttrNumber>,
-        pq_enabled: bool,
-        calc_distance_with_pq: bool,
+        quantizer: &'a Quantizer,
+        calc_distance_with_quantizer: bool,
     ) -> Self {
         Self {
-            pq_enabled,
-            calc_distance_with_pq,
+            quantizer,
+            calc_distance_with_quantizer,
             heap_rel,
             heap_attr_number,
             distance_fn: distance,
         }
     }
 
-    pub unsafe fn get_full_vector_copy_from_heap(
+    pub unsafe fn get_full_vector_copy_from_heap_pointer(
         &self,
-        index: &PgRelation,
-        index_pointer: ItemPointer,
+        heap_pointer: ItemPointer,
     ) -> Vec<f32> {
-        let heap_pointer = self.get_heap_pointer(index, index_pointer);
         let slot = TableSlot::new(self.heap_rel.unwrap());
         self.init_slot(&slot, heap_pointer);
         let slice = self.get_slice(&slot);
@@ -124,6 +122,10 @@ impl<'a> VectorProvider<'a> {
         heap_pointer
     }
 
+    fn get_distance_measure(&self, query: &[f32]) -> DistanceMeasure {
+        return DistanceMeasure::new(self.quantizer, query, self.calc_distance_with_quantizer);
+    }
+
     unsafe fn get_distance(
         &self,
         index: &PgRelation,
@@ -132,20 +134,20 @@ impl<'a> VectorProvider<'a> {
         dm: &DistanceMeasure,
         stats: &mut GreedySearchStats,
     ) -> (f32, HeapPointer) {
-        if self.calc_distance_with_pq {
+        if self.calc_distance_with_quantizer {
             let rn = unsafe { Node::read(index, index_pointer) };
             stats.node_reads += 1;
             let node = rn.get_archived_node();
             assert!(node.pq_vector.len() > 0);
             let vec = node.pq_vector.as_slice();
-            let distance = dm.get_pq_distance(vec);
+            let distance = dm.get_quantized_distance(vec);
             stats.pq_distance_comparisons += 1;
             stats.distance_comparisons += 1;
             return (distance, node.heap_item_pointer.deserialize_item_pointer());
         }
 
         //now we know we're doing a distance calc on the full-sized vector
-        if self.pq_enabled {
+        if self.quantizer.is_some() {
             //have to get it from the heap
             let heap_pointer = self.get_heap_pointer(index, index_pointer);
             stats.node_reads += 1;
@@ -172,7 +174,7 @@ impl<'a> VectorProvider<'a> {
         index: &'i PgRelation,
         index_pointer: IndexPointer,
     ) -> FullVectorDistanceState<'i> {
-        if self.pq_enabled {
+        if self.quantizer.is_some() {
             let heap_pointer = self.get_heap_pointer(index, index_pointer);
             let slot = TableSlot::new(self.heap_rel.unwrap());
             self.init_slot(&slot, heap_pointer);
@@ -195,7 +197,7 @@ impl<'a> VectorProvider<'a> {
         index: &PgRelation,
         index_pointer: IndexPointer,
     ) -> f32 {
-        if self.pq_enabled {
+        if self.quantizer.is_some() {
             let heap_pointer = self.get_heap_pointer(index, index_pointer);
             let slot = TableSlot::new(self.heap_rel.unwrap());
             self.init_slot(&slot, heap_pointer);
@@ -222,40 +224,37 @@ pub struct FullVectorDistanceState<'a> {
 }
 
 pub struct DistanceMeasure {
-    distance_calculator: Option<DistanceCalculator>,
-    //query: Option<&[f32]>
+    pq_distance_table: Option<super::pq::PqDistanceTable>,
 }
 
 impl DistanceMeasure {
-    pub fn new(
-        index: &PgRelation,
-        meta_page: &MetaPage,
-        query: &[f32],
-        calc_distance_with_pq: bool,
-    ) -> Self {
-        let use_pq = meta_page.get_use_pq();
-        if calc_distance_with_pq {
-            assert!(use_pq);
-            let pq = PgPq::new(meta_page, index);
-            let dc = pq.unwrap().distance_calculator(query, distance);
+    pub fn new(quantizer: &Quantizer, query: &[f32], calc_distance_with_quantizer: bool) -> Self {
+        if !calc_distance_with_quantizer {
             return Self {
-                distance_calculator: Some(dc),
+                pq_distance_table: None,
             };
         }
-
-        return Self {
-            distance_calculator: None,
-        };
+        match quantizer {
+            Quantizer::None => Self {
+                pq_distance_table: None,
+            },
+            Quantizer::PQ(pq) => {
+                let dc = pq.get_distance_table(query, distance);
+                Self {
+                    pq_distance_table: Some(dc),
+                }
+            }
+        }
     }
 
-    fn get_pq_distance(&self, vec: &[u8]) -> f32 {
-        let dc = self.distance_calculator.as_ref().unwrap();
+    fn get_quantized_distance(&self, vec: &[u8]) -> f32 {
+        let dc = self.pq_distance_table.as_ref().unwrap();
         let distance = dc.distance(vec);
         distance
     }
 
     fn get_full_vector_distance(&self, vec: &[f32], query: &[f32]) -> f32 {
-        assert!(self.distance_calculator.is_none());
+        assert!(self.pq_distance_table.is_none());
         distance(vec, query)
     }
 }
@@ -305,7 +304,7 @@ impl ListSearchResult {
             inserted: HashSet::new(),
             max_history_size: None,
             dm: DistanceMeasure {
-                distance_calculator: None,
+                pq_distance_table: None,
             },
             stats: GreedySearchStats::new(),
         }
@@ -422,16 +421,6 @@ pub trait Graph {
 
     fn get_vector_provider(&self) -> VectorProvider;
 
-    fn get_distance_measure(
-        &self,
-        index: &PgRelation,
-        query: &[f32],
-        calc_distance_with_pq: bool,
-    ) -> DistanceMeasure {
-        let meta_page = self.get_meta_page(index);
-        return DistanceMeasure::new(index, meta_page, query, calc_distance_with_pq);
-    }
-
     fn set_neighbors(
         &mut self,
         index: &PgRelation,
@@ -467,13 +456,8 @@ pub trait Graph {
             //no nodes in the graph
             return (ListSearchResult::empty(), None);
         }
-        let dm = {
-            self.get_distance_measure(
-                index,
-                query,
-                self.get_vector_provider().calc_distance_with_pq,
-            )
-        };
+        let dm = self.get_vector_provider().get_distance_measure(query);
+
         let mut l = ListSearchResult::new(
             index,
             Some(search_list_size),
@@ -498,11 +482,8 @@ pub trait Graph {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = self.get_distance_measure(
-            index,
-            query,
-            self.get_vector_provider().calc_distance_with_pq,
-        );
+        let dm = self.get_vector_provider().get_distance_measure(query);
+
         ListSearchResult::new(index, None, self, init_ids.unwrap(), query, dm)
     }
 

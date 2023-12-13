@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use ndarray::Array1;
 use pgrx::*;
-use reductive::pq::{Pq, QuantizeVector};
 
 use crate::util::{IndexPointer, ItemPointer};
 
 use super::graph::{Graph, VectorProvider};
 use super::meta_page::MetaPage;
 use super::model::*;
+use super::quantizer::Quantizer;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -32,20 +31,14 @@ impl<'a> BuilderGraph<'a> {
         }
     }
 
-    unsafe fn get_pq_vector(
-        &self,
-        index: &PgRelation,
-        index_pointer: ItemPointer,
-        pq: &Pq<f32>,
-    ) -> Vec<u8> {
+    unsafe fn get_full_vector(&self, heap_pointer: ItemPointer) -> Vec<f32> {
         let vp = self.get_vector_provider();
-        let copy = vp.get_full_vector_copy_from_heap(index, index_pointer);
-        let og_vec = Array1::from(copy);
-        pq.quantize_vector(og_vec).to_vec()
+        vp.get_full_vector_copy_from_heap_pointer(heap_pointer)
     }
 
-    pub unsafe fn write(&self, index: &PgRelation, pq: &Option<Pq<f32>>) -> WriteStats {
+    pub unsafe fn write(&self, index: &PgRelation, quantizer: &Quantizer) -> WriteStats {
         let mut stats = WriteStats::new();
+        let meta = self.get_meta_page(index);
 
         //TODO: OPT: do this in order of item pointers
         for (index_pointer, neighbors) in &self.neighbor_map {
@@ -62,17 +55,22 @@ impl<'a> BuilderGraph<'a> {
             };
             stats.num_neighbors += neighbors.len();
 
-            let pqv = match pq {
-                Some(pq) => Some(self.get_pq_vector(index, *index_pointer, pq)),
-                None => None,
+            let node = Node::modify(index, *index_pointer);
+            let mut archived = node.get_archived_node();
+            archived.as_mut().set_neighbors(neighbors, &meta);
+
+            match quantizer {
+                Quantizer::None => {}
+                Quantizer::PQ(pq) => {
+                    let heap_pointer = node
+                        .get_archived_node()
+                        .heap_item_pointer
+                        .deserialize_item_pointer();
+                    let full_vector = self.get_full_vector(heap_pointer);
+                    pq.update_node_after_traing(&mut archived, full_vector);
+                }
             };
-            Node::update_neighbors_and_pq(
-                index,
-                *index_pointer,
-                neighbors,
-                self.get_meta_page(index),
-                pqv,
-            );
+            node.commit();
         }
         stats
     }
