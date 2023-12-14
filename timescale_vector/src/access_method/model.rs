@@ -361,8 +361,7 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
         }
         let qvn = PqQuantizerVector::read(index, &next);
         let vn = qvn.get_archived_node();
-        let vs = vn.vec.as_slice();
-        result.extend_from_slice(vs);
+        result.extend(vn.vec.iter());
         next = vn.next_vector_pointer.deserialize_item_pointer();
     }
     let sq = Array3::from_shape_vec(
