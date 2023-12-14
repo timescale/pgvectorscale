@@ -1,11 +1,11 @@
 use pgrx::PgRelation;
 
-use crate::util::{IndexPointer, ItemPointer};
+use crate::util::ItemPointer;
 
 use super::{
     graph::{Graph, VectorProvider},
     meta_page::MetaPage,
-    model::{NeighborWithDistance, Node, ReadableNode},
+    model::{ArchivedNode, NeighborWithDistance, Node, ReadableNode},
 };
 
 pub struct DiskIndexGraph<'a> {
@@ -36,18 +36,13 @@ impl<'h> Graph for DiskIndexGraph<'h> {
         self.meta_page.get_init_ids()
     }
 
-    fn get_neighbors(
-        &self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        result: &mut Vec<IndexPointer>,
-    ) -> bool {
-        let rn = self.read(index, neighbors_of);
-        rn.get_archived_node().apply_to_neighbors(|n| {
+    fn get_neighbors(&self, node: &ArchivedNode, _neighbors_of: ItemPointer) -> Vec<ItemPointer> {
+        let mut result = Vec::with_capacity(node.num_neighbors());
+        node.apply_to_neighbors(|n| {
             let n = n.deserialize_item_pointer();
             result.push(n)
         });
-        true
+        result
     }
 
     fn get_neighbors_with_distances(

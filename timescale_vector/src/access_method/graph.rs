@@ -7,7 +7,7 @@ use crate::access_method::model::Node;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
-use super::model::PgVector;
+use super::model::{ArchivedNode, PgVector};
 use super::quantizer::Quantizer;
 use super::{
     meta_page::MetaPage,
@@ -128,44 +128,37 @@ impl<'a> VectorProvider<'a> {
 
     unsafe fn get_distance(
         &self,
-        index: &PgRelation,
-        index_pointer: IndexPointer,
+        node: &ArchivedNode,
         query: &[f32],
         dm: &DistanceMeasure,
         stats: &mut GreedySearchStats,
-    ) -> (f32, HeapPointer) {
+    ) -> f32 {
         if self.calc_distance_with_quantizer {
-            let rn = unsafe { Node::read(index, index_pointer) };
-            stats.node_reads += 1;
-            let node = rn.get_archived_node();
             assert!(node.pq_vector.len() > 0);
             let vec = node.pq_vector.as_slice();
             let distance = dm.get_quantized_distance(vec);
             stats.pq_distance_comparisons += 1;
             stats.distance_comparisons += 1;
-            return (distance, node.heap_item_pointer.deserialize_item_pointer());
+            return distance;
         }
 
         //now we know we're doing a distance calc on the full-sized vector
         if self.quantizer.is_some() {
             //have to get it from the heap
-            let heap_pointer = self.get_heap_pointer(index, index_pointer);
-            stats.node_reads += 1;
+            let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
             let slot = TableSlot::new(self.heap_rel.unwrap());
             self.init_slot(&slot, heap_pointer);
             let slice = self.get_slice(&slot);
+            let distance = dm.get_full_vector_distance(slice, query);
             stats.distance_comparisons += 1;
-            return (dm.get_full_vector_distance(slice, query), heap_pointer);
+            return distance;
         } else {
             //have to get it from the index
-            let rn = unsafe { Node::read(index, index_pointer) };
-            stats.node_reads += 1;
-            let node = rn.get_archived_node();
             assert!(node.vector.len() > 0);
             let vec = node.vector.as_slice();
             let distance = dm.get_full_vector_distance(vec, query);
             stats.distance_comparisons += 1;
-            return (distance, node.heap_item_pointer.deserialize_item_pointer());
+            return distance;
         }
     }
 
@@ -262,6 +255,7 @@ impl DistanceMeasure {
 struct ListSearchNeighbor {
     index_pointer: IndexPointer,
     heap_pointer: HeapPointer,
+    neighbor_index_pointers: Vec<IndexPointer>,
     distance: f32,
     visited: bool,
 }
@@ -279,10 +273,16 @@ impl PartialEq for ListSearchNeighbor {
 }
 
 impl ListSearchNeighbor {
-    pub fn new(index_pointer: IndexPointer, heap_pointer: HeapPointer, distance: f32) -> Self {
+    pub fn new(
+        index_pointer: IndexPointer,
+        heap_pointer: HeapPointer,
+        distance: f32,
+        neighbor_index_pointers: Vec<IndexPointer>,
+    ) -> Self {
         Self {
             index_pointer,
             heap_pointer,
+            neighbor_index_pointers,
             distance,
             visited: false,
         }
@@ -349,12 +349,21 @@ impl ListSearchResult {
             return;
         }
 
-        let vp = graph.get_vector_provider();
-        let (dist, heap_pointer) =
-            unsafe { vp.get_distance(index, index_pointer, query, &self.dm, &mut self.stats) };
+        let rn = unsafe { Node::read(index, index_pointer) };
+        self.stats.node_reads += 1;
+        let node = rn.get_archived_node();
 
-        let neighbor = ListSearchNeighbor::new(index_pointer, heap_pointer, dist);
-        self._insert_neighbor(neighbor);
+        let vp = graph.get_vector_provider();
+        let distance = unsafe { vp.get_distance(node, query, &self.dm, &mut self.stats) };
+
+        let neighbors = graph.get_neighbors(node, index_pointer);
+        let lsn = ListSearchNeighbor::new(
+            index_pointer,
+            node.heap_item_pointer.deserialize_item_pointer(),
+            distance,
+            neighbors,
+        );
+        self._insert_neighbor(lsn);
     }
 
     /// Internal function
@@ -374,7 +383,7 @@ impl ListSearchResult {
         self.best_candidate.insert(idx, n)
     }
 
-    fn visit_closest(&mut self, pos_limit: usize) -> Option<(ItemPointer, f32)> {
+    fn visit_closest(&mut self, pos_limit: usize) -> Option<&ListSearchNeighbor> {
         //OPT: should we optimize this not to do a linear search each time?
         let neighbor_position = self.best_candidate.iter().position(|n| !n.visited);
         match neighbor_position {
@@ -384,7 +393,7 @@ impl ListSearchResult {
                 }
                 let n = &mut self.best_candidate[pos];
                 n.visited = true;
-                Some((n.index_pointer, n.distance))
+                Some(n)
             }
             None => None,
         }
@@ -404,12 +413,7 @@ impl ListSearchResult {
 pub trait Graph {
     fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a>;
     fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>>;
-    fn get_neighbors(
-        &self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        result: &mut Vec<IndexPointer>,
-    ) -> bool;
+    fn get_neighbors(&self, node: &ArchivedNode, neighbors_of: ItemPointer) -> Vec<IndexPointer>;
     fn get_neighbors_with_distances(
         &self,
         index: &PgRelation,
@@ -499,20 +503,16 @@ pub trait Graph {
         Self: Graph,
     {
         //OPT: Only build v when needed.
-        let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
         let mut neighbors =
             Vec::<IndexPointer>::with_capacity(self.get_meta_page(index).get_num_neighbors() as _);
-        while let Some((index_pointer, distance)) = lsr.visit_closest(visit_n_closest) {
+        let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
+        while let Some(node) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
-            let neighbors_existed = self.get_neighbors(index, index_pointer, &mut neighbors);
-            if !neighbors_existed {
-                panic!("Nodes in the list search results that aren't in the builder");
-            }
-
-            for neighbor_index_pointer in &neighbors {
+            v.insert(NeighborWithDistance::new(node.index_pointer, node.distance));
+            neighbors.extend_from_slice(node.neighbor_index_pointers.as_slice());
+            for neighbor_index_pointer in neighbors.iter() {
                 lsr.insert(index, self, *neighbor_index_pointer, query)
             }
-            v.insert(NeighborWithDistance::new(index_pointer, distance));
         }
 
         Some(v)
