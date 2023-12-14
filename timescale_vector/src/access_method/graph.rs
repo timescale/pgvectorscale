@@ -290,7 +290,8 @@ impl ListSearchNeighbor {
 }
 
 pub struct ListSearchResult {
-    best_candidate: Vec<ListSearchNeighbor>, //keep sorted by distanced
+    candidate_storage: Vec<ListSearchNeighbor>, //plain storage
+    best_candidate: Vec<usize>,                 //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
     dm: DistanceMeasure,
@@ -300,6 +301,7 @@ pub struct ListSearchResult {
 impl ListSearchResult {
     fn empty() -> Self {
         Self {
+            candidate_storage: vec![],
             best_candidate: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
@@ -325,6 +327,7 @@ impl ListSearchResult {
     {
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
+            candidate_storage: Vec::with_capacity(search_list_size * neigbors),
             best_candidate: Vec::with_capacity(search_list_size * neigbors),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
             max_history_size,
@@ -374,7 +377,7 @@ impl ListSearchResult {
         if let Some(max_size) = self.max_history_size {
             if self.best_candidate.len() >= max_size {
                 let last = self.best_candidate.last().unwrap();
-                if n >= *last {
+                if n >= self.candidate_storage[*last] {
                     //n is too far in the list to be the best candidate.
                     return;
                 }
@@ -382,19 +385,26 @@ impl ListSearchResult {
             }
         }
         //insert while preserving sort order.
-        let idx = self.best_candidate.partition_point(|x| *x < n);
-        self.best_candidate.insert(idx, n)
+        let idx = self
+            .best_candidate
+            .partition_point(|x| self.candidate_storage[*x] < n);
+        self.candidate_storage.push(n);
+        let pos = self.candidate_storage.len() - 1;
+        self.best_candidate.insert(idx, pos)
     }
 
     fn visit_closest(&mut self, pos_limit: usize) -> Option<&ListSearchNeighbor> {
         //OPT: should we optimize this not to do a linear search each time?
-        let neighbor_position = self.best_candidate.iter().position(|n| !n.visited);
+        let neighbor_position = self
+            .best_candidate
+            .iter()
+            .position(|n| !self.candidate_storage[*n].visited);
         match neighbor_position {
             Some(pos) => {
                 if pos > pos_limit {
                     return None;
                 }
-                let n = &mut self.best_candidate[pos];
+                let n = &mut self.candidate_storage[self.best_candidate[pos]];
                 n.visited = true;
                 Some(n)
             }
@@ -408,7 +418,7 @@ impl ListSearchResult {
         if self.best_candidate.is_empty() {
             return None;
         }
-        let f = self.best_candidate.remove(0);
+        let f = &self.candidate_storage[self.best_candidate.remove(0)];
         return Some((f.heap_pointer, f.index_pointer));
     }
 }
