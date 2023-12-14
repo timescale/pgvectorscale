@@ -86,21 +86,14 @@ impl<'a> Graph for BuilderGraph<'a> {
         self.meta_page.get_init_ids()
     }
 
-    fn get_neighbors(
-        &self,
-        _index: &PgRelation,
-        neighbors_of: ItemPointer,
-        result: &mut Vec<IndexPointer>,
-    ) -> bool {
+    fn get_neighbors(&self, _node: &ArchivedNode, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
-            Some(n) => {
-                for nwd in n {
-                    result.push(nwd.get_index_pointer_to_neighbor());
-                }
-                true
-            }
-            None => false,
+            Some(n) => n
+                .iter()
+                .map(|n| n.get_index_pointer_to_neighbor())
+                .collect(),
+            None => vec![],
         }
     }
 
