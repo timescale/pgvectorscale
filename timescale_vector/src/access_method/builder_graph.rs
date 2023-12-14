@@ -81,7 +81,7 @@ impl<'a> Graph for BuilderGraph<'a> {
         unsafe { Node::read(index, index_pointer) }
     }
 
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
+    fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
         //returns a vector for generality
         self.meta_page.get_init_ids()
     }

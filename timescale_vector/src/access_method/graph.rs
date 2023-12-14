@@ -317,13 +317,16 @@ impl ListSearchResult {
         init_ids: Vec<ItemPointer>,
         query: &[f32],
         dm: DistanceMeasure,
+        search_list_size: usize,
+        meta_page: &MetaPage,
     ) -> Self
     where
         G: Graph + ?Sized,
     {
+        let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
-            best_candidate: Vec::new(),
-            inserted: HashSet::new(),
+            best_candidate: Vec::with_capacity(search_list_size * neigbors),
+            inserted: HashSet::with_capacity(search_list_size * neigbors),
             max_history_size,
             stats: GreedySearchStats::new(),
             dm: dm,
@@ -412,7 +415,7 @@ impl ListSearchResult {
 
 pub trait Graph {
     fn read<'a>(&self, index: &'a PgRelation, index_pointer: ItemPointer) -> ReadableNode<'a>;
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>>;
+    fn get_init_ids(&self) -> Option<Vec<ItemPointer>>;
     fn get_neighbors(&self, node: &ArchivedNode, neighbors_of: ItemPointer) -> Vec<IndexPointer>;
     fn get_neighbors_with_distances(
         &self,
@@ -447,20 +450,21 @@ pub trait Graph {
     /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     fn greedy_search(
-        &mut self,
+        &self,
         index: &PgRelation,
         query: &[f32],
-        search_list_size: usize,
-    ) -> (ListSearchResult, Option<HashSet<NeighborWithDistance>>)
+        meta_page: &MetaPage,
+    ) -> (ListSearchResult, HashSet<NeighborWithDistance>)
     where
         Self: Graph,
     {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
-            return (ListSearchResult::empty(), None);
+            return (ListSearchResult::empty(), HashSet::with_capacity(0));
         }
         let dm = self.get_vector_provider().get_distance_measure(query);
+        let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
             index,
@@ -469,17 +473,28 @@ pub trait Graph {
             init_ids.unwrap(),
             query,
             dm,
+            search_list_size,
+            meta_page,
         );
-        let v = self.greedy_search_iterate(&mut l, index, query, search_list_size);
-        return (l, v);
+        let mut visited_nodes = HashSet::with_capacity(search_list_size);
+        self.greedy_search_iterate(
+            &mut l,
+            index,
+            query,
+            search_list_size,
+            Some(&mut visited_nodes),
+        );
+        return (l, visited_nodes);
     }
 
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
     /// the next elements.
     fn greedy_search_streaming_init(
-        &mut self,
+        &self,
         index: &PgRelation,
         query: &[f32],
+        search_list_size: usize,
+        meta_page: &MetaPage,
     ) -> ListSearchResult {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
@@ -488,34 +503,48 @@ pub trait Graph {
         }
         let dm = self.get_vector_provider().get_distance_measure(query);
 
-        ListSearchResult::new(index, None, self, init_ids.unwrap(), query, dm)
+        ListSearchResult::new(
+            index,
+            None,
+            self,
+            init_ids.unwrap(),
+            query,
+            dm,
+            search_list_size,
+            meta_page,
+        )
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     fn greedy_search_iterate(
-        &mut self,
+        &self,
         lsr: &mut ListSearchResult,
         index: &PgRelation,
         query: &[f32],
         visit_n_closest: usize,
-    ) -> Option<HashSet<NeighborWithDistance>>
-    where
+        mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
+    ) where
         Self: Graph,
     {
         //OPT: Only build v when needed.
         let mut neighbors =
             Vec::<IndexPointer>::with_capacity(self.get_meta_page(index).get_num_neighbors() as _);
-        let mut v: HashSet<_> = HashSet::<NeighborWithDistance>::with_capacity(visit_n_closest);
-        while let Some(node) = lsr.visit_closest(visit_n_closest) {
+        while let Some(list_search_entry) = lsr.visit_closest(visit_n_closest) {
             neighbors.clear();
-            v.insert(NeighborWithDistance::new(node.index_pointer, node.distance));
-            neighbors.extend_from_slice(node.neighbor_index_pointers.as_slice());
+            match visited_nodes {
+                None => {}
+                Some(ref mut visited_nodes) => {
+                    visited_nodes.insert(NeighborWithDistance::new(
+                        list_search_entry.index_pointer,
+                        list_search_entry.distance,
+                    ));
+                }
+            }
+            neighbors.extend_from_slice(list_search_entry.neighbor_index_pointers.as_slice());
             for neighbor_index_pointer in neighbors.iter() {
                 lsr.insert(index, self, *neighbor_index_pointer, query)
             }
         }
-
-        Some(v)
     }
 
     /// Prune neigbors by prefering neighbors closer to the point in question
@@ -656,11 +685,10 @@ pub trait Graph {
         }
 
         //TODO: make configurable?
-        let (l, v) =
-            self.greedy_search(index, vec, meta_page.get_search_list_size_for_build() as _);
+        let (l, v) = self.greedy_search(index, vec, meta_page);
         greedy_search_stats.combine(l.stats);
         let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.unwrap().into_iter().collect());
+            self.prune_neighbors(index, index_pointer, v.into_iter().collect());
         prune_neighbor_stats.combine(forward_stats);
 
         //set forward pointers

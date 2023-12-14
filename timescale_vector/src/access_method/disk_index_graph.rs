@@ -32,7 +32,7 @@ impl<'h> Graph for DiskIndexGraph<'h> {
         unsafe { Node::read(index, index_pointer) }
     }
 
-    fn get_init_ids(&mut self) -> Option<Vec<ItemPointer>> {
+    fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
         self.meta_page.get_init_ids()
     }
 

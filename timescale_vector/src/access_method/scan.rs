@@ -27,12 +27,12 @@ impl<'a> TSVResponseIterator<'a> {
             Quantizer::None => {}
             Quantizer::PQ(pq) => pq.load(index, &meta_page),
         }
-        let mut graph = DiskIndexGraph::new(
+        let graph = DiskIndexGraph::new(
             &index,
             VectorProvider::new(None, None, &quantizer, quantizer.is_some()),
         );
         use super::graph::Graph;
-        let lsr = graph.greedy_search_streaming_init(&index, query);
+        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &meta_page);
         Self {
             query: query.to_vec(),
             search_list_size,
@@ -46,7 +46,7 @@ impl<'a> TSVResponseIterator<'a> {
 
 impl<'a> TSVResponseIterator<'a> {
     fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
-        let mut graph = DiskIndexGraph::new(
+        let graph = DiskIndexGraph::new(
             &index,
             VectorProvider::new(None, None, &self.quantizer, self.quantizer.is_some()),
         );
@@ -54,7 +54,13 @@ impl<'a> TSVResponseIterator<'a> {
 
         /* Iterate until we find a non-deleted tuple */
         loop {
-            graph.greedy_search_iterate(&mut self.lsr, index, &self.query, self.search_list_size);
+            graph.greedy_search_iterate(
+                &mut self.lsr,
+                index,
+                &self.query,
+                self.search_list_size,
+                None,
+            );
 
             let item = self.lsr.consume();
 
