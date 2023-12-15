@@ -7,31 +7,13 @@ use crate::access_method::model::Node;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
+use super::distance::distance_l2 as default_distance;
 use super::model::{ArchivedNode, PgVector};
 use super::quantizer::Quantizer;
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
 };
-
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-fn distance(a: &[f32], b: &[f32]) -> f32 {
-    super::distance_x86::distance_opt_runtime_select(a, b)
-}
-
-//TODO: use slow L2 for now. Make pluggable and simd
-#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-fn distance(a: &[f32], b: &[f32]) -> f32 {
-    assert_eq!(a.len(), b.len());
-
-    let norm: f32 = a
-        .iter()
-        .zip(b.iter())
-        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
-        .sum();
-    assert!(norm >= 0.);
-    norm.sqrt()
-}
 
 struct TableSlot {
     slot: PgBox<TupleTableSlot>,
@@ -78,7 +60,7 @@ impl<'a> VectorProvider<'a> {
             calc_distance_with_quantizer,
             heap_rel,
             heap_attr_number,
-            distance_fn: distance,
+            distance_fn: default_distance,
         }
     }
 
@@ -232,7 +214,7 @@ impl DistanceMeasure {
                 pq_distance_table: None,
             },
             Quantizer::PQ(pq) => {
-                let dc = pq.get_distance_table(query, distance);
+                let dc = pq.get_distance_table(query, default_distance);
                 Self {
                     pq_distance_table: Some(dc),
                 }
@@ -248,7 +230,7 @@ impl DistanceMeasure {
 
     fn get_full_vector_distance(&self, vec: &[f32], query: &[f32]) -> f32 {
         assert!(self.pq_distance_table.is_none());
-        distance(vec, query)
+        default_distance(vec, query)
     }
 }
 

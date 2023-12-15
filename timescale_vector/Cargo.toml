@@ -4,7 +4,7 @@ version = "0.0.2"
 edition = "2021"
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["pg16"]
@@ -14,9 +14,9 @@ pg_test = []
 
 [dependencies]
 memoffset = "0.9.0"
-pgrx = "=0.11.1"
+pgrx = "=0.11.2"
 rkyv = { version="0.7.42", features=["validation"]}
-simdeez = {version = "1.0"}
+simdeez = {version = "1.0.8"}
 reductive = { version = "0.9.0"}
 ndarray = { version = "0.15.0", features = ["blas"] }
 blas-src = { version = "0.8", features = ["openblas"] }
@@ -29,7 +29,8 @@ rayon = "1"
 
 
 [dev-dependencies]
-pgrx-tests = "=0.11.1"
+pgrx-tests = "=0.11.2"
+criterion = "0.5.1"
 
 [profile.dev]
 panic = "unwind"
@@ -39,3 +40,8 @@ panic = "unwind"
 opt-level = 3
 lto = "fat"
 codegen-units = 1
+#debug = true
+
+[[bench]]
+name = "distance"
+harness = false
