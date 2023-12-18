@@ -205,6 +205,8 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 mod tests {
     use pgrx::*;
 
+    //TODO: add test where inserting and querying with vectors that are all the same.
+
     #[pg_test]
     unsafe fn test_index_scan() -> spi::Result<()> {
         Spi::run(&format!(
@@ -212,7 +214,7 @@ mod tests {
 
         INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
 
-        INSERT INTO test(embedding) SELECT ('[' || g::text ||', 0, 0]')::vector FROM generate_series(0, 100) g;
+        INSERT INTO test(embedding) SELECT ('[' || g::text ||', 1.0, 1.0]')::vector FROM generate_series(0, 100) g;
 
         CREATE INDEX idxtest
               ON test

@@ -15,6 +15,7 @@ use crate::util::{
     ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
 
+use super::distance::preprocess_cosine;
 use super::meta_page::MetaPage;
 use super::quantizer::Quantizer;
 
@@ -48,10 +49,11 @@ impl PgVector {
         casted
     }
 
-    pub fn to_slice(&self) -> &[f32] {
+    pub fn to_slice(&mut self) -> &[f32] {
         let dim = (*self).dim;
-        unsafe { (*self).x.as_slice(dim as _) }
-        // unsafe { std::slice::from_raw_parts((*self).x, (*self).dim as _) }
+        let raw_slice = unsafe { (*self).x.as_mut_slice(dim as _) };
+        preprocess_cosine(raw_slice);
+        raw_slice
     }
 }
 
