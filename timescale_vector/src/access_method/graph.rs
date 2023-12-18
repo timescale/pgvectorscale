@@ -7,7 +7,7 @@ use crate::access_method::model::Node;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
-use super::distance::distance_l2 as default_distance;
+use super::distance::distance_cosine as default_distance;
 use super::model::{ArchivedNode, PgVector};
 use super::quantizer::Quantizer;
 use super::{
@@ -628,7 +628,7 @@ pub trait Graph {
                     }
 
                     //todo handle the non-pq case
-                    let distance_between_candidate_and_existing_neighbor = unsafe {
+                    let mut distance_between_candidate_and_existing_neighbor = unsafe {
                         vp.get_distance_pair_for_full_vectors_from_state(
                             &dist_state,
                             index,
@@ -637,14 +637,39 @@ pub trait Graph {
                     };
                     stats.node_reads += 2;
                     stats.distance_comparisons += 1;
-                    let distance_between_candidate_and_point = candidate_neighbor.get_distance();
+                    let mut distance_between_candidate_and_point =
+                        candidate_neighbor.get_distance();
+
+                    //We need both values to be positive.
+                    //Otherwise, the case where distance_between_candidate_and_point > 0 and distance_between_candidate_and_existing_neighbor < 0 is totally wrong.
+                    //If we implement inner product distance we'll have to figure something else out.
+                    if distance_between_candidate_and_point < 0.0
+                        && distance_between_candidate_and_point >= 0.0 - f32::EPSILON
+                    {
+                        distance_between_candidate_and_point = 0.0;
+                    }
+
+                    if distance_between_candidate_and_existing_neighbor < 0.0
+                        && distance_between_candidate_and_existing_neighbor >= 0.0 - f32::EPSILON
+                    {
+                        distance_between_candidate_and_existing_neighbor = 0.0;
+                    }
+
+                    debug_assert!(distance_between_candidate_and_point >= 0.0);
+                    debug_assert!(distance_between_candidate_and_existing_neighbor >= 0.0);
+
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
-                    let factor = if distance_between_candidate_and_existing_neighbor == 0.0 {
-                        f64::MAX //avoid division by 0
-                    } else {
-                        distance_between_candidate_and_point as f64
-                            / distance_between_candidate_and_existing_neighbor as f64
-                    };
+                    let factor =
+                        if distance_between_candidate_and_existing_neighbor < 0.0 + f32::EPSILON {
+                            if distance_between_candidate_and_point < 0.0 + f32::EPSILON {
+                                1.0
+                            } else {
+                                f64::MAX
+                            }
+                        } else {
+                            distance_between_candidate_and_point as f64
+                                / distance_between_candidate_and_existing_neighbor as f64
+                        };
                     max_factors[j] = max_factors[j].max(factor)
                 }
             }
@@ -662,6 +687,7 @@ pub trait Graph {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
         let meta_page = self.get_meta_page(index);
+
         if self.is_empty() {
             self.set_neighbors(
                 index,

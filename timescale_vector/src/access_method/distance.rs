@@ -50,5 +50,16 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
 pub fn distance_cosine_unoptimized(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     let res: f32 = a.iter().zip(b).map(|(a, b)| *a * *b).sum();
-    -res
+    1.0 - res
+}
+
+pub fn preprocess_cosine(a: &mut [f32]) {
+    let norm = a.iter().map(|v| v * v).sum::<f32>();
+    if norm < f32::EPSILON {
+        return;
+    }
+    let norm = norm.sqrt();
+    if norm > 1.0 + f32::EPSILON || norm < 1.0 - f32::EPSILON {
+        a.iter_mut().for_each(|v| *v /= norm);
+    }
 }

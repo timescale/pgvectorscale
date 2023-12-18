@@ -124,7 +124,7 @@ simdeez::simd_runtime_generate!(
             dist += x[i] * y[i];
         }
 
-        -dist
+        1.0 - dist
     }
 );
 
