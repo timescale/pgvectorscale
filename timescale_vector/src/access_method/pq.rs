@@ -6,7 +6,10 @@ use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
 use crate::{
-    access_method::model::{self, read_pq},
+    access_method::{
+        distance::distance_l2,
+        model::{self, read_pq},
+    },
     util::IndexPointer,
 };
 
@@ -105,7 +108,7 @@ impl PqTrainer {
 fn build_distance_table(
     pq: &Pq<f32>,
     query: &[f32],
-    distance_fn: fn(&[f32], &[f32]) -> f32,
+    _distance_fn: fn(&[f32], &[f32]) -> f32,
 ) -> Vec<f32> {
     let sq = pq.subquantizers();
     let num_centroids = pq.n_quantizer_centroids();
@@ -118,7 +121,10 @@ fn build_distance_table(
     for (subquantizer_index, subquantizer) in sq.outer_iter().enumerate() {
         let sl = &query[subquantizer_index * ds..(subquantizer_index + 1) * ds];
         for (centroid_index, c) in subquantizer.outer_iter().enumerate() {
-            let dist = distance_fn(sl, c.to_slice().unwrap());
+            /* always use l2 for pq measurements since centeroids use k-means (which uses euclidean/l2 distance)
+             * The quantization also uses euclidean distance too. In the future we can experiment with k-mediods
+             * using a different distance measure, but this may make little difference. */
+            let dist = distance_l2(sl, c.to_slice().unwrap());
             assert!(subquantizer_index < num_subquantizers);
             assert!(centroid_index * num_subquantizers + subquantizer_index < dt_size);
             distance_table[centroid_index * num_subquantizers + subquantizer_index] = dist;
