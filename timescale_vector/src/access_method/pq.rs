@@ -7,7 +7,7 @@ use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
 use crate::{
     access_method::{
-        distance::distance_l2,
+        distance::distance_l2_optimized_for_few_dimensions,
         model::{self, read_pq},
     },
     util::IndexPointer,
@@ -124,7 +124,7 @@ fn build_distance_table(
             /* always use l2 for pq measurements since centeroids use k-means (which uses euclidean/l2 distance)
              * The quantization also uses euclidean distance too. In the future we can experiment with k-mediods
              * using a different distance measure, but this may make little difference. */
-            let dist = distance_l2(sl, c.to_slice().unwrap());
+            let dist = distance_l2_optimized_for_few_dimensions(sl, c.to_slice().unwrap());
             assert!(subquantizer_index < num_subquantizers);
             assert!(centroid_index * num_subquantizers + subquantizer_index < dt_size);
             distance_table[centroid_index * num_subquantizers + subquantizer_index] = dist;
