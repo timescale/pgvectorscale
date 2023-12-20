@@ -1,5 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use timescale_vector::access_method::distance::{distance_cosine, distance_l2};
+use timescale_vector::access_method::distance::{
+    distance_cosine, distance_l2, distance_l2_optimized_for_few_dimensions, distance_l2_unoptimized,
+};
 
 //copy and use qdrants simd code, purely for benchmarking purposes
 //not used in the actual extension
@@ -151,14 +153,54 @@ fn benchmark_distance(c: &mut Criterion) {
     });
 }
 
+#[inline(always)]
+pub fn distance_l2_fixed_size_opt(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), 6);
+    let norm: f32 = a[..6]
+        .iter()
+        .zip(b[..6].iter())
+        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+        .sum();
+    assert!(norm >= 0.);
+    //don't sqrt for performance. These are only used for ordering so sqrt not needed
+    norm
+}
+
+//PQ uses l2 distance on small vectors (6 dims or so). Benchmark that.
+fn benchmark_distance_few_dimensions(c: &mut Criterion) {
+    let r: Vec<f32> = (0..6).map(|v| v as f32 + 1000.1).collect();
+    let l: Vec<f32> = (0..6).map(|v| v as f32 + 2000.2).collect();
+
+    let mut group = c.benchmark_group("Distance");
+    group.bench_function("pq distance l2 optimized for many dimensions", |b| {
+        b.iter(|| distance_l2(black_box(&r), black_box(&l)))
+    });
+    group.bench_function("pq distance l2 unoptimized", |b| {
+        b.iter(|| distance_l2_unoptimized(black_box(&r), black_box(&l)))
+    });
+    group.bench_function(
+        "pq distance l2 auto-vectorized for 6 dimensionl arrays",
+        |b| b.iter(|| distance_l2_fixed_size_opt(black_box(&r), black_box(&l))),
+    );
+    group.bench_function(
+        "pq distance l2 optimized for few dimensions (what's used in the code now)",
+        |b| b.iter(|| distance_l2_optimized_for_few_dimensions(black_box(&r), black_box(&l))),
+    );
+}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 criterion_group!(
     benches,
     benchmark_distance,
+    benchmark_distance_few_dimensions,
     benchmark_distance_x86_unaligned_vectors,
     benchmark_distance_x86_aligned_vectors
 );
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
-criterion_group!(benches, benchmark_distance);
+criterion_group!(
+    benches,
+    benchmark_distance,
+    benchmark_distance_few_dimensions
+);
 
 criterion_main!(benches);
