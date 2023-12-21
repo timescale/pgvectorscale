@@ -26,6 +26,7 @@ pub enum PageType {
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
+    BqMeans = 4,
 }
 
 impl PageType {
@@ -35,6 +36,7 @@ impl PageType {
             1 => PageType::Node,
             2 => PageType::PqQuantizerDef,
             3 => PageType::PqQuantizerVector,
+            4 => PageType::BqMeans,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
