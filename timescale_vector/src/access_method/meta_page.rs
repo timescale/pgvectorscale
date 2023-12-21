@@ -5,6 +5,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
+use super::bq::BqQuantizer;
 use super::pq::PqQuantizer;
 use super::quantizer::Quantizer;
 
@@ -31,6 +32,7 @@ pub struct MetaPage {
     pq_vector_length: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
+    use_bq: bool,
 }
 
 impl MetaPage {
@@ -65,6 +67,8 @@ impl MetaPage {
     pub fn get_quantizer(&self) -> Quantizer {
         if self.get_use_pq() {
             Quantizer::PQ(PqQuantizer::new())
+        } else if self.use_bq {
+            Quantizer::BQ(BqQuantizer::new())
         } else {
             Quantizer::None
         }
@@ -128,6 +132,7 @@ impl MetaPage {
         (*meta).pq_block_offset = 0;
         (*meta).init_ids_block_number = 0;
         (*meta).init_ids_offset = 0;
+        (*meta).use_bq = (*opt).use_bq;
         let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
 
         let meta_end = (meta as Pointer).add(std::mem::size_of::<MetaPage>());

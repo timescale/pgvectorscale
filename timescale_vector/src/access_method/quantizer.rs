@@ -1,4 +1,4 @@
-use super::pq::PqQuantizer;
+use super::{bq::BqQuantizer, pq::PqQuantizer};
 
 /*pub trait Quantizer {
     fn initialize_node(&self, node: &mut Node, meta_page: &MetaPage);
@@ -8,6 +8,7 @@ use super::pq::PqQuantizer;
 }*/
 
 pub enum Quantizer {
+    BQ(BqQuantizer),
     PQ(PqQuantizer),
     None,
 }

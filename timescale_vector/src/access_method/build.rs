@@ -42,6 +42,9 @@ impl<'a, 'b> BuildState<'a, 'b> {
             Quantizer::PQ(pq) => {
                 pq.start_training(&meta_page);
             }
+            Quantizer::BQ(bq) => {
+                bq.start_training(&meta_page);
+            }
         }
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
@@ -126,6 +129,9 @@ pub unsafe extern "C" fn aminsert(
         Quantizer::PQ(pq) => {
             pq.load(&index_relation, &meta_page);
         }
+        Quantizer::BQ(bq) => {
+            bq.load(&index_relation, &meta_page);
+        }
     }
 
     let vp = VectorProvider::new(
@@ -188,6 +194,9 @@ fn do_heap_scan<'a>(
         Quantizer::PQ(pq) => {
             pq.finish_training();
         }
+        Quantizer::BQ(bq) => {
+            bq.finish_training();
+        }
     }
 
     let write_stats = unsafe { state.node_builder.write(index_relation, &state.quantizer) };
@@ -220,6 +229,9 @@ fn do_heap_scan<'a>(
         Quantizer::None => {}
         Quantizer::PQ(pq) => {
             pq.write_metadata(index_relation);
+        }
+        Quantizer::BQ(bq) => {
+            bq.write_metadata(index_relation);
         }
     }
 
@@ -278,6 +290,9 @@ fn build_callback_internal(
         Quantizer::None => {}
         Quantizer::PQ(pq) => {
             pq.add_sample(vector);
+        }
+        Quantizer::BQ(bq) => {
+            bq.add_sample(vector);
         }
     }
 
@@ -359,6 +374,58 @@ mod tests {
                 *
             FROM
                 test_pq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            DROP INDEX idx_tsv_pq;
+            ",
+        ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_creation() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_bq (
+                embedding vector (1536)
+            );
+
+           -- generate 300 vectors
+            INSERT INTO test_bq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 300) i
+                GROUP BY
+                    i % 300) g;
+
+            CREATE INDEX idx_tsv_pq ON test_bq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
+
+            ;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            EXPLAIN ANALYZE
+            SELECT
+                *
+            FROM
+                test_bq
             ORDER BY
                 embedding <=> (
                     SELECT

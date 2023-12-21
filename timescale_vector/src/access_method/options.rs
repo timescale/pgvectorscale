@@ -13,6 +13,7 @@ pub struct TSVIndexOptions {
     pub search_list_size: u32,
     pub max_alpha: f64,
     pub use_pq: bool,
+    pub use_bq: bool,
     pub pq_vector_length: usize,
 }
 
@@ -24,10 +25,11 @@ impl TSVIndexOptions {
             // use defaults
             let mut ops = unsafe { PgBox::<TSVIndexOptions>::alloc0() };
             ops.num_neighbors = 50;
-            ops.search_list_size = 65;
+            ops.search_list_size = 100;
             ops.max_alpha = 1.0;
             ops.use_pq = false;
-            ops.pq_vector_length = 64;
+            ops.use_bq = false;
+            ops.pq_vector_length = 256;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -41,7 +43,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 5;
+const NUM_REL_OPTS: usize = 6;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
@@ -71,6 +73,11 @@ pub unsafe extern "C" fn amoptions(
             optname: "use_pq".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
             offset: offset_of!(TSVIndexOptions, use_pq) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "use_bq".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
+            offset: offset_of!(TSVIndexOptions, use_bq) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "pq_vector_length".as_pg_cstr(),
@@ -142,6 +149,13 @@ pub unsafe fn init() {
         false,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
+    pg_sys::add_bool_reloption(
+        RELOPT_KIND_TSV,
+        "use_bq".as_pg_cstr(),
+        "Enable binary quantization".as_pg_cstr(),
+        false,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
     pg_sys::add_int_reloption(
         RELOPT_KIND_TSV,
         "pq_vector_length".as_pg_cstr(),
@@ -191,10 +205,34 @@ mod tests {
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
         assert_eq!(options.num_neighbors, 50);
-        assert_eq!(options.search_list_size, 65);
+        assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, 1.0);
         assert_eq!(options.use_pq, false);
-        assert_eq!(options.pq_vector_length, 64);
+        assert_eq!(options.use_bq, false);
+        assert_eq!(options.pq_vector_length, 256);
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_index_options_bq() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(encoding vector(3));
+        CREATE INDEX idxtest
+                  ON test
+               USING tsv(encoding)
+               WITH (use_bq = TRUE);",
+        ))?;
+
+        let index_oid =
+            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
+        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+        let options = TSVIndexOptions::from_relation(&indexrel);
+        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.search_list_size, 100);
+        assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.use_pq, false);
+        assert_eq!(options.use_bq, true);
+        assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }
 }

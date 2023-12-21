@@ -125,6 +125,16 @@ impl Node {
                 pq.initialize_node(&mut node, meta_page, full_vector);
                 node
             }
+            Quantizer::BQ(bq) => {
+                let mut node = Self {
+                    vector: Vec::with_capacity(0),
+                    pq_vector: Vec::with_capacity(0),
+                    neighbor_index_pointers: neighbor_index_pointers,
+                    heap_item_pointer,
+                };
+                bq.initialize_node(&mut node, meta_page, full_vector);
+                node
+            }
         }
     }
 

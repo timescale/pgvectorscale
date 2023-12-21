@@ -26,6 +26,7 @@ impl<'a> TSVResponseIterator<'a> {
         match &mut quantizer {
             Quantizer::None => {}
             Quantizer::PQ(pq) => pq.load(index, &meta_page),
+            Quantizer::BQ(bq) => bq.load(index, &meta_page),
         }
         let graph = DiskIndexGraph::new(
             &index,
