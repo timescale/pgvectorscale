@@ -88,7 +88,9 @@ impl MetaPage {
     }
 
     pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
-        if !self.use_pq || (self.pq_block_number == 0 && self.pq_block_offset == 0) {
+        if (!self.use_pq && !self.use_bq)
+            || (self.pq_block_number == 0 && self.pq_block_offset == 0)
+        {
             return None;
         }
 
