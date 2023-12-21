@@ -200,6 +200,7 @@ pub struct FullVectorDistanceState<'a> {
 
 pub struct DistanceMeasure {
     pq_distance_table: Option<super::pq::PqDistanceTable>,
+    bq_distance_table: Option<super::bq::BqDistanceTable>,
 }
 
 impl DistanceMeasure {
@@ -207,25 +208,41 @@ impl DistanceMeasure {
         if !calc_distance_with_quantizer {
             return Self {
                 pq_distance_table: None,
+                bq_distance_table: None,
             };
         }
         match quantizer {
             Quantizer::None => Self {
                 pq_distance_table: None,
+                bq_distance_table: None,
             },
             Quantizer::PQ(pq) => {
                 let dc = pq.get_distance_table(query, default_distance);
                 Self {
                     pq_distance_table: Some(dc),
+                    bq_distance_table: None,
+                }
+            }
+            Quantizer::BQ(bq) => {
+                let dc = bq.get_distance_table(query, default_distance);
+                Self {
+                    pq_distance_table: None,
+                    bq_distance_table: Some(dc),
                 }
             }
         }
     }
 
     fn get_quantized_distance(&self, vec: &[u8]) -> f32 {
-        let dc = self.pq_distance_table.as_ref().unwrap();
-        let distance = dc.distance(vec);
-        distance
+        if self.pq_distance_table.is_some() {
+            let dc = self.pq_distance_table.as_ref().unwrap();
+            let distance = dc.distance(vec);
+            distance
+        } else {
+            let dc = self.bq_distance_table.as_ref().unwrap();
+            let distance = dc.distance(vec);
+            distance
+        }
     }
 
     fn get_full_vector_distance(&self, vec: &[f32], query: &[f32]) -> f32 {
@@ -289,6 +306,7 @@ impl ListSearchResult {
             max_history_size: None,
             dm: DistanceMeasure {
                 pq_distance_table: None,
+                bq_distance_table: None,
             },
             stats: GreedySearchStats::new(),
         }

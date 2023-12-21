@@ -69,6 +69,15 @@ impl<'a> BuilderGraph<'a> {
                     let full_vector = self.get_full_vector(heap_pointer);
                     pq.update_node_after_traing(&mut archived, full_vector);
                 }
+                Quantizer::BQ(bq) => {
+                    //TODO: OPT: this may not be needed
+                    let heap_pointer = node
+                        .get_archived_node()
+                        .heap_item_pointer
+                        .deserialize_item_pointer();
+                    let full_vector = self.get_full_vector(heap_pointer);
+                    bq.update_node_after_traing(&mut archived, full_vector);
+                }
             };
             node.commit();
         }
