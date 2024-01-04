@@ -7,8 +7,8 @@ use super::{
     bq::BqQuantizer,
     disk_index_graph::DiskIndexGraph,
     graph::{
-        FullVectorDistanceState, Graph, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
-        LsrPrivateData, SearchDistanceMeasure,
+        self, FullVectorDistanceState, Graph, GraphNeighborStore, GreedySearchStats,
+        ListSearchNeighbor, ListSearchResult, LsrPrivateData, SearchDistanceMeasure,
     },
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node},
@@ -96,11 +96,14 @@ impl<'a> Quantizer<'a> {
         &self,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
+        calc_distance_with_quantizer: bool,
     ) -> SearchDistanceMeasure {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
             Quantizer::PQ(pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.get_search_distance_measure(query, distance_fn),
+            Quantizer::BQ(bq) => {
+                bq.get_search_distance_measure(query, distance_fn, calc_distance_with_quantizer)
+            }
         }
     }
 
@@ -117,20 +120,18 @@ impl<'a> Quantizer<'a> {
         }
     }
 
-    pub fn visit_lsn<G>(
+    pub fn visit_lsn(
         &self,
         index: &PgRelation,
         lsr: &mut ListSearchResult,
         lsn_idx: usize,
         query: &[f32],
-        graph: &G,
-    ) where
-        G: Graph + ?Sized,
-    {
+        gns: &GraphNeighborStore,
+    ) {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
             Quantizer::PQ(pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.visit_lsn(index, lsr, lsn_idx, query, graph),
+            Quantizer::BQ(bq) => bq.visit_lsn(index, lsr, lsn_idx, query, gns),
         }
     }
 

@@ -4,6 +4,7 @@ use pgrx::*;
 
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
+use crate::access_method::graph::GraphNeighborStore;
 use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
@@ -18,22 +19,22 @@ use super::meta_page::MetaPage;
 use super::model::{self};
 use super::quantizer::Quantizer;
 
-struct BuildState<'a, 'c> {
+struct BuildState<'a, 'b, 'c> {
     memcxt: PgMemoryContexts,
     meta_page: MetaPage,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
-    node_builder: BuilderGraph,
+    graph: Graph<'b>,
     started: Instant,
     stats: InsertStats,
     quantizer: Quantizer<'c>,
 }
 
-impl<'a, 'c> BuildState<'a, 'c> {
+impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
     fn new(
         index_relation: &'a PgRelation,
         meta_page: MetaPage,
-        bg: BuilderGraph,
+        graph: Graph<'b>,
         mut quantizer: Quantizer<'c>,
     ) -> Self {
         let tape = unsafe { Tape::new(index_relation, quantizer.page_type()) };
@@ -47,13 +48,14 @@ impl<'a, 'c> BuildState<'a, 'c> {
                 bq.start_training(&meta_page);
             }
         }
+
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
             ntuples: 0,
-            meta_page: meta_page.clone(),
+            meta_page: meta_page,
             tape,
-            node_builder: bg,
+            graph: graph,
             started: Instant::now(),
             stats: InsertStats::new(),
             quantizer: quantizer,
@@ -122,13 +124,10 @@ pub unsafe extern "C" fn aminsert(
     let vec = vec.unwrap();
     let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
-    let meta_page = MetaPage::read(&index_relation);
+    let mut meta_page = MetaPage::read(&index_relation);
 
-    let mut quantizer = meta_page.get_quantizer(
-        false,
-        Some(&heap_relation),
-        Some(get_attribute_number(index_info)),
-    );
+    let mut quantizer =
+        meta_page.get_quantizer(Some(&heap_relation), Some(get_attribute_number(index_info)));
     match &mut quantizer {
         Quantizer::None => {}
         Quantizer::PQ(pq) => {
@@ -139,8 +138,6 @@ pub unsafe extern "C" fn aminsert(
         }
     }
 
-    let mut graph = DiskIndexGraph::new(&index_relation);
-
     let mut tape = Tape::new(&index_relation, quantizer.page_type());
     let index_pointer = quantizer.create_node(
         &&index_relation,
@@ -150,6 +147,10 @@ pub unsafe extern "C" fn aminsert(
         &mut tape,
     );
 
+    let mut graph = Graph::new(
+        GraphNeighborStore::Disk(DiskIndexGraph::new()),
+        &mut meta_page,
+    );
     let _stats = graph.insert(&index_relation, index_pointer, vector, &quantizer);
     false
 }
@@ -168,16 +169,20 @@ fn do_heap_scan<'a>(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
-    meta_page: MetaPage,
+    mut meta_page: MetaPage,
 ) -> usize {
-    let quantizer = meta_page.get_quantizer(
-        false,
-        Some(heap_relation),
-        Some(get_attribute_number(index_info)),
-    );
+    let quantizer =
+        meta_page.get_quantizer(Some(heap_relation), Some(get_attribute_number(index_info)));
 
-    let bg = BuilderGraph::new(meta_page.clone());
-    let mut state = BuildState::new(index_relation, meta_page.clone(), bg, quantizer);
+    let mut state = BuildState::new(
+        index_relation,
+        meta_page.clone(),
+        Graph::new(
+            GraphNeighborStore::Builder(BuilderGraph::new()),
+            &mut meta_page,
+        ),
+        quantizer,
+    );
     unsafe {
         pg_sys::IndexBuildHeapScan(
             heap_relation.as_ptr(),
@@ -200,7 +205,14 @@ fn do_heap_scan<'a>(
     }
 
     info!("Finished scanning heap, now writing nodes");
-    let write_stats = unsafe { state.node_builder.write(index_relation, &state.quantizer) };
+    let write_stats = unsafe {
+        match state.graph.get_neighbor_store() {
+            GraphNeighborStore::Builder(builder) => {
+                builder.write(index_relation, &state.quantizer, &state.graph)
+            }
+            GraphNeighborStore::Disk(_) => panic!("Builder should be using the builder store"),
+        }
+    };
     info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
@@ -307,7 +319,7 @@ fn build_callback_internal(
     );
 
     let new_stats = state
-        .node_builder
+        .graph
         .insert(&index, index_pointer, vector, &state.quantizer);
     state.stats.combine(new_stats);
 }

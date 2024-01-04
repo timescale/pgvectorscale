@@ -5,8 +5,8 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::{Graph, LsrPrivateData, NodeNeighbor};
-use super::meta_page::MetaPage;
+use super::graph::{self, Graph, LsrPrivateData, NodeNeighbor};
+use super::meta_page::{self, MetaPage};
 use super::model::*;
 use super::quantizer::Quantizer;
 
@@ -18,30 +18,32 @@ use super::quantizer::Quantizer;
 pub struct BuilderGraph {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
-    meta_page: MetaPage,
 }
 
 impl BuilderGraph {
-    pub fn new(meta_page: MetaPage) -> Self {
+    pub fn new() -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
-            meta_page,
         }
     }
 
-    pub unsafe fn write(&self, index: &PgRelation, quantizer: &Quantizer) -> WriteStats {
+    pub unsafe fn write(
+        &self,
+        index: &PgRelation,
+        quantizer: &Quantizer,
+        graph: &Graph,
+    ) -> WriteStats {
         let mut stats = WriteStats::new();
-        let meta = self.get_meta_page(index);
 
         //TODO: OPT: do this in order of item pointers
         for (index_pointer, neighbors) in &self.neighbor_map {
             stats.num_nodes += 1;
             let prune_neighbors;
-            let neighbors = if neighbors.len() > self.meta_page.get_num_neighbors() as _ {
+            let neighbors = if neighbors.len() > graph.get_meta_page().get_num_neighbors() as _ {
                 stats.num_prunes += 1;
                 stats.num_neighbors_before_prune += neighbors.len();
                 (prune_neighbors, _) =
-                    self.prune_neighbors(index, *index_pointer, vec![], quantizer);
+                    graph.prune_neighbors(index, *index_pointer, vec![], quantizer);
                 stats.num_neighbors_after_prune += prune_neighbors.len();
                 &prune_neighbors
             } else {
@@ -60,25 +62,19 @@ impl BuilderGraph {
                 }
                 Quantizer::BQ(bq) => {
                     //TODO: OPT: this may not be needed
-                    bq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
+                    bq.update_node_after_traing(
+                        index,
+                        graph.get_meta_page(),
+                        *index_pointer,
+                        neighbors,
+                    );
                 }
             };
         }
         stats
     }
-}
 
-impl Graph for BuilderGraph {
-    fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
-        //returns a vector for generality
-        self.meta_page.get_init_ids()
-    }
-
-    fn get_neighbors<N: NodeNeighbor>(
-        &self,
-        _node: &N,
-        neighbors_of: ItemPointer,
-    ) -> Vec<IndexPointer> {
+    pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
             Some(n) => n
@@ -89,7 +85,7 @@ impl Graph for BuilderGraph {
         }
     }
 
-    fn get_neighbors_with_distances(
+    pub fn get_neighbors_with_distances(
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -108,25 +104,16 @@ impl Graph for BuilderGraph {
         }
     }
 
-    fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.neighbor_map.len() == 0
     }
 
-    fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
-        &self.meta_page
-    }
-
-    fn set_neighbors(
+    pub fn set_neighbors(
         &mut self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        if self.meta_page.get_init_ids().is_none() {
-            //TODO probably better set off of centeroids
-            MetaPage::update_init_ids(index, vec![neighbors_of]);
-            self.meta_page = MetaPage::read(index);
-        }
         self.neighbor_map.insert(neighbors_of, new_neighbors);
     }
 }

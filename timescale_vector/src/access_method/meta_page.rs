@@ -66,18 +66,13 @@ impl MetaPage {
 
     pub fn get_quantizer<'a>(
         &self,
-        calc_distance_with_quantizer: bool,
         heap_rel: Option<&'a PgRelation>,
         heap_attr_number: Option<pgrx::pg_sys::AttrNumber>,
     ) -> Quantizer<'a> {
         if self.get_use_pq() {
             Quantizer::PQ(PqQuantizer::new())
         } else if self.use_bq {
-            Quantizer::BQ(BqQuantizer::new(
-                calc_distance_with_quantizer,
-                heap_rel,
-                heap_attr_number,
-            ))
+            Quantizer::BQ(BqQuantizer::new(heap_rel, heap_attr_number))
         } else {
             Quantizer::None
         }

@@ -1,11 +1,11 @@
 use super::{
     distance::distance_cosine as default_distance,
     graph::{
-        self, Graph, GreedySearchStats, ListSearchNeighbor, ListSearchResult, NodeNeighbor,
-        SearchDistanceMeasure,
+        self, Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
+        NodeNeighbor, SearchDistanceMeasure,
     },
 };
-use std::pin::Pin;
+use std::{pin::Pin, thread::Builder};
 
 use pgrx::{
     pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, Node},
@@ -89,7 +89,6 @@ pub struct BqQuantizer<'a> {
     training: bool,
     count: u64,
     mean: Vec<f32>,
-    calc_distance_with_quantizer: bool,
     distance_fn: fn(&[f32], &[f32]) -> f32,
     heap_rel: Option<&'a PgRelation>,
     heap_attr: Option<pgrx::pg_sys::AttrNumber>,
@@ -97,7 +96,6 @@ pub struct BqQuantizer<'a> {
 
 impl<'a> BqQuantizer<'a> {
     pub fn new(
-        calc_distance_with_quantizer: bool,
         heap_rel: Option<&'a PgRelation>,
         heap_attr: Option<pgrx::pg_sys::AttrNumber>,
     ) -> BqQuantizer<'a> {
@@ -106,7 +104,6 @@ impl<'a> BqQuantizer<'a> {
             training: false,
             count: 0,
             mean: vec![],
-            calc_distance_with_quantizer,
             distance_fn: default_distance,
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -183,23 +180,25 @@ impl<'a> BqQuantizer<'a> {
         lsn
     }
 
-    pub fn visit_lsn<G>(
+    pub fn visit_lsn(
         &self,
         index: &PgRelation,
         lsr: &mut ListSearchResult,
         lsn_idx: usize,
         query: &[f32],
-        graph: &G,
-    ) where
-        G: Graph + ?Sized,
-    {
+        gns: &GraphNeighborStore,
+    ) {
         //Opt shouldn't need to read the node in the builder graph case.
         let lsn = &lsr.candidate_storage[lsn_idx];
         let rn = unsafe { BqNode::read(index, lsn.index_pointer) };
         lsr.stats.node_reads += 1;
         let node = rn.get_archived_node();
 
-        let neighbors = graph.get_neighbors(node, lsn.index_pointer);
+        let neighbors = match gns {
+            GraphNeighborStore::Disk(d) => d.get_neighbors(node),
+            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn.index_pointer),
+        };
+
         for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
             if !lsr.prepare_insert(neighbor_index_pointer) {
                 continue;
@@ -454,8 +453,9 @@ impl<'a> BqQuantizer<'a> {
         &self,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
+        calc_distance_with_quantizer: bool,
     ) -> SearchDistanceMeasure {
-        if !self.calc_distance_with_quantizer {
+        if !calc_distance_with_quantizer {
             return SearchDistanceMeasure::Full(distance_fn);
         } else {
             return SearchDistanceMeasure::Bq(self.get_distance_table(query, distance_fn));

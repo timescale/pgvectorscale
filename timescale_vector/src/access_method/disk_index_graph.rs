@@ -4,40 +4,27 @@ use crate::util::ItemPointer;
 
 use super::{
     graph::{Graph, LsrPrivateData, NodeNeighbor},
-    meta_page::MetaPage,
+    meta_page::{self, MetaPage},
     model::{ArchivedNode, NeighborWithDistance, Node, ReadableNode},
     quantizer::{self, Quantizer},
 };
 
-pub struct DiskIndexGraph {
-    meta_page: MetaPage,
-}
+pub struct DiskIndexGraph {}
 
 impl DiskIndexGraph {
-    pub fn new(index: &PgRelation) -> Self {
-        let meta = MetaPage::read(index);
-        Self { meta_page: meta }
+    pub fn new() -> Self {
+        Self {}
     }
 
     fn read<'b>(&self, index: &'b PgRelation, index_pointer: ItemPointer) -> ReadableNode<'b> {
         unsafe { Node::read(index, index_pointer) }
     }
-}
 
-impl Graph for DiskIndexGraph {
-    fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
-        self.meta_page.get_init_ids()
-    }
-
-    fn get_neighbors<N: NodeNeighbor>(
-        &self,
-        node: &N,
-        _neighbors_of: ItemPointer,
-    ) -> Vec<ItemPointer> {
+    pub fn get_neighbors<N: NodeNeighbor>(&self, node: &N) -> Vec<ItemPointer> {
         node.get_index_pointer_to_neighbors()
     }
 
-    fn get_neighbors_with_distances(
+    pub fn get_neighbors_with_distances(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -47,15 +34,11 @@ impl Graph for DiskIndexGraph {
         quantizer.get_neighbors_with_distances(index, neighbors_of, result)
     }
 
-    fn is_empty(&self) -> bool {
-        self.meta_page.get_init_ids().is_none()
+    pub fn is_empty(&self, meta_page: &MetaPage) -> bool {
+        meta_page.get_init_ids().is_none()
     }
 
-    fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {
-        &self.meta_page
-    }
-
-    fn set_neighbors(
+    pub fn set_neighbors(
         &mut self,
         index: &PgRelation,
         neighbors_of: ItemPointer,

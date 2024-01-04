@@ -2,7 +2,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        bq::BqNode, disk_index_graph::DiskIndexGraph, meta_page::MetaPage, model::PgVector,
+        bq::BqNode, disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore,
+        meta_page::MetaPage, model::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
@@ -19,26 +20,24 @@ struct TSVResponseIterator<'a, 'b> {
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
     quantizer: Quantizer<'b>,
+    meta_page: MetaPage,
 }
 
 impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
-        let meta_page = MetaPage::read(&index);
-        let mut quantizer = meta_page.get_quantizer(true, None, None);
+        let mut meta_page = MetaPage::read(&index);
+        let mut quantizer = meta_page.get_quantizer(None, None);
         match &mut quantizer {
             Quantizer::None => {}
             Quantizer::PQ(pq) => pq.load(index, &meta_page),
             Quantizer::BQ(bq) => bq.load(index, &meta_page),
         }
-        let graph = DiskIndexGraph::new(&index);
-        use super::graph::Graph;
-        let lsr = graph.greedy_search_streaming_init(
-            &index,
-            query,
-            search_list_size,
-            &meta_page,
-            &quantizer,
+        let graph = Graph::new(
+            GraphNeighborStore::Disk(DiskIndexGraph::new()),
+            &mut meta_page,
         );
+        use super::graph::Graph;
+        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &quantizer);
         Self {
             query: query.to_vec(),
             search_list_size,
@@ -46,13 +45,17 @@ impl<'a, 'b> TSVResponseIterator<'a, 'b> {
             current: 0,
             last_buffer: None,
             quantizer,
+            meta_page,
         }
     }
 }
 
 impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
-        let graph = DiskIndexGraph::new(&index);
+        let graph = Graph::new(
+            GraphNeighborStore::Disk(DiskIndexGraph::new()),
+            &mut self.meta_page,
+        );
         use super::graph::Graph;
 
         /* Iterate until we find a non-deleted tuple */
@@ -114,7 +117,7 @@ pub extern "C" fn ambeginscan(
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
     let meta_page = MetaPage::read(&indexrel);
-    let mut quantizer = meta_page.get_quantizer(true, None, None);
+    let mut quantizer = meta_page.get_quantizer(None, None);
     match &mut quantizer {
         Quantizer::None => pgrx::error!("not implemented"),
         Quantizer::PQ(pq) => pgrx::error!("not implemented"),
@@ -148,7 +151,7 @@ pub extern "C" fn amrescan(
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let meta_page = MetaPage::read(&indexrel);
-    let mut quantizer = meta_page.get_quantizer(true, None, None);
+    let mut quantizer = meta_page.get_quantizer(None, None);
 
     if nkeys > 0 {
         scan.xs_recheck = true;
