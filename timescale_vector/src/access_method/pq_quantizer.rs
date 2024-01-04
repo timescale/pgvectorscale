@@ -1,19 +1,17 @@
-use std::pin::Pin;
-
 use ndarray::{Array1, Array2, Axis};
 use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
-use crate::{
-    access_method::{
-        distance::distance_l2_optimized_for_few_dimensions,
-        model::{self, read_pq},
-    },
-    util::IndexPointer,
+use crate::access_method::{
+    distance::distance_l2_optimized_for_few_dimensions, pq_quantizer_storage::read_pq,
 };
 
-use super::meta_page::MetaPage;
+use super::{
+    meta_page::MetaPage,
+    pg_vector::PgVector,
+    stats::{StatsDistanceComparison, StatsNodeRead},
+};
 
 /// pq aka Product quantization (PQ) is one of the most widely used algorithms for memory-efficient approximated nearest neighbor search,
 /// This module encapsulates a vanilla implementation of PQ that we use for the vector index.
@@ -35,7 +33,10 @@ const NUM_TRAINING_ATTEMPTS: usize = 1;
 /// We pick a value used by DiskANN implementations.
 const NUM_TRAINING_SET_SIZE: usize = 256000;
 
+pub type PqVectorElement = u8;
 /// PqTrainer is a utility that produces a product quantizer from training with sample vectors.
+
+#[derive(Clone)]
 pub struct PqTrainer {
     /// training_set contains the vectors we'll use to train PQ.
     training_set: Vec<Vec<f32>>,
@@ -135,6 +136,7 @@ fn build_distance_table(
     distance_table
 }
 
+#[derive(Clone)]
 pub struct PqQuantizer {
     pq_trainer: Option<PqTrainer>,
     pq: Option<Pq<f32>>,
@@ -148,41 +150,30 @@ impl PqQuantizer {
         }
     }
 
-    pub fn load(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
-        assert!(self.pq_trainer.is_none());
+    pub fn load<S: StatsNodeRead>(
+        index_relation: &PgRelation,
+        meta_page: &super::meta_page::MetaPage,
+        stats: &mut S,
+    ) -> Self {
         let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-        self.pq = unsafe { Some(read_pq(&index_relation, &pq_item_pointer)) };
-    }
+        let pq = unsafe { Some(read_pq(&index_relation, pq_item_pointer, stats)) };
 
-    pub fn initialize_node(
-        &self,
-        node: &mut super::model::Node,
-        meta_page: &MetaPage,
-        full_vector: Vec<f32>,
-    ) {
-        if self.pq_trainer.is_some() {
-            let pq_vec_len = meta_page.get_pq_vector_length();
-            node.pq_vector = (0..pq_vec_len).map(|_| 0u8).collect();
-        } else {
-            assert!(self.pq.is_some());
-            let pq_vec_len = meta_page.get_pq_vector_length();
-            node.pq_vector = self.quantize(full_vector);
-            assert!(node.pq_vector.len() == pq_vec_len);
+        Self {
+            pq_trainer: None,
+            pq: pq,
         }
     }
 
-    pub fn update_node_after_traing(
-        &self,
-        archived: &mut Pin<&mut super::model::ArchivedNode>,
-        full_vector: Vec<f32>,
-    ) {
-        let pq_vector = self.quantize(full_vector);
+    pub fn must_get_pq(&self) -> &Pq<f32> {
+        self.pq.as_ref().unwrap()
+    }
 
-        assert!(pq_vector.len() == archived.pq_vector.len());
-        for i in 0..=pq_vector.len() - 1 {
-            let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
-            *pgv = pq_vector[i];
-        }
+    pub fn quantize(&self, full_vector: &[f32]) -> Vec<PqVectorElement> {
+        assert!(self.pq.is_some());
+        let pq = self.pq.as_ref().unwrap();
+        //OPT is the copy really necessary?
+        let array_vec = Array1::from(full_vector.to_vec());
+        pq.quantize_vector(array_vec).to_vec()
     }
 
     pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
@@ -197,18 +188,21 @@ impl PqQuantizer {
         self.pq = Some(self.pq_trainer.take().unwrap().train_pq());
     }
 
-    pub fn write_metadata(&self, index: &PgRelation) {
-        assert!(self.pq.is_some());
-        let index_pointer: IndexPointer =
-            unsafe { model::write_pq(self.pq.as_ref().unwrap(), &index) };
-        super::meta_page::MetaPage::update_pq_pointer(&index, index_pointer);
-    }
-
-    pub fn quantize(&self, full_vector: Vec<f32>) -> Vec<u8> {
-        assert!(self.pq.is_some());
-        let pq = self.pq.as_ref().unwrap();
-        let array_vec = Array1::from(full_vector);
-        pq.quantize_vector(array_vec).to_vec()
+    pub fn vector_for_new_node(
+        &self,
+        meta_page: &MetaPage,
+        full_vector: &[f32],
+    ) -> Vec<PqVectorElement> {
+        if self.pq_trainer.is_some() {
+            let pq_vec_len = meta_page.get_pq_vector_length();
+            vec![0; pq_vec_len]
+        } else {
+            assert!(self.pq.is_some());
+            let pq_vec_len = meta_page.get_pq_vector_length();
+            let res = self.quantize(full_vector);
+            assert!(res.len() == pq_vec_len);
+            res
+        }
     }
 
     pub fn get_distance_table(
@@ -247,5 +241,23 @@ impl PqDistanceTable {
             //d += self.distance_table[m][pq_vector[m] as usize];
         }
         d
+    }
+}
+
+pub enum PqSearchDistanceMeasure {
+    Full(PgVector),
+    Pq(PqDistanceTable),
+}
+
+impl PqSearchDistanceMeasure {
+    pub fn calculate_pq_distance<S: StatsDistanceComparison>(
+        table: &PqDistanceTable,
+        pq_vector: &[PqVectorElement],
+        stats: &mut S,
+    ) -> f32 {
+        assert!(pq_vector.len() > 0);
+        let vec = pq_vector;
+        stats.record_quantized_distance_comparison();
+        table.distance(vec)
     }
 }

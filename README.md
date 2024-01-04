@@ -18,7 +18,7 @@ Next you need cargo-pgx, which can be installed with
 cargo install --locked cargo-pgrx
 ```
 
-You must reinstall cargo-pgx whenever you update your Rust compiler, since cargo-pgx needs to be built with the same compiler as Toolkit.
+You must reinstall cargo-pgx whenever you update your Rust compiler, since cargo-pgx needs to be built with the same compiler as Timescale Vector.
 
 Finally, setup the pgx development environment with
 ```shell

@@ -3,11 +3,10 @@
 use std::collections::HashMap;
 
 use pgrx::PgRelation;
-use rkyv::Deserialize;
 
 use crate::util::ItemPointer;
 
-use super::model::Node;
+use super::{plain_node::Node, stats::GreedySearchStats};
 
 #[allow(dead_code)]
 pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {
@@ -26,7 +25,8 @@ unsafe fn print_graph_from_disk_visitor(
     sb: &mut String,
     level: usize,
 ) {
-    let data_node = Node::read(&index, index_pointer);
+    let mut stats = GreedySearchStats::new();
+    let data_node = Node::read(&index, index_pointer, &mut stats);
     let node = data_node.get_archived_node();
     let v = node.vector.as_slice();
     let copy: Vec<f32> = v.iter().map(|f| *f).collect();
@@ -34,20 +34,18 @@ unsafe fn print_graph_from_disk_visitor(
 
     map.insert(index_pointer, copy);
 
-    node.apply_to_neighbors(|neighbor_pointer| {
-        let p = neighbor_pointer.deserialize_item_pointer();
+    for neighbor_pointer in node.iter_neighbors() {
+        let p = neighbor_pointer;
         if !map.contains_key(&p) {
             print_graph_from_disk_visitor(index, p, map, sb, level + 1);
         }
-    });
+    }
     sb.push_str(&name);
     sb.push_str("\n");
-    node.apply_to_neighbors(|neighbor_pointer| {
-        let ip: ItemPointer = (neighbor_pointer)
-            .deserialize(&mut rkyv::Infallible)
-            .unwrap();
-        let neighbor = map.get(&ip).unwrap();
+
+    for neighbor_pointer in node.iter_neighbors() {
+        let neighbor = map.get(&neighbor_pointer).unwrap();
         sb.push_str(&format!("->{:?}\n", neighbor))
-    });
+    }
     sb.push_str("\n")
 }

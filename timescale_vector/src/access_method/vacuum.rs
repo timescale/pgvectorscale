@@ -1,13 +1,23 @@
-use pgrx::{pg_sys::FirstOffsetNumber, *};
+use pgrx::{
+    pg_sys::{FirstOffsetNumber, IndexBulkDeleteResult},
+    *,
+};
 
 use crate::{
-    access_method::model::ArchivedNode,
+    access_method::{
+        bq::BqSpeedupStorage, meta_page::MetaPage, plain_storage::PlainStorage,
+        pq_storage::PqCompressionStorage,
+    },
     util::{
-        page::{PageType, WritablePage},
+        page::WritablePage,
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
         ItemPointer,
     },
 };
+
+use crate::access_method::storage::ArchivedData;
+
+use super::storage::{Storage, StorageType};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
@@ -29,9 +39,51 @@ pub extern "C" fn ambulkdelete(
             pg_sys::ForkNumber_MAIN_FORKNUM,
         )
     };
+
+    let meta_page = MetaPage::read(&index_relation);
+    let storage = meta_page.get_storage_type();
+    match storage {
+        StorageType::BqSpeedup => {
+            bulk_delete_for_storage::<BqSpeedupStorage>(
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
+        }
+        StorageType::PqCompression => {
+            bulk_delete_for_storage::<PqCompressionStorage>(
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
+        }
+        StorageType::Plain => {
+            bulk_delete_for_storage::<PlainStorage>(
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
+        }
+    }
+    results
+}
+
+fn bulk_delete_for_storage<S: Storage>(
+    index: &PgRelation,
+    nblocks: u32,
+    results: *mut IndexBulkDeleteResult,
+    callback: pg_sys::IndexBulkDeleteCallback,
+    callback_state: *mut ::std::os::raw::c_void,
+) {
     for block_number in 0..nblocks {
-        let page = unsafe { WritablePage::cleanup(&index_relation, block_number) };
-        if page.get_type() != PageType::Node {
+        let page = unsafe { WritablePage::cleanup(&index, block_number) };
+        if page.get_type() != S::page_type() {
             continue;
         }
         let mut modified = false;
@@ -45,13 +97,13 @@ pub extern "C" fn ambulkdelete(
                 let item = PageGetItem(*page, item_id) as *mut u8;
                 let len = (*item_id).lp_len();
                 let data = std::slice::from_raw_parts_mut(item, len as _);
-                let node = ArchivedNode::with_data(data);
+                let node = S::ArchivedType::with_data(data);
 
                 if node.is_deleted() {
                     continue;
                 }
 
-                let heap_pointer: ItemPointer = node.heap_item_pointer.deserialize_item_pointer();
+                let heap_pointer: ItemPointer = node.get_heap_item_pointer();
                 let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
                     ..Default::default()
                 };
@@ -71,7 +123,6 @@ pub extern "C" fn ambulkdelete(
             page.commit();
         }
     }
-    results
 }
 
 #[pg_guard]
@@ -97,11 +148,18 @@ pub extern "C" fn amvacuumcleanup(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod tests {
+pub mod tests {
+    use once_cell::sync::Lazy;
     use pgrx::*;
+    use std::sync::Mutex;
 
-    #[test]
-    fn test_delete_vacuum_plain() {
+    static VAC_PLAIN_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+
+    #[cfg(test)]
+    pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
+        //do not run this test in parallel. (pgrx tests run in a txn rolled back after each test, but we do not have that luxury here).
+        let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
+
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -114,29 +172,43 @@ mod tests {
         )
         .unwrap();
 
+        let suffix = (1..=253)
+            .map(|i| format!("{}", i))
+            .collect::<Vec<String>>()
+            .join(", ");
+
         let (mut client, _) = pgrx_tests::client().unwrap();
 
         client
-            .batch_execute(
-                "CREATE TABLE test_vac(embedding vector(3));
+            .batch_execute(&format!(
+                "CREATE TABLE test_vac(embedding vector(256));
 
-        INSERT INTO test_vac(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+        INSERT INTO test_vac (embedding)
+        SELECT
+            ('[' || i || ',1,1,{suffix}]')::vector
+        FROM generate_series(1, 300) i;
+
+
+        INSERT INTO test_vac(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
         CREATE INDEX idxtest_vac
               ON test_vac
            USING tsv(embedding)
-            WITH (num_neighbors=30);
-            ",
-            )
+            WITH ({index_options});
+            "
+            ))
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
 
-        assert_eq!(cnt, 3);
+        assert_eq!(cnt, 303);
 
         client
-            .execute("DELETE FROM test_vac WHERE embedding = '[1,2,3]';", &[])
+            .execute(
+                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
+                &[],
+            )
             .unwrap();
 
         client.close().unwrap();
@@ -148,22 +220,40 @@ mod tests {
         //inserts into the previous 1,2,3 spot that was deleted
         client
             .execute(
-                "INSERT INTO test_vac(embedding) VALUES ('[10,12,13]');",
+                &format!("INSERT INTO test_vac(embedding) VALUES ('[10,12,13,{suffix}]');"),
                 &[],
             )
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-        //if the old index is still used the count is 4
-        assert_eq!(cnt, 3);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        //if the old index is still used the count is 304
+        assert_eq!(cnt, 303);
+
+        //do another delete for same items (noop)
+        client
+            .execute(
+                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
+                &[],
+            )
+            .unwrap();
+
+        client.execute("set enable_seqscan = 0;", &[]).unwrap();
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        //if the old index is still used the count is 304
+        assert_eq!(cnt, 303);
 
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
     }
 
-    #[test]
-    fn test_delete_vacuum_full() {
+    static VAC_FULL_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+
+    #[cfg(test)]
+    pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
+        //do not run this test in parallel
+        let _lock = VAC_FULL_MUTEX.lock().unwrap();
+
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -178,26 +268,49 @@ mod tests {
 
         let (mut client, _) = pgrx_tests::client().unwrap();
 
-        client
-            .batch_execute(
-                "CREATE TABLE test_vac_full(embedding vector(3));
+        let suffix = (1..=253)
+            .map(|i| format!("{}", i))
+            .collect::<Vec<String>>()
+            .join(", ");
 
-        INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+        client
+            .batch_execute(&format!(
+                "CREATE TABLE test_vac_full(embedding vector(256));
+
+        -- generate 300 vectors
+        INSERT INTO test_vac_full (embedding)
+        SELECT
+            ('[' || i || ',2,3,{suffix}]')::vector
+        FROM generate_series(1, 300) i;
+
+        INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
         CREATE INDEX idxtest_vac_full
               ON test_vac_full
            USING tsv(embedding)
-            WITH (num_neighbors=30);
-            ",
-            )
+            WITH ({index_options});
+            "
+            ))
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-
-        assert_eq!(cnt, 3);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        std::thread::sleep(std::time::Duration::from_millis(10000));
+        assert_eq!(cnt, 303);
 
         client.execute("DELETE FROM test_vac_full", &[]).unwrap();
+
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO test_vac_full (embedding)
+        SELECT
+            ('[' || i || ',2,3,{suffix}]')::vector
+        FROM generate_series(1, 300) i;"
+                ),
+                &[],
+            )
+            .unwrap();
 
         client.close().unwrap();
 
@@ -206,56 +319,22 @@ mod tests {
 
         client
             .execute(
-                "INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]');",
+                &format!("INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3,{suffix}]');"),
                 &[],
             )
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-        assert_eq!(cnt, 1);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        assert_eq!(cnt, 301);
 
         client.execute("DROP INDEX idxtest_vac_full", &[]).unwrap();
         client.execute("DROP TABLE test_vac_full", &[]).unwrap();
     }
+
     #[pg_test]
     ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
     fn test_delete_mock_fn() -> spi::Result<()> {
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_delete() -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test(embedding vector(3));
-
-            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
-
-            CREATE INDEX idxtest
-                  ON test
-               USING tsv(embedding)
-                WITH (num_neighbors=30);
-
-            DELETE FROM test WHERE embedding = '[1,2,3]';
-            ",
-        ))?;
-
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(2, res.unwrap());
-
-        //delete same thing again -- should be a no-op;
-        Spi::run(&format!("DELETE FROM test WHERE embedding = '[1,2,3]';",))?;
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(2, res.unwrap());
-
-        Spi::run(&format!("drop index idxtest;",))?;
-
         Ok(())
     }
 }
