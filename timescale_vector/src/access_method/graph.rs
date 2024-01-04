@@ -437,7 +437,7 @@ impl ListSearchResult {
                 }
                 let n = &mut self.candidate_storage[self.best_candidate[pos]];
                 n.visited = true;
-                Some(pos)
+                Some(self.best_candidate[pos])
             }
             None => None,
         }
