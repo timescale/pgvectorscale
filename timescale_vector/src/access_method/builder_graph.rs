@@ -5,7 +5,7 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::{Graph, VectorProvider};
+use super::graph::{Graph, LsrPrivateData, NodeNeighbor};
 use super::meta_page::MetaPage;
 use super::model::*;
 use super::quantizer::Quantizer;
@@ -15,25 +15,18 @@ use super::quantizer::Quantizer;
 /// pages every time you change the neighbors. Instead you change the neighbors in memory
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
-pub struct BuilderGraph<'a> {
+pub struct BuilderGraph {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
     meta_page: MetaPage,
-    vector_provider: VectorProvider<'a>,
 }
 
-impl<'a> BuilderGraph<'a> {
-    pub fn new(meta_page: MetaPage, vp: VectorProvider<'a>) -> Self {
+impl BuilderGraph {
+    pub fn new(meta_page: MetaPage) -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
             meta_page,
-            vector_provider: vp,
         }
-    }
-
-    unsafe fn get_full_vector(&self, heap_pointer: ItemPointer) -> Vec<f32> {
-        let vp = self.get_vector_provider();
-        vp.get_full_vector_copy_from_heap_pointer(heap_pointer)
     }
 
     pub unsafe fn write(&self, index: &PgRelation, quantizer: &Quantizer) -> WriteStats {
@@ -47,7 +40,8 @@ impl<'a> BuilderGraph<'a> {
             let neighbors = if neighbors.len() > self.meta_page.get_num_neighbors() as _ {
                 stats.num_prunes += 1;
                 stats.num_neighbors_before_prune += neighbors.len();
-                (prune_neighbors, _) = self.prune_neighbors(index, *index_pointer, vec![]);
+                (prune_neighbors, _) =
+                    self.prune_neighbors(index, *index_pointer, vec![], quantizer);
                 stats.num_neighbors_after_prune += prune_neighbors.len();
                 &prune_neighbors
             } else {
@@ -55,47 +49,36 @@ impl<'a> BuilderGraph<'a> {
             };
             stats.num_neighbors += neighbors.len();
 
-            let node = Node::modify(index, *index_pointer);
-            let mut archived = node.get_archived_node();
-            archived.as_mut().set_neighbors(neighbors, &meta);
-
             match quantizer {
-                Quantizer::None => {}
+                Quantizer::None => {
+                    error!("Quantizer::None not implemented")
+                    /* need to update the neighbors */
+                }
                 Quantizer::PQ(pq) => {
-                    let heap_pointer = node
-                        .get_archived_node()
-                        .heap_item_pointer
-                        .deserialize_item_pointer();
-                    let full_vector = self.get_full_vector(heap_pointer);
-                    pq.update_node_after_traing(&mut archived, full_vector);
+                    error!("Quantizer::None not implemented");
+                    //pq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
                 }
                 Quantizer::BQ(bq) => {
                     //TODO: OPT: this may not be needed
-                    let heap_pointer = node
-                        .get_archived_node()
-                        .heap_item_pointer
-                        .deserialize_item_pointer();
-                    let full_vector = self.get_full_vector(heap_pointer);
-                    bq.update_node_after_traing(&mut archived, full_vector);
+                    bq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
                 }
             };
-            node.commit();
         }
         stats
     }
 }
 
-impl<'a> Graph for BuilderGraph<'a> {
-    fn read<'b>(&self, index: &'b PgRelation, index_pointer: ItemPointer) -> ReadableNode<'b> {
-        unsafe { Node::read(index, index_pointer) }
-    }
-
+impl Graph for BuilderGraph {
     fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
         //returns a vector for generality
         self.meta_page.get_init_ids()
     }
 
-    fn get_neighbors(&self, _node: &ArchivedNode, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
+    fn get_neighbors<N: NodeNeighbor>(
+        &self,
+        _node: &N,
+        neighbors_of: ItemPointer,
+    ) -> Vec<IndexPointer> {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
             Some(n) => n
@@ -110,6 +93,7 @@ impl<'a> Graph for BuilderGraph<'a> {
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,
+        _quantizer: &Quantizer,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let neighbors = self.neighbor_map.get(&neighbors_of);
@@ -126,10 +110,6 @@ impl<'a> Graph for BuilderGraph<'a> {
 
     fn is_empty(&self) -> bool {
         self.neighbor_map.len() == 0
-    }
-
-    fn get_vector_provider(&self) -> VectorProvider {
-        return self.vector_provider.clone();
     }
 
     fn get_meta_page(&self, _index: &PgRelation) -> &MetaPage {

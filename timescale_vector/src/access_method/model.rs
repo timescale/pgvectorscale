@@ -16,6 +16,7 @@ use crate::util::{
 };
 
 use super::distance::preprocess_cosine;
+use super::graph::LsrPrivateData;
 use super::meta_page::MetaPage;
 use super::quantizer::Quantizer;
 
@@ -223,7 +224,7 @@ impl ArchivedNode {
 
 //TODO is this right?
 pub type Distance = f32;
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct NeighborWithDistance {
     index_pointer: IndexPointer,
     distance: Distance,

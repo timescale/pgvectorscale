@@ -2,38 +2,43 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        disk_index_graph::DiskIndexGraph, graph::VectorProvider, meta_page::MetaPage,
-        model::PgVector,
+        bq::BqNode, disk_index_graph::DiskIndexGraph, meta_page::MetaPage, model::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
-use super::{graph::ListSearchResult, quantizer::Quantizer};
+use super::{
+    graph::{ListSearchResult, LsrPrivateData},
+    quantizer::Quantizer,
+};
 
-struct TSVResponseIterator<'a> {
+struct TSVResponseIterator<'a, 'b> {
     query: Vec<f32>,
     lsr: ListSearchResult,
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
-    quantizer: Quantizer,
+    quantizer: Quantizer<'b>,
 }
 
-impl<'a> TSVResponseIterator<'a> {
+impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
         let meta_page = MetaPage::read(&index);
-        let mut quantizer = meta_page.get_quantizer();
+        let mut quantizer = meta_page.get_quantizer(true, None, None);
         match &mut quantizer {
             Quantizer::None => {}
             Quantizer::PQ(pq) => pq.load(index, &meta_page),
             Quantizer::BQ(bq) => bq.load(index, &meta_page),
         }
-        let graph = DiskIndexGraph::new(
-            &index,
-            VectorProvider::new(None, None, &quantizer, quantizer.is_some()),
-        );
+        let graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
-        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &meta_page);
+        let lsr = graph.greedy_search_streaming_init(
+            &index,
+            query,
+            search_list_size,
+            &meta_page,
+            &quantizer,
+        );
         Self {
             query: query.to_vec(),
             search_list_size,
@@ -45,12 +50,9 @@ impl<'a> TSVResponseIterator<'a> {
     }
 }
 
-impl<'a> TSVResponseIterator<'a> {
+impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
-        let graph = DiskIndexGraph::new(
-            &index,
-            VectorProvider::new(None, None, &self.quantizer, self.quantizer.is_some()),
-        );
+        let graph = DiskIndexGraph::new(&index);
         use super::graph::Graph;
 
         /* Iterate until we find a non-deleted tuple */
@@ -61,9 +63,10 @@ impl<'a> TSVResponseIterator<'a> {
                 &self.query,
                 self.search_list_size,
                 None,
+                &self.quantizer,
             );
 
-            let item = self.lsr.consume();
+            let item = self.lsr.consume(index, &self.quantizer);
 
             match item {
                 Some((heap_pointer, index_pointer)) => {
@@ -92,8 +95,8 @@ impl<'a> TSVResponseIterator<'a> {
     }
 }
 
-struct TSVScanState<'a> {
-    iterator: *mut TSVResponseIterator<'a>,
+struct TSVScanState<'a, 'b> {
+    iterator: *mut TSVResponseIterator<'a, 'b>,
 }
 
 #[pg_guard]
@@ -109,12 +112,21 @@ pub extern "C" fn ambeginscan(
             norderbys,
         ))
     };
-    let state = TSVScanState {
-        iterator: std::ptr::null_mut(),
-    };
+    let indexrel = unsafe { PgRelation::from_pg(index_relation) };
+    let meta_page = MetaPage::read(&indexrel);
+    let mut quantizer = meta_page.get_quantizer(true, None, None);
+    match &mut quantizer {
+        Quantizer::None => pgrx::error!("not implemented"),
+        Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+        Quantizer::BQ(bq) => {
+            let state = TSVScanState {
+                iterator: std::ptr::null_mut(),
+            };
 
-    scandesc.opaque =
-        PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(state) as void_mut_ptr;
+            scandesc.opaque = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(state)
+                as void_mut_ptr;
+        }
+    }
 
     scandesc.into_pg()
 }
@@ -135,7 +147,8 @@ pub extern "C" fn amrescan(
     }
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
-    let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+    let meta_page = MetaPage::read(&indexrel);
+    let mut quantizer = meta_page.get_quantizer(true, None, None);
 
     if nkeys > 0 {
         scan.xs_recheck = true;
@@ -151,9 +164,16 @@ pub extern "C" fn amrescan(
     //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
-    let res = TSVResponseIterator::new(&indexrel, query, search_list_size);
-
-    state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
+    match &mut quantizer {
+        Quantizer::None => pgrx::error!("not implemented"),
+        Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+        Quantizer::BQ(bq) => {
+            let state =
+                unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+            let res = TSVResponseIterator::new(&indexrel, query, search_list_size);
+            state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
+        }
+    }
 }
 
 #[pg_guard]

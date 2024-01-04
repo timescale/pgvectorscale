@@ -8,12 +8,12 @@ use reductive::pq::{Pq, QuantizeVector, TrainPq};
 use crate::{
     access_method::{
         distance::distance_l2_optimized_for_few_dimensions,
-        model::{self, read_pq},
+        model::{self, read_pq, Node},
     },
-    util::IndexPointer,
+    util::{HeapPointer, IndexPointer},
 };
 
-use super::meta_page::MetaPage;
+use super::{graph::TableSlot, meta_page::MetaPage, model::NeighborWithDistance, quantizer};
 
 /// pq aka Product quantization (PQ) is one of the most widely used algorithms for memory-efficient approximated nearest neighbor search,
 /// This module encapsulates a vanilla implementation of PQ that we use for the vector index.
@@ -171,11 +171,23 @@ impl PqQuantizer {
         }
     }
 
-    pub fn update_node_after_traing(
+    /*pub fn update_node_after_traing(
         &self,
-        archived: &mut Pin<&mut super::model::ArchivedNode>,
-        full_vector: Vec<f32>,
+        index: &PgRelation,
+        meta: &MetaPage,
+        index_pointer: IndexPointer,
+        neighbors: &Vec<NeighborWithDistance>,
     ) {
+        let node = unsafe { Node::modify(index, index_pointer) };
+        let mut archived = node.get_archived_node();
+        archived.as_mut().set_neighbors(neighbors, &meta);
+
+        let heap_pointer = node
+            .get_archived_node()
+            .heap_item_pointer
+            .deserialize_item_pointer();
+
+        let full_vector = unsafe { self.get_full_vector_copy_from_heap_pointer(heap_pointer) };
         let pq_vector = self.quantize(full_vector);
 
         assert!(pq_vector.len() == archived.pq_vector.len());
@@ -183,7 +195,8 @@ impl PqQuantizer {
             let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
             *pgv = pq_vector[i];
         }
-    }
+        node.commit();
+    }*/
 
     pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
         self.pq_trainer = Some(PqTrainer::new(meta_page));

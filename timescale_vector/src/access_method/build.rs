@@ -5,37 +5,38 @@ use pgrx::*;
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
-use crate::access_method::graph::VectorProvider;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::tape::Tape;
 use crate::util::*;
 
+use super::bq::BqNode;
 use super::builder_graph::BuilderGraph;
+use super::graph::LsrPrivateData;
 use super::meta_page::MetaPage;
 use super::model::{self};
 use super::quantizer::Quantizer;
 
-struct BuildState<'a, 'b> {
+struct BuildState<'a, 'c> {
     memcxt: PgMemoryContexts,
     meta_page: MetaPage,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
-    node_builder: BuilderGraph<'b>,
+    node_builder: BuilderGraph,
     started: Instant,
     stats: InsertStats,
-    quantizer: Quantizer,
+    quantizer: Quantizer<'c>,
 }
 
-impl<'a, 'b> BuildState<'a, 'b> {
+impl<'a, 'c> BuildState<'a, 'c> {
     fn new(
         index_relation: &'a PgRelation,
         meta_page: MetaPage,
-        bg: BuilderGraph<'b>,
-        mut quantizer: Quantizer,
+        bg: BuilderGraph,
+        mut quantizer: Quantizer<'c>,
     ) -> Self {
-        let tape = unsafe { Tape::new(index_relation, page::PageType::Node) };
+        let tape = unsafe { Tape::new(index_relation, quantizer.page_type()) };
 
         match &mut quantizer {
             Quantizer::None => {}
@@ -123,7 +124,11 @@ pub unsafe extern "C" fn aminsert(
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let meta_page = MetaPage::read(&index_relation);
 
-    let mut quantizer = meta_page.get_quantizer();
+    let mut quantizer = meta_page.get_quantizer(
+        false,
+        Some(&heap_relation),
+        Some(get_attribute_number(index_info)),
+    );
     match &mut quantizer {
         Quantizer::None => {}
         Quantizer::PQ(pq) => {
@@ -134,20 +139,18 @@ pub unsafe extern "C" fn aminsert(
         }
     }
 
-    let vp = VectorProvider::new(
-        Some(&heap_relation),
-        Some(get_attribute_number(index_info)),
-        &quantizer,
-        false,
+    let mut graph = DiskIndexGraph::new(&index_relation);
+
+    let mut tape = Tape::new(&index_relation, quantizer.page_type());
+    let index_pointer = quantizer.create_node(
+        &&index_relation,
+        vector,
+        heap_pointer,
+        &meta_page,
+        &mut tape,
     );
-    let mut graph = DiskIndexGraph::new(&index_relation, vp);
 
-    let node = model::Node::new(vector.to_vec(), heap_pointer, &meta_page, &quantizer);
-
-    let mut tape = unsafe { Tape::new(&index_relation, page::PageType::Node) };
-    let index_pointer: IndexPointer = node.write(&mut tape);
-
-    let _stats = graph.insert(&index_relation, index_pointer, vector);
+    let _stats = graph.insert(&index_relation, index_pointer, vector, &quantizer);
     false
 }
 
@@ -167,16 +170,13 @@ fn do_heap_scan<'a>(
     index_relation: &'a PgRelation,
     meta_page: MetaPage,
 ) -> usize {
-    let quantizer = meta_page.get_quantizer();
-    let vp = VectorProvider::new(
+    let quantizer = meta_page.get_quantizer(
+        false,
         Some(heap_relation),
         Some(get_attribute_number(index_info)),
-        &quantizer,
-        false,
     );
 
-    let bg = BuilderGraph::new(meta_page.clone(), vp);
-    let quantizer = meta_page.get_quantizer();
+    let bg = BuilderGraph::new(meta_page.clone());
     let mut state = BuildState::new(index_relation, meta_page.clone(), bg, quantizer);
     unsafe {
         pg_sys::IndexBuildHeapScan(
@@ -199,7 +199,9 @@ fn do_heap_scan<'a>(
         }
     }
 
+    info!("Finished scanning heap, now writing nodes");
     let write_stats = unsafe { state.node_builder.write(index_relation, &state.quantizer) };
+    info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
@@ -296,15 +298,17 @@ fn build_callback_internal(
         }
     }
 
-    let node = model::Node::new(
-        vector.to_vec(),
+    let index_pointer = state.quantizer.create_node(
+        &index,
+        vector,
         heap_pointer,
         &state.meta_page,
-        &state.quantizer,
+        &mut state.tape,
     );
 
-    let index_pointer: IndexPointer = node.write(&mut state.tape);
-    let new_stats = state.node_builder.insert(&index, index_pointer, vector);
+    let new_stats = state
+        .node_builder
+        .insert(&index, index_pointer, vector, &state.quantizer);
     state.stats.combine(new_stats);
 }
 
@@ -405,7 +409,7 @@ mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX idx_tsv_pq ON test_bq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
+            CREATE INDEX idx_tsv_bq ON test_bq USING tsv (embedding) WITH (num_neighbors = 38, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
 
             ;
 
@@ -432,7 +436,7 @@ mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
 
-            DROP INDEX idx_tsv_pq;
+            DROP INDEX idx_tsv_bq;
             ",
         ))?;
         Ok(())
