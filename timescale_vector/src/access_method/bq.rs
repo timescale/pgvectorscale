@@ -120,19 +120,6 @@ impl<'a> BqQuantizer<'a> {
         }
     }
 
-    pub fn initialize_node(
-        &self,
-        node: &mut super::model::Node,
-        meta_page: &MetaPage,
-        full_vector: Vec<f32>,
-    ) {
-        if self.use_mean && self.training {
-            node.pq_vector = vec![0; Self::quantized_size(meta_page.get_num_dimensions() as _)];
-        } else {
-            node.pq_vector = self.quantize(&full_vector);
-        }
-    }
-
     /* get_lsn and visit_lsn are different because the distance
     comparisons for BQ get the vector from different places */
     pub fn get_lsn(
@@ -223,7 +210,12 @@ impl<'a> BqQuantizer<'a> {
                     distance
                 }
                 SearchDistanceMeasure::Bq(table) => {
-                    //todo: assert this isn't a builder graph.
+                    if let GraphNeighborStore::Builder(_) = gns {
+                        assert!(
+                            false,
+                            "BQ distance should not be used with the builder graph store"
+                        )
+                    }
                     let bq_vector = node.neighbor_vectors[i].as_slice();
                     assert!(bq_vector.len() > 0);
                     let vec = bq_vector;
@@ -388,7 +380,7 @@ impl<'a> BqQuantizer<'a> {
         }
     }
 
-    pub fn get_distance_table(
+    fn get_distance_table(
         &self,
         query: &[f32],
         _distance_fn: fn(&[f32], &[f32]) -> f32,
@@ -396,7 +388,7 @@ impl<'a> BqQuantizer<'a> {
         BqDistanceTable::new(self.quantize(query))
     }
 
-    pub fn get_heap_pointer(&self, index: &PgRelation, index_pointer: IndexPointer) -> HeapPointer {
+    fn get_heap_pointer(&self, index: &PgRelation, index_pointer: IndexPointer) -> HeapPointer {
         let rn = unsafe { BqNode::read(index, index_pointer) };
         let node = rn.get_archived_node();
         node.heap_item_pointer.deserialize_item_pointer()
@@ -624,89 +616,3 @@ impl NodeNeighbor for ArchivedBqNode {
         result
     }
 }
-
-/*
-
-
-//WritableNode ties an archive node to it's underlying buffer that can be modified
-pub struct WritableBqNode<'a> {
-    wb: WritableBqBuffer<'a>,
-}
-
-impl<'a> WritableNode<'a> {
-    pub fn get_archived_node(&self) -> Pin<&mut ArchivedNode> {
-        ArchivedNode::with_data(self.wb.get_data_slice())
-    }
-
-    pub fn commit(self) {
-        self.wb.commit()
-    }
-}
-
-/// contains helpers for mutate-in-place. See struct_mutable_refs in test_alloc.rs in rkyv
-impl ArchivedNode {
-    pub fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedNode> {
-        let pinned_bytes = Pin::new(data);
-        unsafe { rkyv::archived_root_mut::<Node>(pinned_bytes) }
-    }
-
-    pub fn is_deleted(&self) -> bool {
-        self.heap_item_pointer.offset == InvalidOffsetNumber
-    }
-
-    pub fn delete(self: Pin<&mut Self>) {
-        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
-        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
-        heap_pointer.offset = InvalidOffsetNumber;
-        heap_pointer.block_number = InvalidBlockNumber;
-    }
-
-    pub fn neighbor_index_pointer(
-        self: Pin<&mut Self>,
-    ) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
-    }
-
-    pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
-    }
-
-    pub fn num_neighbors(&self) -> usize {
-        self.neighbor_index_pointers
-            .iter()
-            .position(|f| f.block_number == InvalidBlockNumber)
-            .unwrap_or(self.neighbor_index_pointers.len())
-    }
-
-    pub fn apply_to_neighbors<F>(&self, mut f: F)
-    where
-        F: FnMut(&ArchivedItemPointer),
-    {
-        for i in 0..self.num_neighbors() {
-            let neighbor = &self.neighbor_index_pointers[i];
-            f(neighbor);
-        }
-    }
-
-    pub fn set_neighbors(
-        mut self: Pin<&mut Self>,
-        neighbors: &Vec<NeighborWithDistance>,
-        meta_page: &MetaPage,
-    ) {
-        for (i, new_neighbor) in neighbors.iter().enumerate() {
-            let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
-            //TODO hate that we have to set each field like this
-            a_index_pointer.block_number =
-                new_neighbor.get_index_pointer_to_neighbor().block_number;
-            a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
-        }
-        //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            let mut past_last_index_pointers =
-                self.neighbor_index_pointer().index_pin(neighbors.len());
-            past_last_index_pointers.block_number = InvalidBlockNumber;
-            past_last_index_pointers.offset = InvalidOffsetNumber;
-        }
-    }
-}
-*/
