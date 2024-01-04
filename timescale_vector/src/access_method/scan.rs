@@ -2,16 +2,13 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        bq::BqNode, disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore,
-        meta_page::MetaPage, model::PgVector,
+        disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore, meta_page::MetaPage,
+        model::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
-use super::{
-    graph::{ListSearchResult, LsrPrivateData},
-    quantizer::Quantizer,
-};
+use super::{graph::ListSearchResult, quantizer::Quantizer};
 
 struct TSVResponseIterator<'a, 'b> {
     query: Vec<f32>,
@@ -120,8 +117,8 @@ pub extern "C" fn ambeginscan(
     let mut quantizer = meta_page.get_quantizer(None, None);
     match &mut quantizer {
         Quantizer::None => pgrx::error!("not implemented"),
-        Quantizer::PQ(pq) => pgrx::error!("not implemented"),
-        Quantizer::BQ(bq) => {
+        Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
+        Quantizer::BQ(_bq) => {
             let state = TSVScanState {
                 iterator: std::ptr::null_mut(),
             };
@@ -169,8 +166,8 @@ pub extern "C" fn amrescan(
 
     match &mut quantizer {
         Quantizer::None => pgrx::error!("not implemented"),
-        Quantizer::PQ(pq) => pgrx::error!("not implemented"),
-        Quantizer::BQ(bq) => {
+        Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
+        Quantizer::BQ(_bq) => {
             let state =
                 unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
             let res = TSVResponseIterator::new(&indexrel, query, search_list_size);

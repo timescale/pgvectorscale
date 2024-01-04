@@ -3,10 +3,7 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    graph::{Graph, LsrPrivateData, NodeNeighbor},
-    meta_page::{self, MetaPage},
-    model::{ArchivedNode, NeighborWithDistance, Node, ReadableNode},
-    quantizer::{self, Quantizer},
+    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, quantizer::Quantizer,
 };
 
 pub struct DiskIndexGraph {}
@@ -14,10 +11,6 @@ pub struct DiskIndexGraph {}
 impl DiskIndexGraph {
     pub fn new() -> Self {
         Self {}
-    }
-
-    fn read<'b>(&self, index: &'b PgRelation, index_pointer: ItemPointer) -> ReadableNode<'b> {
-        unsafe { Node::read(index, index_pointer) }
     }
 
     pub fn get_neighbors<N: NodeNeighbor>(&self, node: &N) -> Vec<ItemPointer> {
@@ -40,9 +33,9 @@ impl DiskIndexGraph {
 
     pub fn set_neighbors(
         &mut self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        new_neighbors: Vec<NeighborWithDistance>,
+        _index: &PgRelation,
+        _neighbors_of: ItemPointer,
+        _new_neighbors: Vec<NeighborWithDistance>,
     ) {
         pgrx::error!("disk index graph set neighbor not implemented")
         /*if self.meta_page.get_init_ids().is_none() {

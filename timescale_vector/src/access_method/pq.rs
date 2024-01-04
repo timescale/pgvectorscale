@@ -1,5 +1,3 @@
-use std::pin::Pin;
-
 use ndarray::{Array1, Array2, Axis};
 use pgrx::{error, notice, PgRelation};
 use rand::Rng;
@@ -8,12 +6,12 @@ use reductive::pq::{Pq, QuantizeVector, TrainPq};
 use crate::{
     access_method::{
         distance::distance_l2_optimized_for_few_dimensions,
-        model::{self, read_pq, Node},
+        model::{self, read_pq},
     },
-    util::{HeapPointer, IndexPointer},
+    util::IndexPointer,
 };
 
-use super::{graph::TableSlot, meta_page::MetaPage, model::NeighborWithDistance, quantizer};
+use super::meta_page::MetaPage;
 
 /// pq aka Product quantization (PQ) is one of the most widely used algorithms for memory-efficient approximated nearest neighbor search,
 /// This module encapsulates a vanilla implementation of PQ that we use for the vector index.

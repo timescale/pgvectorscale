@@ -16,7 +16,7 @@ use crate::util::{
 };
 
 use super::distance::preprocess_cosine;
-use super::graph::LsrPrivateData;
+
 use super::meta_page::MetaPage;
 use super::quantizer::Quantizer;
 
@@ -126,7 +126,7 @@ impl Node {
                 pq.initialize_node(&mut node, meta_page, full_vector);
                 node
             }
-            Quantizer::BQ(bq) => {
+            Quantizer::BQ(_bq) => {
                 pgrx::error!("not implemented");
                 /*let mut node = Self {
                     vector: Vec::with_capacity(0),

@@ -5,8 +5,8 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::{self, Graph, LsrPrivateData, NodeNeighbor};
-use super::meta_page::{self, MetaPage};
+use super::graph::Graph;
+
 use super::model::*;
 use super::quantizer::Quantizer;
 
@@ -56,7 +56,7 @@ impl BuilderGraph {
                     error!("Quantizer::None not implemented")
                     /* need to update the neighbors */
                 }
-                Quantizer::PQ(pq) => {
+                Quantizer::PQ(_pq) => {
                     error!("Quantizer::None not implemented");
                     //pq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
                 }
@@ -110,7 +110,7 @@ impl BuilderGraph {
 
     pub fn set_neighbors(
         &mut self,
-        index: &PgRelation,
+        _index: &PgRelation,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {

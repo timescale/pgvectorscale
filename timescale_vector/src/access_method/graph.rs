@@ -2,18 +2,15 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
-use rkyv::de;
 
-use crate::access_method::model::Node;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
-use super::bq::BqNode;
 use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
 use super::distance::distance_cosine as default_distance;
-use super::model::{ArchivedNode, PgVector};
-use super::quantizer::{self, Quantizer};
+use super::model::PgVector;
+use super::quantizer::Quantizer;
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
@@ -373,7 +370,7 @@ impl ListSearchResult {
     fn new(
         index: &PgRelation,
         max_history_size: Option<usize>,
-        graph: &Graph,
+        _graph: &Graph,
         init_ids: Vec<ItemPointer>,
         query: &[f32],
         sdm: SearchDistanceMeasure,

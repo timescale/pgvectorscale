@@ -8,15 +8,15 @@ use crate::access_method::graph::GraphNeighborStore;
 use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
-use crate::util::page;
+
 use crate::util::tape::Tape;
 use crate::util::*;
 
-use super::bq::BqNode;
+
 use super::builder_graph::BuilderGraph;
-use super::graph::LsrPrivateData;
+
 use super::meta_page::MetaPage;
-use super::model::{self};
+
 use super::quantizer::Quantizer;
 
 struct BuildState<'a, 'b, 'c> {

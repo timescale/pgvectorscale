@@ -1,30 +1,26 @@
 use super::{
     distance::distance_cosine as default_distance,
     graph::{
-        self, Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
-        NodeNeighbor, SearchDistanceMeasure,
+        GraphNeighborStore, ListSearchNeighbor, ListSearchResult, NodeNeighbor,
+        SearchDistanceMeasure,
     },
 };
-use std::{pin::Pin, thread::Builder};
+use std::pin::Pin;
 
 use pgrx::{
-    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, Node},
+    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
 
 use crate::util::{
-    page::{self, PageType},
-    tape::{self, Tape},
-    ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer,
+    page::PageType, tape::Tape, ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer,
+    ReadableBuffer,
 };
 
 use super::{
-    graph::FullVectorDistanceState,
-    graph::TableSlot,
-    meta_page::{self, MetaPage},
-    model::{NeighborWithDistance, PgVector},
-    quantizer,
+    graph::FullVectorDistanceState, graph::TableSlot, meta_page::MetaPage,
+    model::NeighborWithDistance,
 };
 use crate::util::WritableBuffer;
 
@@ -299,7 +295,7 @@ impl<'a> BqQuantizer<'a> {
 
     pub fn create_node(
         &self,
-        index_relation: &PgRelation,
+        _index_relation: &PgRelation,
         full_vector: &[f32],
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
@@ -333,7 +329,7 @@ impl<'a> BqQuantizer<'a> {
             self.mean
                 .iter_mut()
                 .zip(sample.iter())
-                .for_each(|(m, s)| *m += ((s - *m) / self.count as f32));
+                .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
         }
     }
 
@@ -513,8 +509,6 @@ pub struct BqNode {
     neighbor_index_pointers: Vec<ItemPointer>,
     neighbor_vectors: Vec<Vec<BqVectorElement>>,
 }
-
-struct BqNodeLsrPrivateData {}
 
 impl BqNode {
     pub fn new(

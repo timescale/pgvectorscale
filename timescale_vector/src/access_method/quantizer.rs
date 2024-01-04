@@ -1,14 +1,13 @@
 use pgrx::PgRelation;
-use rand::seq::index;
+
 
 use crate::util::{page, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
     bq::BqQuantizer,
-    disk_index_graph::DiskIndexGraph,
     graph::{
-        self, FullVectorDistanceState, Graph, GraphNeighborStore, GreedySearchStats,
-        ListSearchNeighbor, ListSearchResult, LsrPrivateData, SearchDistanceMeasure,
+        FullVectorDistanceState, GraphNeighborStore,
+        ListSearchNeighbor, ListSearchResult, SearchDistanceMeasure,
     },
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node},
@@ -65,7 +64,7 @@ impl<'a> Quantizer<'a> {
     ) -> FullVectorDistanceState<'i> {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => bq.get_full_vector_distance_state(index, index_pointer),
         }
     }
@@ -78,7 +77,7 @@ impl<'a> Quantizer<'a> {
     ) -> f32 {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => {
                 bq.get_distance_pair_for_full_vectors_from_state(state, index, index_pointer)
             }
@@ -93,7 +92,7 @@ impl<'a> Quantizer<'a> {
     ) -> SearchDistanceMeasure {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => {
                 bq.get_search_distance_measure(query, distance_fn, calc_distance_with_quantizer)
             }
@@ -108,7 +107,7 @@ impl<'a> Quantizer<'a> {
     ) -> bool {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => bq.get_neighbors_with_distances(index, neighbors_of, result),
         }
     }
@@ -123,7 +122,7 @@ impl<'a> Quantizer<'a> {
     ) {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => bq.visit_lsn(index, lsr, lsn_idx, query, gns),
         }
     }
@@ -137,7 +136,7 @@ impl<'a> Quantizer<'a> {
     ) -> ListSearchNeighbor {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => bq.get_lsn(lsr, index, index_pointer, query),
         }
     }
@@ -150,7 +149,7 @@ impl<'a> Quantizer<'a> {
     ) -> (HeapPointer, IndexPointer) {
         match self {
             Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(pq) => pgrx::error!("not implemented"),
+            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
             Quantizer::BQ(bq) => bq.return_lsn(index, lsr, idx),
         }
     }
