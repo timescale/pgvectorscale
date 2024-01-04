@@ -124,7 +124,7 @@ simdeez::simd_runtime_generate!(
             dist += x[i] * y[i];
         }
 
-        1.0 - dist
+        (1.0 - dist).max(0.0)
     }
 );
 

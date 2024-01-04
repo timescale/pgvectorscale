@@ -1,16 +1,20 @@
 use pgrx::*;
 mod build;
-mod builder_graph;
 mod cost_estimate;
 mod debugging;
-mod disk_index_graph;
 mod graph;
+mod graph_neighbor_store;
 pub mod guc;
 mod meta_page;
-mod model;
+mod neighbor_with_distance;
 pub mod options;
-mod quantizer;
+pub mod pg_vector;
+mod plain_node;
+mod plain_storage;
 mod scan;
+pub mod stats;
+mod storage;
+mod storage_common;
 mod vacuum;
 
 extern crate blas_src;
@@ -19,7 +23,9 @@ mod bq;
 pub mod distance;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
-mod pq;
+mod pq_quantizer;
+mod pq_quantizer_storage;
+mod pq_storage;
 
 #[pg_extern(sql = "
     CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS 'MODULE_PATHNAME', '@FUNCTION_NAME@';

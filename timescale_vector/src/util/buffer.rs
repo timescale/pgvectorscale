@@ -197,19 +197,19 @@ impl<'a> Deref for LockedBufferShare<'a> {
 /// has been pinned but not locked.
 ///
 /// It is probably not a good idea to hold on to this too long except during an index scan.
-/// Does not use a LWLock.
-pub struct PinnedBufferShare<'a> {
-    _relation: &'a PgRelation,
+/// Does not use a LWLock. Note a pinned buffer is valid whether or not the relation that read it
+/// is still open.
+pub struct PinnedBufferShare {
     buffer: Buffer,
 }
 
-impl<'a> PinnedBufferShare<'a> {
+impl PinnedBufferShare {
     /// read return buffer for the given blockNumber in a relation.
     ///
     /// The returned block will be pinned
     ///
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
-    pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
+    pub fn read(index: &PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
 
         unsafe {
@@ -220,15 +220,12 @@ impl<'a> PinnedBufferShare<'a> {
                 ReadBufferMode_RBM_NORMAL,
                 std::ptr::null_mut(),
             );
-            PinnedBufferShare {
-                _relation: index,
-                buffer: buf,
-            }
+            PinnedBufferShare { buffer: buf }
         }
     }
 }
 
-impl<'a> Drop for PinnedBufferShare<'a> {
+impl Drop for PinnedBufferShare {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {

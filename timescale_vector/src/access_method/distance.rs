@@ -103,17 +103,38 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
 #[inline(always)]
 pub fn distance_cosine_unoptimized(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
+    debug_assert!(preprocess_cosine_get_norm(a).is_none());
+    debug_assert!(preprocess_cosine_get_norm(b).is_none());
     let res: f32 = a.iter().zip(b).map(|(a, b)| *a * *b).sum();
-    1.0 - res
+    (1.0 - res).max(0.0)
+}
+
+pub fn preprocess_cosine_get_norm(a: &[f32]) -> Option<f32> {
+    let norm = a.iter().map(|v| v * v).sum::<f32>();
+    //adjust the epsilon to the length of the vector
+    let adj_epsilon = f32::EPSILON * a.len() as f32;
+
+    /* this mainly handles the zero-vector case */
+    if norm < f32::EPSILON {
+        return None;
+    }
+    /* no need to renormalize if norm around 1.0 */
+    if norm >= 1.0 - adj_epsilon && norm <= 1.0 + adj_epsilon {
+        return None;
+    }
+    return Some(norm.sqrt());
 }
 
 pub fn preprocess_cosine(a: &mut [f32]) {
-    let norm = a.iter().map(|v| v * v).sum::<f32>();
-    if norm < f32::EPSILON {
-        return;
-    }
-    let norm = norm.sqrt();
-    if norm > 1.0 + f32::EPSILON || norm < 1.0 - f32::EPSILON {
-        a.iter_mut().for_each(|v| *v /= norm);
+    let norm = preprocess_cosine_get_norm(a);
+    match norm {
+        None => (),
+        Some(norm) => {
+            a.iter_mut().for_each(|v| *v /= norm);
+            debug_assert!(
+                preprocess_cosine_get_norm(a).is_none(),
+                "preprocess_cosine isn't idempotent",
+            );
+        }
     }
 }

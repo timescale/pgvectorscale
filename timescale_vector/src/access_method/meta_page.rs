@@ -5,9 +5,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::bq::BqQuantizer;
-use super::pq::PqQuantizer;
-use super::quantizer::Quantizer;
+use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
@@ -64,13 +62,13 @@ impl MetaPage {
         self.use_pq
     }
 
-    pub fn get_quantizer(&self) -> Quantizer {
+    pub fn get_storage_type(&self) -> StorageType {
         if self.get_use_pq() {
-            Quantizer::PQ(PqQuantizer::new())
+            StorageType::PqCompression
         } else if self.use_bq {
-            Quantizer::BQ(BqQuantizer::new())
+            StorageType::BqSpeedup
         } else {
-            Quantizer::None
+            StorageType::Plain
         }
     }
 
