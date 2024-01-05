@@ -18,7 +18,7 @@ use crate::util::{
 use super::distance::preprocess_cosine;
 
 use super::meta_page::MetaPage;
-use super::quantizer::Quantizer;
+use super::storage::Storage;
 
 //Ported from pg_vector code
 #[repr(C)]
@@ -101,7 +101,7 @@ impl Node {
         full_vector: Vec<f32>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
@@ -109,14 +109,14 @@ impl Node {
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
-        match quantizer {
-            Quantizer::None => Self {
+        match storage {
+            Storage::None => Self {
                 vector: full_vector,
                 pq_vector: Vec::with_capacity(0),
                 neighbor_index_pointers: neighbor_index_pointers,
                 heap_item_pointer,
             },
-            Quantizer::PQ(pq) => {
+            Storage::PQ(pq) => {
                 let mut node = Self {
                     vector: Vec::with_capacity(0),
                     pq_vector: Vec::with_capacity(0),
@@ -126,7 +126,7 @@ impl Node {
                 pq.initialize_node(&mut node, meta_page, full_vector);
                 node
             }
-            Quantizer::BQ(_bq) => {
+            Storage::BQ(_bq) => {
                 pgrx::error!("not implemented");
                 /*let mut node = Self {
                     vector: Vec::with_capacity(0),

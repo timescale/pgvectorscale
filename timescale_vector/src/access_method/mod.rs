@@ -9,8 +9,8 @@ pub mod guc;
 mod meta_page;
 mod model;
 pub mod options;
-mod quantizer;
 mod scan;
+mod storage;
 mod vacuum;
 
 extern crate blas_src;

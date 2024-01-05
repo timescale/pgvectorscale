@@ -12,12 +12,11 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::tape::Tape;
 use crate::util::*;
 
-
 use super::builder_graph::BuilderGraph;
 
 use super::meta_page::MetaPage;
 
-use super::quantizer::Quantizer;
+use super::storage::Storage;
 
 struct BuildState<'a, 'b, 'c> {
     memcxt: PgMemoryContexts,
@@ -27,7 +26,7 @@ struct BuildState<'a, 'b, 'c> {
     graph: Graph<'b>,
     started: Instant,
     stats: InsertStats,
-    quantizer: Quantizer<'c>,
+    storage: Storage<'c>,
 }
 
 impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
@@ -35,16 +34,16 @@ impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
         index_relation: &'a PgRelation,
         meta_page: MetaPage,
         graph: Graph<'b>,
-        mut quantizer: Quantizer<'c>,
+        mut storage: Storage<'c>,
     ) -> Self {
-        let tape = unsafe { Tape::new(index_relation, quantizer.page_type()) };
+        let tape = unsafe { Tape::new(index_relation, storage.page_type()) };
 
-        match &mut quantizer {
-            Quantizer::None => {}
-            Quantizer::PQ(pq) => {
+        match &mut storage {
+            Storage::None => {}
+            Storage::PQ(pq) => {
                 pq.start_training(&meta_page);
             }
-            Quantizer::BQ(bq) => {
+            Storage::BQ(bq) => {
                 bq.start_training(&meta_page);
             }
         }
@@ -58,7 +57,7 @@ impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
             graph: graph,
             started: Instant::now(),
             stats: InsertStats::new(),
-            quantizer: quantizer,
+            storage,
         }
     }
 }
@@ -126,20 +125,20 @@ pub unsafe extern "C" fn aminsert(
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut meta_page = MetaPage::read(&index_relation);
 
-    let mut quantizer =
-        meta_page.get_quantizer(Some(&heap_relation), Some(get_attribute_number(index_info)));
-    match &mut quantizer {
-        Quantizer::None => {}
-        Quantizer::PQ(pq) => {
+    let mut storage =
+        meta_page.get_storage(Some(&heap_relation), Some(get_attribute_number(index_info)));
+    match &mut storage {
+        Storage::None => {}
+        Storage::PQ(pq) => {
             pq.load(&index_relation, &meta_page);
         }
-        Quantizer::BQ(bq) => {
+        Storage::BQ(bq) => {
             bq.load(&index_relation, &meta_page);
         }
     }
 
-    let mut tape = Tape::new(&index_relation, quantizer.page_type());
-    let index_pointer = quantizer.create_node(
+    let mut tape = Tape::new(&index_relation, storage.page_type());
+    let index_pointer = storage.create_node(
         &&index_relation,
         vector,
         heap_pointer,
@@ -151,7 +150,7 @@ pub unsafe extern "C" fn aminsert(
         GraphNeighborStore::Disk(DiskIndexGraph::new()),
         &mut meta_page,
     );
-    let _stats = graph.insert(&index_relation, index_pointer, vector, &quantizer);
+    let _stats = graph.insert(&index_relation, index_pointer, vector, &storage);
     false
 }
 
@@ -171,8 +170,8 @@ fn do_heap_scan<'a>(
     index_relation: &'a PgRelation,
     mut meta_page: MetaPage,
 ) -> usize {
-    let quantizer =
-        meta_page.get_quantizer(Some(heap_relation), Some(get_attribute_number(index_info)));
+    let storage =
+        meta_page.get_storage(Some(heap_relation), Some(get_attribute_number(index_info)));
 
     let mut state = BuildState::new(
         index_relation,
@@ -181,7 +180,7 @@ fn do_heap_scan<'a>(
             GraphNeighborStore::Builder(BuilderGraph::new()),
             &mut meta_page,
         ),
-        quantizer,
+        storage,
     );
     unsafe {
         pg_sys::IndexBuildHeapScan(
@@ -194,12 +193,12 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    match &mut state.quantizer {
-        Quantizer::None => {}
-        Quantizer::PQ(pq) => {
+    match &mut state.storage {
+        Storage::None => {}
+        Storage::PQ(pq) => {
             pq.finish_training();
         }
-        Quantizer::BQ(bq) => {
+        Storage::BQ(bq) => {
             bq.finish_training();
         }
     }
@@ -208,7 +207,7 @@ fn do_heap_scan<'a>(
     let write_stats = unsafe {
         match state.graph.get_neighbor_store() {
             GraphNeighborStore::Builder(builder) => {
-                builder.write(index_relation, &state.quantizer, &state.graph)
+                builder.write(index_relation, &state.storage, &state.graph)
             }
             GraphNeighborStore::Disk(_) => panic!("Builder should be using the builder store"),
         }
@@ -239,12 +238,12 @@ fn do_heap_scan<'a>(
 
     warning!("Indexed {} tuples", ntuples);
 
-    match state.quantizer {
-        Quantizer::None => {}
-        Quantizer::PQ(pq) => {
+    match state.storage {
+        Storage::None => {}
+        Storage::PQ(pq) => {
             pq.write_metadata(index_relation);
         }
-        Quantizer::BQ(bq) => {
+        Storage::BQ(bq) => {
             bq.write_metadata(index_relation);
         }
     }
@@ -300,17 +299,17 @@ fn build_callback_internal(
         );
     }
 
-    match &mut state.quantizer {
-        Quantizer::None => {}
-        Quantizer::PQ(pq) => {
+    match &mut state.storage {
+        Storage::None => {}
+        Storage::PQ(pq) => {
             pq.add_sample(vector);
         }
-        Quantizer::BQ(bq) => {
+        Storage::BQ(bq) => {
             bq.add_sample(vector);
         }
     }
 
-    let index_pointer = state.quantizer.create_node(
+    let index_pointer = state.storage.create_node(
         &index,
         vector,
         heap_pointer,
@@ -320,7 +319,7 @@ fn build_callback_internal(
 
     let new_stats = state
         .graph
-        .insert(&index, index_pointer, vector, &state.quantizer);
+        .insert(&index, index_pointer, vector, &state.storage);
     state.stats.combine(new_stats);
 }
 

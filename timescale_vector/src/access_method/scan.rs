@@ -8,7 +8,7 @@ use crate::{
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
-use super::{graph::ListSearchResult, quantizer::Quantizer};
+use super::{graph::ListSearchResult, storage::Storage};
 
 struct TSVResponseIterator<'a, 'b> {
     query: Vec<f32>,
@@ -16,32 +16,32 @@ struct TSVResponseIterator<'a, 'b> {
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
-    quantizer: Quantizer<'b>,
+    storage: Storage<'b>,
     meta_page: MetaPage,
 }
 
 impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
         let mut meta_page = MetaPage::read(&index);
-        let mut quantizer = meta_page.get_quantizer(None, None);
-        match &mut quantizer {
-            Quantizer::None => {}
-            Quantizer::PQ(pq) => pq.load(index, &meta_page),
-            Quantizer::BQ(bq) => bq.load(index, &meta_page),
+        let mut storage = meta_page.get_storage(None, None);
+        match &mut storage {
+            Storage::None => {}
+            Storage::PQ(pq) => pq.load(index, &meta_page),
+            Storage::BQ(bq) => bq.load(index, &meta_page),
         }
         let graph = Graph::new(
             GraphNeighborStore::Disk(DiskIndexGraph::new()),
             &mut meta_page,
         );
         use super::graph::Graph;
-        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &quantizer);
+        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &storage);
         Self {
             query: query.to_vec(),
             search_list_size,
             lsr,
             current: 0,
             last_buffer: None,
-            quantizer,
+            storage: storage,
             meta_page,
         }
     }
@@ -63,10 +63,10 @@ impl<'a, 'b> TSVResponseIterator<'a, 'b> {
                 &self.query,
                 self.search_list_size,
                 None,
-                &self.quantizer,
+                &self.storage,
             );
 
-            let item = self.lsr.consume(index, &self.quantizer);
+            let item = self.lsr.consume(index, &self.storage);
 
             match item {
                 Some((heap_pointer, index_pointer)) => {
@@ -114,11 +114,11 @@ pub extern "C" fn ambeginscan(
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
     let meta_page = MetaPage::read(&indexrel);
-    let mut quantizer = meta_page.get_quantizer(None, None);
-    match &mut quantizer {
-        Quantizer::None => pgrx::error!("not implemented"),
-        Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-        Quantizer::BQ(_bq) => {
+    let mut storage = meta_page.get_storage(None, None);
+    match &mut storage {
+        Storage::None => pgrx::error!("not implemented"),
+        Storage::PQ(_pq) => pgrx::error!("not implemented"),
+        Storage::BQ(_bq) => {
             let state = TSVScanState {
                 iterator: std::ptr::null_mut(),
             };
@@ -148,7 +148,7 @@ pub extern "C" fn amrescan(
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let meta_page = MetaPage::read(&indexrel);
-    let mut quantizer = meta_page.get_quantizer(None, None);
+    let mut storage = meta_page.get_storage(None, None);
 
     if nkeys > 0 {
         scan.xs_recheck = true;
@@ -164,10 +164,10 @@ pub extern "C" fn amrescan(
     //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
-    match &mut quantizer {
-        Quantizer::None => pgrx::error!("not implemented"),
-        Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-        Quantizer::BQ(_bq) => {
+    match &mut storage {
+        Storage::None => pgrx::error!("not implemented"),
+        Storage::PQ(_pq) => pgrx::error!("not implemented"),
+        Storage::BQ(_bq) => {
             let state =
                 unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
             let res = TSVResponseIterator::new(&indexrel, query, search_list_size);

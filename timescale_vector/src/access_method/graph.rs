@@ -10,7 +10,7 @@ use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
 use super::distance::distance_cosine as default_distance;
 use super::model::PgVector;
-use super::quantizer::Quantizer;
+use super::storage::Storage;
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
@@ -69,161 +69,6 @@ impl Drop for TableSlot {
     }
 }
 
-/*
-
-#[derive(Clone)]
-pub struct VectorProvider<'a> {
-    //  quantizer: &'a Quantizer,
-    calc_distance_with_quantizer: bool,
-    heap_rel: Option<&'a PgRelation>,
-    heap_attr_number: Option<pg_sys::AttrNumber>,
-    distance_fn: fn(&[f32], &[f32]) -> f32,
-}
-
-impl<'a> VectorProvider<'a> {
-    pub fn new(
-        heap_rel: Option<&'a PgRelation>,
-        heap_attr_number: Option<pg_sys::AttrNumber>,
-        quantizer: &'a Quantizer,
-        calc_distance_with_quantizer: bool,
-    ) -> Self {
-        Self {
-            //quantizer,
-            calc_distance_with_quantizer,
-            heap_rel,
-            heap_attr_number,
-            distance_fn: default_distance,
-        }
-    }
-
-    pub unsafe fn get_full_vector_copy_from_heap_pointer(
-        &self,
-        heap_pointer: ItemPointer,
-    ) -> Vec<f32> {
-        let slot = TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr_number.unwrap(),
-        );
-        let slice = self.get_slice(&slot);
-        slice.to_vec()
-    }
-
-    unsafe fn get_slice<'s>(&self, slot: &'s TableSlot) -> &'s [f32] {
-        let vector =
-            PgVector::from_datum(slot.get_attribute(self.heap_attr_number.unwrap()).unwrap());
-
-        //note pgvector slice is only valid as long as the slot is valid that's why the lifetime is tied to it.
-        (*vector).to_slice()
-    }
-
-    pub fn get_heap_pointer(&self, index: &PgRelation, index_pointer: IndexPointer) -> HeapPointer {
-        let rn = unsafe { Node::read(index, index_pointer) };
-        let node = rn.get_archived_node();
-        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-        heap_pointer
-    }
-
-    fn get_distance_measure(&self, query: &[f32]) -> DistanceMeasure {
-        return DistanceMeasure::new(self.quantizer, query, self.calc_distance_with_quantizer);
-    }
-
-    pub unsafe fn get_distance(
-        &self,
-        node: &ArchivedNode,
-        query: &[f32],
-        dm: &DistanceMeasure,
-        stats: &mut GreedySearchStats,
-    ) -> f32 {
-        if self.calc_distance_with_quantizer {
-            assert!(node.pq_vector.len() > 0);
-            let vec = node.pq_vector.as_slice();
-            let distance = dm.get_quantized_distance(vec);
-            stats.pq_distance_comparisons += 1;
-            stats.distance_comparisons += 1;
-            return distance;
-        }
-
-        //now we know we're doing a distance calc on the full-sized vector
-        if self.quantizer.is_some() {
-            //have to get it from the heap
-            let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-            let slot = TableSlot::new(
-                self.heap_rel.unwrap(),
-                heap_pointer,
-                self.heap_attr_number.unwrap(),
-            );
-            let slice = self.get_slice(&slot);
-            let distance = dm.get_full_vector_distance(slice, query);
-            stats.distance_comparisons += 1;
-            return distance;
-        } else {
-            //have to get it from the index
-            assert!(node.vector.len() > 0);
-            let vec = node.vector.as_slice();
-            let distance = dm.get_full_vector_distance(vec, query);
-            stats.distance_comparisons += 1;
-            return distance;
-        }
-    }
-
-    pub unsafe fn get_neighbors_with_distances<'i>(
-        &self,
-        index: &'i PgRelation,
-        index_pointer: IndexPointer,
-    ) -> FullVectorDistanceState<'i> {
-        if self.quantizer.is_some() {
-            let heap_pointer = self.get_heap_pointer(index, index_pointer);
-            let slot = TableSlot::new(
-                self.heap_rel.unwrap(),
-                heap_pointer,
-                self.heap_attr_number.unwrap(),
-            );
-            FullVectorDistanceState {
-                table_slot: Some(slot),
-                readable_node: None,
-            }
-        } else {
-            let rn = Node::read(index, index_pointer);
-            FullVectorDistanceState {
-                table_slot: None,
-                readable_node: Some(rn),
-            }
-        }
-    }
-
-    pub unsafe fn get_distance_pair_for_full_vectors_from_state(
-        &self,
-        state: &FullVectorDistanceState,
-        index: &PgRelation,
-        index_pointer: IndexPointer,
-    ) -> f32 {
-        if self.quantizer.is_some() {
-            let heap_pointer = self.get_heap_pointer(index, index_pointer);
-            let slot = TableSlot::new(
-                self.heap_rel.unwrap(),
-                heap_pointer,
-                self.heap_attr_number.unwrap(),
-            );
-            (self.distance_fn)(
-                slot.get_slice(),
-                state.table_slot.as_ref().unwrap().get_slice(),
-            )
-        } else {
-            let rn1 = Node::read(index, index_pointer);
-            let rn2 = state.readable_node.as_ref().unwrap();
-            let node1 = rn1.get_archived_node();
-            let node2 = rn2.get_archived_node();
-            assert!(node1.vector.len() > 0);
-            assert!(node1.vector.len() == node2.vector.len());
-            let vec1 = node1.vector.as_slice();
-            let vec2 = node2.vector.as_slice();
-            (self.distance_fn)(vec1, vec2)
-        }
-    }
-}
-*/
-
 pub struct FullVectorDistanceState<'a> {
     table_slot: Option<TableSlot>,
     readable_node: Option<ReadableNode<'a>>,
@@ -255,60 +100,6 @@ pub enum SearchDistanceMeasure {
     Pq(super::pq::PqDistanceTable),
     Bq(super::bq::BqDistanceTable),
 }
-/*
-pub struct DistanceMeasure {
-    pq_distance_table: Option<super::pq::PqDistanceTable>,
-    bq_distance_table: Option<super::bq::BqDistanceTable>,
-}
-
-impl DistanceMeasure {
-    pub fn new(quantizer: &Quantizer, query: &[f32], calc_distance_with_quantizer: bool) -> Self {
-        if !calc_distance_with_quantizer {
-            return Self {
-                pq_distance_table: None,
-                bq_distance_table: None,
-            };
-        }
-        match quantizer {
-            Quantizer::None => Self {
-                pq_distance_table: None,
-                bq_distance_table: None,
-            },
-            Quantizer::PQ(pq) => {
-                let dc = pq.get_distance_table(query, default_distance);
-                Self {
-                    pq_distance_table: Some(dc),
-                    bq_distance_table: None,
-                }
-            }
-            Quantizer::BQ(bq) => {
-                let dc = bq.get_distance_table(query, default_distance);
-                Self {
-                    pq_distance_table: None,
-                    bq_distance_table: Some(dc),
-                }
-            }
-        }
-    }
-
-    pub fn get_quantized_distance(&self, vec: &[u8]) -> f32 {
-        if self.pq_distance_table.is_some() {
-            let dc = self.pq_distance_table.as_ref().unwrap();
-            let distance = dc.distance(vec);
-            distance
-        } else {
-            let dc = self.bq_distance_table.as_ref().unwrap();
-            let distance = dc.distance(vec);
-            distance
-        }
-    }
-
-    pub fn get_full_vector_distance(&self, vec: &[f32], query: &[f32]) -> f32 {
-        assert!(self.pq_distance_table.is_none());
-        default_distance(vec, query)
-    }
-}
-*/
 
 pub enum LsrPrivateData {
     None,
@@ -376,7 +167,7 @@ impl ListSearchResult {
         sdm: SearchDistanceMeasure,
         search_list_size: usize,
         meta_page: &MetaPage,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> Self {
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
@@ -389,7 +180,7 @@ impl ListSearchResult {
         };
         res.stats.calls += 1;
         for index_pointer in init_ids {
-            let lsn = quantizer.get_lsn(&mut res, index, index_pointer, query);
+            let lsn = storage.get_lsn(&mut res, index, index_pointer, query);
             res.insert_neighbor(lsn);
         }
         res
@@ -444,14 +235,14 @@ impl ListSearchResult {
     pub fn consume(
         &mut self,
         index: &PgRelation,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.best_candidate.is_empty() {
             return None;
         }
         let idx = self.best_candidate.remove(0);
         //let f = &self.candidate_storage[self.best_candidate.remove(0)];
-        let res = quantizer.return_lsn(index, self, idx);
+        let res = storage.return_lsn(index, self, idx);
         return Some(res);
     }
 }
@@ -470,15 +261,15 @@ impl GraphNeighborStore {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-        quantizer: &Quantizer,
+        storage: &Storage,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         match self {
             GraphNeighborStore::Builder(b) => {
-                b.get_neighbors_with_distances(index, neighbors_of, quantizer, result)
+                b.get_neighbors_with_distances(index, neighbors_of, storage, result)
             }
             GraphNeighborStore::Disk(d) => {
-                d.get_neighbors_with_distances(index, neighbors_of, quantizer, result)
+                d.get_neighbors_with_distances(index, neighbors_of, storage, result)
             }
         }
     }
@@ -526,7 +317,7 @@ impl<'a> Graph<'a> {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-        quantizer: &Quantizer,
+        storage: &Quantizer,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool;
     */
@@ -575,14 +366,14 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         query: &[f32],
         meta_page: &MetaPage,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> (ListSearchResult, HashSet<NeighborWithDistance>) {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
             return (ListSearchResult::empty(), HashSet::with_capacity(0));
         }
-        let dm = quantizer.get_search_distance_measure(query, default_distance, false);
+        let dm = storage.get_search_distance_measure(query, default_distance, false);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
@@ -594,7 +385,7 @@ impl<'a> Graph<'a> {
             dm,
             search_list_size,
             meta_page,
-            quantizer,
+            storage,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
         self.greedy_search_iterate(
@@ -603,7 +394,7 @@ impl<'a> Graph<'a> {
             query,
             search_list_size,
             Some(&mut visited_nodes),
-            quantizer,
+            storage,
         );
         return (l, visited_nodes);
     }
@@ -615,14 +406,14 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         query: &[f32],
         search_list_size: usize,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> ListSearchResult {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = quantizer.get_search_distance_measure(query, default_distance, true);
+        let dm = storage.get_search_distance_measure(query, default_distance, true);
 
         ListSearchResult::new(
             index,
@@ -633,7 +424,7 @@ impl<'a> Graph<'a> {
             dm,
             search_list_size,
             &self.meta_page,
-            quantizer,
+            storage,
         )
     }
 
@@ -645,7 +436,7 @@ impl<'a> Graph<'a> {
         query: &[f32],
         visit_n_closest: usize,
         mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) {
         while let Some(list_search_entry_idx) = lsr.visit_closest(visit_n_closest) {
             match visited_nodes {
@@ -658,7 +449,7 @@ impl<'a> Graph<'a> {
                     ));
                 }
             }
-            quantizer.visit_lsn(
+            storage.visit_lsn(
                 index,
                 lsr,
                 list_search_entry_idx,
@@ -678,7 +469,7 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         index_pointer: ItemPointer,
         new_neigbors: Vec<NeighborWithDistance>,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> (Vec<NeighborWithDistance>, PruneNeighborStats) {
         let mut stats = PruneNeighborStats::new();
         stats.calls += 1;
@@ -691,7 +482,7 @@ impl<'a> Graph<'a> {
         self.neighbor_store.get_neighbors_with_distances(
             index,
             index_pointer,
-            quantizer,
+            storage,
             &mut candidates,
         );
 
@@ -746,7 +537,7 @@ impl<'a> Graph<'a> {
                 let existing_neighbor = neighbor;
 
                 let dist_state = unsafe {
-                    quantizer.get_full_vector_distance_state(
+                    storage.get_full_vector_distance_state(
                         index,
                         existing_neighbor.get_index_pointer_to_neighbor(),
                     )
@@ -761,7 +552,7 @@ impl<'a> Graph<'a> {
 
                     //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {
-                        quantizer.get_distance_pair_for_full_vectors_from_state(
+                        storage.get_distance_pair_for_full_vectors_from_state(
                             &dist_state,
                             index,
                             candidate_neighbor.get_index_pointer_to_neighbor(),
@@ -815,7 +606,7 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         index_pointer: IndexPointer,
         vec: &[f32],
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> InsertStats {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
@@ -836,10 +627,10 @@ impl<'a> Graph<'a> {
         }
 
         //TODO: make configurable?
-        let (l, v) = self.greedy_search_for_build(index, vec, meta_page, quantizer);
+        let (l, v) = self.greedy_search_for_build(index, vec, meta_page, storage);
         greedy_search_stats.combine(l.stats);
         let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.into_iter().collect(), quantizer);
+            self.prune_neighbors(index, index_pointer, v.into_iter().collect(), storage);
         prune_neighbor_stats.combine(forward_stats);
 
         //set forward pointers
@@ -853,7 +644,7 @@ impl<'a> Graph<'a> {
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
-                quantizer,
+                storage,
             );
             if needed_prune {
                 cnt = cnt + 1;
@@ -873,15 +664,11 @@ impl<'a> Graph<'a> {
         from: IndexPointer,
         to: IndexPointer,
         distance: f32,
-        quantizer: &Quantizer,
+        storage: &Storage,
     ) -> (bool, PruneNeighborStats) {
         let mut current_links = Vec::<NeighborWithDistance>::new();
-        self.neighbor_store.get_neighbors_with_distances(
-            index,
-            from,
-            quantizer,
-            &mut current_links,
-        );
+        self.neighbor_store
+            .get_neighbors_with_distances(index, from, storage, &mut current_links);
 
         if current_links.len() < current_links.capacity() as _ {
             current_links.push(NeighborWithDistance::new(to, distance));
@@ -895,7 +682,7 @@ impl<'a> Graph<'a> {
                 index,
                 from,
                 vec![NeighborWithDistance::new(to, distance)],
-                quantizer,
+                storage,
             );
             self.set_neighbors(index, from, new_list);
             (true, stats)

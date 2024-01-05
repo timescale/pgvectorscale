@@ -80,39 +80,171 @@ pub unsafe fn write_bq(index: &PgRelation, count: u64, means: &[f32]) -> ItemPoi
     ptr
 }
 
-pub struct BqQuantizer<'a> {
-    use_mean: bool,
+pub struct BqQuantizer {
+    pub use_mean: bool,
     training: bool,
-    count: u64,
-    mean: Vec<f32>,
-    distance_fn: fn(&[f32], &[f32]) -> f32,
-    heap_rel: Option<&'a PgRelation>,
-    heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+    pub count: u64,
+    pub mean: Vec<f32>,
+    pub distance_fn: fn(&[f32], &[f32]) -> f32,
 }
 
-impl<'a> BqQuantizer<'a> {
-    pub fn new(
-        heap_rel: Option<&'a PgRelation>,
-        heap_attr: Option<pgrx::pg_sys::AttrNumber>,
-    ) -> BqQuantizer<'a> {
+impl BqQuantizer {
+    pub fn new() -> BqQuantizer {
         Self {
             use_mean: true,
             training: false,
             count: 0,
             mean: vec![],
             distance_fn: default_distance,
+        }
+    }
+
+    pub fn load(&mut self, count: u64, mean: Vec<f32>) {
+        self.count = count;
+        self.mean = mean;
+    }
+
+    fn quantized_size(full_vector_size: usize) -> usize {
+        if full_vector_size % BITS_STORE_TYPE_SIZE == 0 {
+            full_vector_size / BITS_STORE_TYPE_SIZE
+        } else {
+            (full_vector_size / BITS_STORE_TYPE_SIZE) + 1
+        }
+    }
+
+    pub fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
+        if self.use_mean {
+            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
+
+            for (i, &v) in full_vector.iter().enumerate() {
+                if v > self.mean[i] {
+                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+                }
+            }
+
+            res_vector
+        } else {
+            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
+
+            for (i, &v) in full_vector.iter().enumerate() {
+                if v > 0.0 {
+                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+                }
+            }
+
+            res_vector
+        }
+    }
+
+    pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+        self.training = true;
+        if self.use_mean {
+            self.count = 0;
+            self.mean = vec![0.0; meta_page.get_num_dimensions() as _];
+        }
+    }
+
+    pub fn add_sample(&mut self, sample: &[f32]) {
+        if self.use_mean {
+            self.count += 1;
+            assert!(self.mean.len() == sample.len());
+
+            self.mean
+                .iter_mut()
+                .zip(sample.iter())
+                .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
+        }
+    }
+
+    pub fn finish_training(&mut self) {
+        self.training = false;
+    }
+
+    pub fn vector_for_new_node(
+        &self,
+        meta_page: &super::meta_page::MetaPage,
+        full_vector: &[f32],
+    ) -> Vec<BqVectorElement> {
+        if self.use_mean && self.training {
+            vec![0; BqQuantizer::quantized_size(meta_page.get_num_dimensions() as _)]
+        } else {
+            self.quantize(&full_vector)
+        }
+    }
+
+    fn vector_needs_update_after_training(&self) -> bool {
+        self.use_mean
+    }
+
+    fn get_distance_table(
+        &self,
+        query: &[f32],
+        _distance_fn: fn(&[f32], &[f32]) -> f32,
+    ) -> BqDistanceTable {
+        BqDistanceTable::new(self.quantize(query))
+    }
+
+    fn get_full_vector_distance(&self, left: &[f32], right: &[f32]) -> f32 {
+        (self.distance_fn)(left, right)
+    }
+}
+
+/// DistanceCalculator encapsulates the code to generate distances between a PQ vector and a query.
+pub struct BqDistanceTable {
+    quantized_vector: Vec<BqVectorElement>,
+}
+
+fn xor_unoptimized(v1: &[BqVectorElement], v2: &[BqVectorElement]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1.iter().zip(v2.iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
+impl BqDistanceTable {
+    pub fn new(query: Vec<BqVectorElement>) -> BqDistanceTable {
+        BqDistanceTable {
+            quantized_vector: query,
+        }
+    }
+
+    /// distance emits the sum of distances between each centroid in the quantized vector.
+    pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
+        let count_ones = xor_unoptimized(&self.quantized_vector, bq_vector);
+        //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
+        //but the distance is 1 - dot product, so the more count_ones the higher the distance.
+        // one other check for distance(a,a), xor=0, count_ones=0, distance=0
+        count_ones as f32
+    }
+}
+
+pub struct BqStorage<'a> {
+    quantizer: BqQuantizer,
+    heap_rel: Option<&'a PgRelation>,
+    heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+}
+
+impl<'a> BqStorage<'a> {
+    pub fn new(
+        heap_rel: Option<&'a PgRelation>,
+        heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+    ) -> BqStorage<'a> {
+        Self {
+            quantizer: BqQuantizer::new(),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
         }
     }
 
     pub fn load(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
-        if self.use_mean {
+        if self.quantizer.use_mean {
             if meta_page.get_pq_pointer().is_none() {
                 pgrx::error!("No PQ pointer found in meta page");
             }
             let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-            (self.count, self.mean) = unsafe { read_bq(&index_relation, &pq_item_pointer) };
+            let (count, mean) = unsafe { read_bq(&index_relation, &pq_item_pointer) };
+            self.quantizer.load(count, mean);
         }
     }
 
@@ -271,13 +403,13 @@ impl<'a> BqQuantizer<'a> {
         index_pointer: IndexPointer,
         neighbors: &Vec<NeighborWithDistance>,
     ) {
-        let node = unsafe { BqNode::modify(index, index_pointer) };
-        let mut archived = node.get_archived_node();
-        archived
-            .as_mut()
-            .set_neighbors(neighbors, &meta, index, self);
+        if self.quantizer.vector_needs_update_after_training() {
+            let node = unsafe { BqNode::modify(index, index_pointer) };
+            let mut archived = node.get_archived_node();
+            archived
+                .as_mut()
+                .set_neighbors(neighbors, &meta, index, self);
 
-        if self.use_mean {
             let heap_pointer = node
                 .get_archived_node()
                 .heap_item_pointer
@@ -289,8 +421,8 @@ impl<'a> BqQuantizer<'a> {
                 let mut pgv = archived.as_mut().bq_vectors().index_pin(i);
                 *pgv = bq_vector[i];
             }
+            node.commit();
         }
-        node.commit();
     }
 
     pub fn create_node(
@@ -301,11 +433,7 @@ impl<'a> BqQuantizer<'a> {
         meta_page: &MetaPage,
         tape: &mut Tape,
     ) -> ItemPointer {
-        let bq_vector = if self.use_mean && self.training {
-            vec![0; Self::quantized_size(meta_page.get_num_dimensions() as _)]
-        } else {
-            self.quantize(&full_vector)
-        };
+        let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
         let node = BqNode::new(heap_pointer, &meta_page, bq_vector.as_slice());
 
@@ -314,74 +442,23 @@ impl<'a> BqQuantizer<'a> {
     }
 
     pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
-        self.training = true;
-        if self.use_mean {
-            self.count = 0;
-            self.mean = vec![0.0; meta_page.get_num_dimensions() as _];
-        }
+        self.quantizer.start_training(meta_page);
     }
 
     pub fn add_sample(&mut self, sample: &[f32]) {
-        if self.use_mean {
-            self.count += 1;
-            assert!(self.mean.len() == sample.len());
-
-            self.mean
-                .iter_mut()
-                .zip(sample.iter())
-                .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
-        }
+        self.quantizer.add_sample(sample);
     }
 
     pub fn finish_training(&mut self) {
-        self.training = false;
+        self.quantizer.finish_training();
     }
 
     pub fn write_metadata(&self, index: &PgRelation) {
-        if self.use_mean {
-            let index_pointer = unsafe { write_bq(&index, self.count, &self.mean) };
+        if self.quantizer.use_mean {
+            let index_pointer =
+                unsafe { write_bq(&index, self.quantizer.count, &self.quantizer.mean) };
             super::meta_page::MetaPage::update_pq_pointer(&index, index_pointer);
         }
-    }
-
-    fn quantized_size(full_vector_size: usize) -> usize {
-        if full_vector_size % BITS_STORE_TYPE_SIZE == 0 {
-            full_vector_size / BITS_STORE_TYPE_SIZE
-        } else {
-            (full_vector_size / BITS_STORE_TYPE_SIZE) + 1
-        }
-    }
-
-    pub fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
-        if self.use_mean {
-            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
-
-            for (i, &v) in full_vector.iter().enumerate() {
-                if v > self.mean[i] {
-                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
-                }
-            }
-
-            res_vector
-        } else {
-            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
-
-            for (i, &v) in full_vector.iter().enumerate() {
-                if v > 0.0 {
-                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
-                }
-            }
-
-            res_vector
-        }
-    }
-
-    fn get_distance_table(
-        &self,
-        query: &[f32],
-        _distance_fn: fn(&[f32], &[f32]) -> f32,
-    ) -> BqDistanceTable {
-        BqDistanceTable::new(self.quantize(query))
     }
 
     fn get_heap_pointer(&self, index: &PgRelation, index_pointer: IndexPointer) -> HeapPointer {
@@ -418,7 +495,7 @@ impl<'a> BqQuantizer<'a> {
         );
         let slice1 = slot.get_slice();
         let slice2 = state.get_table_slot().get_slice();
-        (self.distance_fn)(slice1, slice2)
+        self.quantizer.get_full_vector_distance(slice1, slice2)
     }
 
     fn get_quantized_vector_from_heap_pointer(
@@ -434,7 +511,7 @@ impl<'a> BqQuantizer<'a> {
         };
 
         let slice = unsafe { slot.get_slice() };
-        self.quantize(slice)
+        self.quantizer.quantize(slice)
     }
 
     pub fn get_search_distance_measure(
@@ -446,7 +523,9 @@ impl<'a> BqQuantizer<'a> {
         if !calc_distance_with_quantizer {
             return SearchDistanceMeasure::Full(distance_fn);
         } else {
-            return SearchDistanceMeasure::Bq(self.get_distance_table(query, distance_fn));
+            return SearchDistanceMeasure::Bq(
+                self.quantizer.get_distance_table(query, distance_fn),
+            );
         }
     }
 
@@ -466,36 +545,6 @@ impl<'a> BqQuantizer<'a> {
             result.push(NeighborWithDistance::new(n, dist))
         });
         true
-    }
-}
-
-/// DistanceCalculator encapsulates the code to generate distances between a PQ vector and a query.
-pub struct BqDistanceTable {
-    quantized_vector: Vec<BqVectorElement>,
-}
-
-fn xor_unoptimized(v1: &[BqVectorElement], v2: &[BqVectorElement]) -> usize {
-    let mut result = 0;
-    for (b1, b2) in v1.iter().zip(v2.iter()) {
-        result += (b1 ^ b2).count_ones() as usize;
-    }
-    result
-}
-
-impl BqDistanceTable {
-    pub fn new(query: Vec<BqVectorElement>) -> BqDistanceTable {
-        BqDistanceTable {
-            quantized_vector: query,
-        }
-    }
-
-    /// distance emits the sum of distances between each centroid in the quantized vector.
-    pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
-        let count_ones = xor_unoptimized(&self.quantized_vector, bq_vector);
-        //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
-        //but the distance is 1 - dot product, so the more count_ones the higher the distance.
-        // one other check for distance(a,a), xor=0, count_ones=0, distance=0
-        count_ones as f32
     }
 }
 
@@ -555,7 +604,7 @@ impl ArchivedBqNode {
         neighbors: &Vec<NeighborWithDistance>,
         meta_page: &MetaPage,
         index: &PgRelation,
-        quantizer: &BqQuantizer,
+        quantizer: &BqStorage,
     ) {
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);

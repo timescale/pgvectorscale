@@ -1,38 +1,37 @@
 use pgrx::PgRelation;
 
-
 use crate::util::{page, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
-    bq::BqQuantizer,
+    bq::BqStorage,
     graph::{
-        FullVectorDistanceState, GraphNeighborStore,
-        ListSearchNeighbor, ListSearchResult, SearchDistanceMeasure,
+        FullVectorDistanceState, GraphNeighborStore, ListSearchNeighbor, ListSearchResult,
+        SearchDistanceMeasure,
     },
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node},
     pq::PqQuantizer,
 };
 
-pub enum Quantizer<'a> {
-    BQ(BqQuantizer<'a>),
+pub enum Storage<'a> {
+    BQ(BqStorage<'a>),
     PQ(PqQuantizer),
     None,
 }
 
-impl<'a> Quantizer<'a> {
+impl<'a> Storage<'a> {
     pub fn is_some(&self) -> bool {
         match self {
-            Quantizer::None => false,
+            Storage::None => false,
             _ => true,
         }
     }
 
     pub fn page_type(&self) -> page::PageType {
         match self {
-            Quantizer::None => page::PageType::Node,
-            Quantizer::PQ(_) => page::PageType::Node,
-            Quantizer::BQ(_) => page::PageType::BqNode,
+            Storage::None => page::PageType::Node,
+            Storage::PQ(_) => page::PageType::Node,
+            Storage::BQ(_) => page::PageType::BqNode,
         }
     }
 
@@ -45,13 +44,13 @@ impl<'a> Quantizer<'a> {
         tape: &mut Tape,
     ) -> ItemPointer {
         match self {
-            Quantizer::None | Quantizer::PQ(_) => {
+            Storage::None | Storage::PQ(_) => {
                 let node = Node::new(vector.to_vec(), heap_pointer, &meta_page, &self);
 
                 let index_pointer: IndexPointer = node.write(tape);
                 index_pointer
             }
-            Quantizer::BQ(bq) => {
+            Storage::BQ(bq) => {
                 bq.create_node(index_relation, vector, heap_pointer, meta_page, tape)
             }
         }
@@ -63,9 +62,9 @@ impl<'a> Quantizer<'a> {
         index_pointer: IndexPointer,
     ) -> FullVectorDistanceState<'i> {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.get_full_vector_distance_state(index, index_pointer),
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.get_full_vector_distance_state(index, index_pointer),
         }
     }
 
@@ -76,9 +75,9 @@ impl<'a> Quantizer<'a> {
         index_pointer: IndexPointer,
     ) -> f32 {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => {
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => {
                 bq.get_distance_pair_for_full_vectors_from_state(state, index, index_pointer)
             }
         }
@@ -91,9 +90,9 @@ impl<'a> Quantizer<'a> {
         calc_distance_with_quantizer: bool,
     ) -> SearchDistanceMeasure {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => {
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => {
                 bq.get_search_distance_measure(query, distance_fn, calc_distance_with_quantizer)
             }
         }
@@ -106,9 +105,9 @@ impl<'a> Quantizer<'a> {
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.get_neighbors_with_distances(index, neighbors_of, result),
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.get_neighbors_with_distances(index, neighbors_of, result),
         }
     }
 
@@ -121,9 +120,9 @@ impl<'a> Quantizer<'a> {
         gns: &GraphNeighborStore,
     ) {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.visit_lsn(index, lsr, lsn_idx, query, gns),
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.visit_lsn(index, lsr, lsn_idx, query, gns),
         }
     }
 
@@ -135,9 +134,9 @@ impl<'a> Quantizer<'a> {
         query: &[f32],
     ) -> ListSearchNeighbor {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.get_lsn(lsr, index, index_pointer, query),
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.get_lsn(lsr, index, index_pointer, query),
         }
     }
 
@@ -148,9 +147,9 @@ impl<'a> Quantizer<'a> {
         idx: usize,
     ) -> (HeapPointer, IndexPointer) {
         match self {
-            Quantizer::None => pgrx::error!("not implemented"),
-            Quantizer::PQ(_pq) => pgrx::error!("not implemented"),
-            Quantizer::BQ(bq) => bq.return_lsn(index, lsr, idx),
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.return_lsn(index, lsr, idx),
         }
     }
 }

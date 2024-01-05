@@ -8,7 +8,7 @@ use crate::util::{IndexPointer, ItemPointer};
 use super::graph::Graph;
 
 use super::model::*;
-use super::quantizer::Quantizer;
+use super::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -27,12 +27,7 @@ impl BuilderGraph {
         }
     }
 
-    pub unsafe fn write(
-        &self,
-        index: &PgRelation,
-        quantizer: &Quantizer,
-        graph: &Graph,
-    ) -> WriteStats {
+    pub unsafe fn write(&self, index: &PgRelation, storage: &Storage, graph: &Graph) -> WriteStats {
         let mut stats = WriteStats::new();
 
         //TODO: OPT: do this in order of item pointers
@@ -43,7 +38,7 @@ impl BuilderGraph {
                 stats.num_prunes += 1;
                 stats.num_neighbors_before_prune += neighbors.len();
                 (prune_neighbors, _) =
-                    graph.prune_neighbors(index, *index_pointer, vec![], quantizer);
+                    graph.prune_neighbors(index, *index_pointer, vec![], storage);
                 stats.num_neighbors_after_prune += prune_neighbors.len();
                 &prune_neighbors
             } else {
@@ -51,16 +46,16 @@ impl BuilderGraph {
             };
             stats.num_neighbors += neighbors.len();
 
-            match quantizer {
-                Quantizer::None => {
+            match storage {
+                Storage::None => {
                     error!("Quantizer::None not implemented")
                     /* need to update the neighbors */
                 }
-                Quantizer::PQ(_pq) => {
+                Storage::PQ(_pq) => {
                     error!("Quantizer::None not implemented");
                     //pq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
                 }
-                Quantizer::BQ(bq) => {
+                Storage::BQ(bq) => {
                     //TODO: OPT: this may not be needed
                     bq.update_node_after_traing(
                         index,
@@ -89,7 +84,7 @@ impl BuilderGraph {
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,
-        _quantizer: &Quantizer,
+        _storage: &Storage,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let neighbors = self.neighbor_map.get(&neighbors_of);

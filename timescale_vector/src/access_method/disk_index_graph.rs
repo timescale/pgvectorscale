@@ -3,7 +3,7 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, quantizer::Quantizer,
+    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, storage::Storage,
 };
 
 pub struct DiskIndexGraph {}
@@ -21,10 +21,10 @@ impl DiskIndexGraph {
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-        quantizer: &Quantizer,
+        storage: &Storage,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
-        quantizer.get_neighbors_with_distances(index, neighbors_of, result)
+        storage.get_neighbors_with_distances(index, neighbors_of, result)
     }
 
     pub fn is_empty(&self, meta_page: &MetaPage) -> bool {
