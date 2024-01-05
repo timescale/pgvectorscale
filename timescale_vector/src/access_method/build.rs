@@ -2,7 +2,9 @@ use std::time::Instant;
 
 use pgrx::*;
 
+use crate::access_method::builder_graph::WriteStats;
 use crate::access_method::disk_index_graph::DiskIndexGraph;
+use crate::access_method::graph;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::GraphNeighborStore;
 use crate::access_method::graph::InsertStats;
@@ -193,25 +195,17 @@ fn do_heap_scan<'a>(
     }
 
     // we train the quantizer and add prepare to write quantized values to the nodes.
-    match &mut state.storage {
-        Storage::None => {}
+    let write_stats = match &mut state.storage {
+        Storage::None => {
+            error!("not implemented");
+        }
         Storage::PQ(pq) => {
             pq.finish_training();
+            error!("not implemented")
         }
-        Storage::BQ(bq) => {
-            bq.finish_training();
-        }
-    }
-
-    info!("Finished scanning heap, now writing nodes");
-    let write_stats = unsafe {
-        match state.graph.get_neighbor_store() {
-            GraphNeighborStore::Builder(builder) => {
-                builder.write(index_relation, &state.storage, &state.graph)
-            }
-            GraphNeighborStore::Disk(_) => panic!("Builder should be using the builder store"),
-        }
+        Storage::BQ(bq) => bq.finish_training(index_relation, &state.graph),
     };
+
     info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
@@ -226,12 +220,12 @@ fn do_heap_scan<'a>(
             write_stats.num_neighbors / write_stats.num_nodes
         );
     }
-    if write_stats.num_prunes > 0 {
+    if write_stats.prune_stats.calls > 0 {
         info!(
             "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
-            write_stats.num_neighbors_before_prune / write_stats.num_prunes,
-            write_stats.num_neighbors_after_prune / write_stats.num_prunes,
-            write_stats.num_prunes
+            write_stats.prune_stats.num_neighbors_before_prune / write_stats.prune_stats.calls,
+            write_stats.prune_stats.num_neighbors_after_prune / write_stats.prune_stats.calls,
+            write_stats.prune_stats.calls
         );
     }
     let ntuples = state.ntuples;
@@ -401,8 +395,7 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test]
-    unsafe fn test_bq_index_creation() -> spi::Result<()> {
+    unsafe fn test_bq_index_creation_params(num_neighbors: usize) -> spi::Result<()> {
         Spi::run(&format!(
             "CREATE TABLE test_bq (
                 embedding vector (1536)
@@ -420,7 +413,7 @@ mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX idx_tsv_bq ON test_bq USING tsv (embedding) WITH (num_neighbors = 38, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
+            CREATE INDEX idx_tsv_bq ON test_bq USING tsv (embedding) WITH (num_neighbors = {num_neighbors}, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
 
             ;
 
@@ -436,6 +429,19 @@ mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
 
+            -- test insert 2 vectors
+            INSERT INTO test_bq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 2) i
+                GROUP BY
+                    i % 2) g;
+
+
             EXPLAIN ANALYZE
             SELECT
                 *
@@ -450,6 +456,19 @@ mod tests {
             DROP INDEX idx_tsv_bq;
             ",
         ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_creation() -> spi::Result<()> {
+        test_bq_index_creation_params(38)?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_creation_few_neighbors() -> spi::Result<()> {
+        //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
+        test_bq_index_creation_params(10)?;
         Ok(())
     }
 

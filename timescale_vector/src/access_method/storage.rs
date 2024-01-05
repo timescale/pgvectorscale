@@ -13,6 +13,67 @@ use super::{
     pq::PqQuantizer,
 };
 
+pub trait StorageTrait {
+    unsafe fn get_full_vector_distance_state<'i>(
+        &self,
+        index: &'i PgRelation,
+        index_pointer: IndexPointer,
+    ) -> FullVectorDistanceState<'i>;
+
+    unsafe fn get_distance_pair_for_full_vectors_from_state(
+        &self,
+        state: &FullVectorDistanceState,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+    ) -> f32;
+
+    fn get_search_distance_measure(
+        &self,
+        query: &[f32],
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+        calc_distance_with_quantizer: bool,
+    ) -> SearchDistanceMeasure;
+
+    fn get_neighbors_with_distances(
+        &self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        result: &mut Vec<NeighborWithDistance>,
+    ) -> bool;
+
+    fn visit_lsn(
+        &self,
+        index: &PgRelation,
+        lsr: &mut ListSearchResult,
+        lsn_idx: usize,
+        query: &[f32],
+        gns: &GraphNeighborStore,
+    );
+
+    fn get_lsn(
+        &self,
+        lsr: &mut ListSearchResult,
+        index: &PgRelation,
+        index_pointer: ItemPointer,
+        query: &[f32],
+    ) -> ListSearchNeighbor;
+
+    fn return_lsn(
+        &self,
+        index: &PgRelation,
+        lsr: &mut ListSearchResult,
+        idx: usize,
+    ) -> (HeapPointer, IndexPointer);
+
+    fn set_neighbors_on_disk(
+        &self,
+        index: &PgRelation,
+        meta: &MetaPage,
+        index_pointer: IndexPointer,
+        neighbors: &[NeighborWithDistance],
+    );
+}
+
 pub enum Storage<'a> {
     BQ(BqStorage<'a>),
     PQ(PqQuantizer),
@@ -55,8 +116,10 @@ impl<'a> Storage<'a> {
             }
         }
     }
+}
 
-    pub unsafe fn get_full_vector_distance_state<'i>(
+impl<'a> StorageTrait for Storage<'a> {
+    unsafe fn get_full_vector_distance_state<'i>(
         &self,
         index: &'i PgRelation,
         index_pointer: IndexPointer,
@@ -68,7 +131,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub unsafe fn get_distance_pair_for_full_vectors_from_state(
+    unsafe fn get_distance_pair_for_full_vectors_from_state(
         &self,
         state: &FullVectorDistanceState,
         index: &PgRelation,
@@ -83,7 +146,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub fn get_search_distance_measure(
+    fn get_search_distance_measure(
         &self,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
@@ -98,7 +161,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub fn get_neighbors_with_distances(
+    fn get_neighbors_with_distances(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -111,7 +174,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub fn visit_lsn(
+    fn visit_lsn(
         &self,
         index: &PgRelation,
         lsr: &mut ListSearchResult,
@@ -126,7 +189,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub fn get_lsn(
+    fn get_lsn(
         &self,
         lsr: &mut ListSearchResult,
         index: &PgRelation,
@@ -140,7 +203,7 @@ impl<'a> Storage<'a> {
         }
     }
 
-    pub fn return_lsn(
+    fn return_lsn(
         &self,
         index: &PgRelation,
         lsr: &mut ListSearchResult,
@@ -150,6 +213,20 @@ impl<'a> Storage<'a> {
             Storage::None => pgrx::error!("not implemented"),
             Storage::PQ(_pq) => pgrx::error!("not implemented"),
             Storage::BQ(bq) => bq.return_lsn(index, lsr, idx),
+        }
+    }
+
+    fn set_neighbors_on_disk(
+        &self,
+        index: &PgRelation,
+        meta: &MetaPage,
+        index_pointer: IndexPointer,
+        neighbors: &[NeighborWithDistance],
+    ) {
+        match self {
+            Storage::None => pgrx::error!("not implemented"),
+            Storage::PQ(_pq) => pgrx::error!("not implemented"),
+            Storage::BQ(bq) => bq.set_neighbors_on_disk(index, meta, index_pointer, neighbors),
         }
     }
 }

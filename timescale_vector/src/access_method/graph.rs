@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::pg_sys::{Datum, TupleTableSlot};
-use pgrx::{pg_sys, PgBox, PgRelation};
+use pgrx::{info, pg_sys, PgBox, PgRelation};
 
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -9,8 +9,9 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
 use super::distance::distance_cosine as default_distance;
+use super::meta_page;
 use super::model::PgVector;
-use super::storage::Storage;
+use super::storage::{Storage, StorageTrait};
 use super::{
     meta_page::MetaPage,
     model::{NeighborWithDistance, ReadableNode},
@@ -257,11 +258,11 @@ pub enum GraphNeighborStore {
 }
 
 impl GraphNeighborStore {
-    pub fn get_neighbors_with_distances(
+    pub fn get_neighbors_with_distances<S: StorageTrait>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-        storage: &Storage,
+        storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         match self {
@@ -274,15 +275,26 @@ impl GraphNeighborStore {
         }
     }
 
-    pub fn set_neighbors(
+    pub fn set_neighbors<S: StorageTrait>(
         &mut self,
+        storage: &S,
         index: &PgRelation,
+        meta_page: &MetaPage,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
         match self {
-            GraphNeighborStore::Builder(b) => b.set_neighbors(index, neighbors_of, new_neighbors),
-            GraphNeighborStore::Disk(d) => d.set_neighbors(index, neighbors_of, new_neighbors),
+            GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, new_neighbors),
+            GraphNeighborStore::Disk(d) => {
+                d.set_neighbors(storage, index, meta_page, neighbors_of, new_neighbors)
+            }
+        }
+    }
+
+    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
+        match self {
+            GraphNeighborStore::Builder(b) => b.max_neighbors(meta_page),
+            GraphNeighborStore::Disk(d) => d.max_neighbors(meta_page),
         }
     }
 }
@@ -329,8 +341,60 @@ impl<'a> Graph<'a> {
         }
     }
 
-    fn set_neighbors(
+    fn add_neighbors<S: StorageTrait>(
         &mut self,
+        storage: &S,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        additional_neighbors: Vec<NeighborWithDistance>,
+        prune_stats: &mut PruneNeighborStats,
+    ) -> (bool, Vec<NeighborWithDistance>) {
+        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
+            self.get_meta_page().get_max_neighbors_during_build() + 1,
+        );
+        self.neighbor_store.get_neighbors_with_distances(
+            index,
+            neighbors_of,
+            storage,
+            &mut candidates,
+        );
+
+        let mut hash: HashSet<ItemPointer> = candidates
+            .iter()
+            .map(|c| c.get_index_pointer_to_neighbor())
+            .collect();
+        for n in additional_neighbors {
+            if hash.insert(n.get_index_pointer_to_neighbor()) {
+                candidates.push(n);
+            }
+        }
+        //remove myself
+        if !hash.insert(neighbors_of) {
+            //prevent self-loops
+            let index = candidates
+                .iter()
+                .position(|x| x.get_index_pointer_to_neighbor() == neighbors_of)
+                .unwrap();
+            candidates.remove(index);
+        }
+
+        let (pruned, new_neighbors) =
+            if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
+                let (new_list, stats) = self.prune_neighbors(index, candidates, storage);
+                prune_stats.combine(stats);
+                (true, new_list)
+            } else {
+                (false, candidates)
+            };
+
+        //OPT: remove clone
+        self.set_neighbors(storage, index, neighbors_of, new_neighbors.clone());
+        (pruned, new_neighbors)
+    }
+
+    fn set_neighbors<S: StorageTrait>(
+        &mut self,
+        storage: &S,
         index: &PgRelation,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
@@ -341,8 +405,13 @@ impl<'a> Graph<'a> {
             MetaPage::update_init_ids(index, vec![neighbors_of]);
             *self.meta_page = MetaPage::read(index);
         }
-        self.neighbor_store
-            .set_neighbors(index, neighbors_of, new_neighbors);
+        self.neighbor_store.set_neighbors(
+            storage,
+            index,
+            self.meta_page,
+            neighbors_of,
+            new_neighbors,
+        );
     }
 
     pub fn get_meta_page(&self) -> &MetaPage {
@@ -464,46 +533,18 @@ impl<'a> Graph<'a> {
     ///
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
-    pub fn prune_neighbors(
+    pub fn prune_neighbors<S: StorageTrait>(
         &self,
         index: &PgRelation,
-        index_pointer: ItemPointer,
-        new_neigbors: Vec<NeighborWithDistance>,
-        storage: &Storage,
+        mut candidates: Vec<NeighborWithDistance>,
+        storage: &S,
     ) -> (Vec<NeighborWithDistance>, PruneNeighborStats) {
         let mut stats = PruneNeighborStats::new();
         stats.calls += 1;
         //TODO make configurable?
         let max_alpha = self.get_meta_page().get_max_alpha();
-        //get a unique candidate pool
-        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
-            (self.get_meta_page().get_num_neighbors() as usize) + new_neigbors.len(),
-        );
-        self.neighbor_store.get_neighbors_with_distances(
-            index,
-            index_pointer,
-            storage,
-            &mut candidates,
-        );
 
-        let mut hash: HashSet<ItemPointer> = candidates
-            .iter()
-            .map(|c| c.get_index_pointer_to_neighbor())
-            .collect();
-        for n in new_neigbors {
-            if hash.insert(n.get_index_pointer_to_neighbor()) {
-                candidates.push(n);
-            }
-        }
-        //remove myself
-        if !hash.insert(index_pointer) {
-            //prevent self-loops
-            let index = candidates
-                .iter()
-                .position(|x| x.get_index_pointer_to_neighbor() == index_pointer)
-                .unwrap();
-            candidates.remove(index);
-        }
+        stats.num_neighbors_before_prune += candidates.len();
         //TODO remove deleted nodes
 
         //TODO diskann has something called max_occlusion_size/max_candidate_size(default:750). Do we need to implement?
@@ -598,6 +639,7 @@ impl<'a> Graph<'a> {
             }
             alpha = alpha * 1.2
         }
+        stats.num_neighbors_after_prune += results.len();
         (results, stats)
     }
 
@@ -614,6 +656,7 @@ impl<'a> Graph<'a> {
 
         if self.is_empty() {
             self.set_neighbors(
+                storage,
                 index,
                 index_pointer,
                 Vec::<NeighborWithDistance>::with_capacity(
@@ -629,27 +672,29 @@ impl<'a> Graph<'a> {
         //TODO: make configurable?
         let (l, v) = self.greedy_search_for_build(index, vec, meta_page, storage);
         greedy_search_stats.combine(l.stats);
-        let (neighbor_list, forward_stats) =
-            self.prune_neighbors(index, index_pointer, v.into_iter().collect(), storage);
-        prune_neighbor_stats.combine(forward_stats);
 
-        //set forward pointers
-        self.set_neighbors(index, index_pointer, neighbor_list.clone());
+        let (_, neighbor_list) = self.add_neighbors(
+            storage,
+            index,
+            index_pointer,
+            v.into_iter().collect(),
+            &mut prune_neighbor_stats,
+        );
 
         //update back pointers
         let mut cnt = 0;
         for neighbor in neighbor_list {
-            let (needed_prune, backpointer_stats) = self.update_back_pointer(
+            let needed_prune = self.update_back_pointer(
                 index,
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
                 storage,
+                &mut prune_neighbor_stats,
             );
             if needed_prune {
                 cnt = cnt + 1;
             }
-            prune_neighbor_stats.combine(backpointer_stats);
         }
         //info!("pruned {} neighbors", cnt);
         return InsertStats {
@@ -665,28 +710,11 @@ impl<'a> Graph<'a> {
         to: IndexPointer,
         distance: f32,
         storage: &Storage,
-    ) -> (bool, PruneNeighborStats) {
-        let mut current_links = Vec::<NeighborWithDistance>::new();
-        self.neighbor_store
-            .get_neighbors_with_distances(index, from, storage, &mut current_links);
-
-        if current_links.len() < current_links.capacity() as _ {
-            current_links.push(NeighborWithDistance::new(to, distance));
-            self.set_neighbors(index, from, current_links);
-            (false, PruneNeighborStats::new())
-        } else {
-            //info!("sizes {} {} {}", current_links.len() + 1, current_links.capacity(), self.meta_page.get_max_neighbors_during_build());
-            //Note prune_neighbors will reduce to current_links.len() to num_neighbors while capacity is num_neighbors * 1.3
-            //thus we are avoiding prunning every time
-            let (new_list, stats) = self.prune_neighbors(
-                index,
-                from,
-                vec![NeighborWithDistance::new(to, distance)],
-                storage,
-            );
-            self.set_neighbors(index, from, new_list);
-            (true, stats)
-        }
+        prune_stats: &mut PruneNeighborStats,
+    ) -> bool {
+        let new = vec![NeighborWithDistance::new(to, distance)];
+        let (pruned, _) = self.add_neighbors(storage, index, from, new, prune_stats);
+        pruned
     }
 }
 
@@ -695,6 +723,8 @@ pub struct PruneNeighborStats {
     pub calls: usize,
     pub distance_comparisons: usize,
     pub node_reads: usize,
+    pub num_neighbors_before_prune: usize,
+    pub num_neighbors_after_prune: usize,
 }
 
 impl PruneNeighborStats {
@@ -703,6 +733,8 @@ impl PruneNeighborStats {
             calls: 0,
             distance_comparisons: 0,
             node_reads: 0,
+            num_neighbors_before_prune: 0,
+            num_neighbors_after_prune: 0,
         }
     }
 
@@ -710,6 +742,8 @@ impl PruneNeighborStats {
         self.calls += other.calls;
         self.distance_comparisons += other.distance_comparisons;
         self.node_reads += other.node_reads;
+        self.num_neighbors_before_prune += other.num_neighbors_before_prune;
+        self.num_neighbors_after_prune += other.num_neighbors_after_prune;
     }
 }
 

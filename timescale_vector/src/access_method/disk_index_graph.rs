@@ -3,7 +3,7 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, storage::Storage,
+    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, storage::StorageTrait,
 };
 
 pub struct DiskIndexGraph {}
@@ -17,11 +17,11 @@ impl DiskIndexGraph {
         node.get_index_pointer_to_neighbors()
     }
 
-    pub fn get_neighbors_with_distances(
+    pub fn get_neighbors_with_distances<S: StorageTrait>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
-        storage: &Storage,
+        storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         storage.get_neighbors_with_distances(index, neighbors_of, result)
@@ -31,23 +31,18 @@ impl DiskIndexGraph {
         meta_page.get_init_ids().is_none()
     }
 
-    pub fn set_neighbors(
+    pub fn set_neighbors<S: StorageTrait>(
         &mut self,
-        _index: &PgRelation,
-        _neighbors_of: ItemPointer,
-        _new_neighbors: Vec<NeighborWithDistance>,
+        storage: &S,
+        index: &PgRelation,
+        meta_page: &MetaPage,
+        neighbors_of: ItemPointer,
+        new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        pgrx::error!("disk index graph set neighbor not implemented")
-        /*if self.meta_page.get_init_ids().is_none() {
-            MetaPage::update_init_ids(index, vec![neighbors_of]);
-            self.meta_page = MetaPage::read(index);
-        }
+        storage.set_neighbors_on_disk(index, meta_page, neighbors_of, new_neighbors.as_slice());
+    }
 
-        unsafe {
-            let node = Node::modify(index, neighbors_of);
-            let archived = node.get_archived_node();
-            archived.set_neighbors(&new_neighbors, &self.meta_page);
-            node.commit();
-        }*/
+    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
+        meta_page.get_num_neighbors() as _
     }
 }

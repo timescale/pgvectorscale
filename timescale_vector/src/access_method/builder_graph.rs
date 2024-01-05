@@ -1,3 +1,4 @@
+use std::collections::hash_map::IterMut;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -5,10 +6,11 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::Graph;
+use super::graph::{Graph, PruneNeighborStats};
 
+use super::meta_page::MetaPage;
 use super::model::*;
-use super::storage::Storage;
+use super::storage::{Storage, StorageTrait};
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -26,47 +28,12 @@ impl BuilderGraph {
             neighbor_map: HashMap::with_capacity(200),
         }
     }
+    pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
+        self.neighbor_map.iter()
+    }
 
-    pub unsafe fn write(&self, index: &PgRelation, storage: &Storage, graph: &Graph) -> WriteStats {
-        let mut stats = WriteStats::new();
-
-        //TODO: OPT: do this in order of item pointers
-        for (index_pointer, neighbors) in &self.neighbor_map {
-            stats.num_nodes += 1;
-            let prune_neighbors;
-            let neighbors = if neighbors.len() > graph.get_meta_page().get_num_neighbors() as _ {
-                stats.num_prunes += 1;
-                stats.num_neighbors_before_prune += neighbors.len();
-                (prune_neighbors, _) =
-                    graph.prune_neighbors(index, *index_pointer, vec![], storage);
-                stats.num_neighbors_after_prune += prune_neighbors.len();
-                &prune_neighbors
-            } else {
-                neighbors
-            };
-            stats.num_neighbors += neighbors.len();
-
-            match storage {
-                Storage::None => {
-                    error!("Quantizer::None not implemented")
-                    /* need to update the neighbors */
-                }
-                Storage::PQ(_pq) => {
-                    error!("Quantizer::None not implemented");
-                    //pq.update_node_after_traing(index, &meta, *index_pointer, neighbors);
-                }
-                Storage::BQ(bq) => {
-                    //TODO: OPT: this may not be needed
-                    bq.update_node_after_traing(
-                        index,
-                        graph.get_meta_page(),
-                        *index_pointer,
-                        neighbors,
-                    );
-                }
-            };
-        }
-        stats
+    pub fn iter_mut(&mut self) -> IterMut<ItemPointer, Vec<NeighborWithDistance>> {
+        self.neighbor_map.iter_mut()
     }
 
     pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
@@ -80,11 +47,11 @@ impl BuilderGraph {
         }
     }
 
-    pub fn get_neighbors_with_distances(
+    pub fn get_neighbors_with_distances<S: StorageTrait>(
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,
-        _storage: &Storage,
+        _storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let neighbors = self.neighbor_map.get(&neighbors_of);
@@ -105,20 +72,21 @@ impl BuilderGraph {
 
     pub fn set_neighbors(
         &mut self,
-        _index: &PgRelation,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
         self.neighbor_map.insert(neighbors_of, new_neighbors);
+    }
+
+    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
+        meta_page.get_max_neighbors_during_build()
     }
 }
 
 pub struct WriteStats {
     pub started: Instant,
     pub num_nodes: usize,
-    pub num_prunes: usize,
-    pub num_neighbors_before_prune: usize,
-    pub num_neighbors_after_prune: usize,
+    pub prune_stats: PruneNeighborStats,
     pub num_neighbors: usize,
 }
 
@@ -127,9 +95,7 @@ impl WriteStats {
         Self {
             started: Instant::now(),
             num_nodes: 0,
-            num_prunes: 0,
-            num_neighbors_before_prune: 0,
-            num_neighbors_after_prune: 0,
+            prune_stats: PruneNeighborStats::new(),
             num_neighbors: 0,
         }
     }
