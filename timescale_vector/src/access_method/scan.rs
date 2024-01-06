@@ -8,47 +8,86 @@ use crate::{
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
-use super::{graph::ListSearchResult, storage::Storage};
+use super::{
+    graph::{Graph, ListSearchResult},
+    meta_page,
+    storage::{Storage, StorageTrait},
+};
 
-struct TSVResponseIterator<'a, 'b> {
+struct TSVScanState<'a, 'b> {
+    iterator: *mut TSVResponseIterator<'a>,
+    storage: *mut Storage<'b>,
+}
+
+impl<'a, 'b> TSVScanState<'a, 'b> {
+    fn new() -> Self {
+        Self {
+            iterator: std::ptr::null_mut(),
+            storage: std::ptr::null_mut(),
+        }
+    }
+
+    fn initialize(&mut self, index: &PgRelation, query: &[f32], search_list_size: usize) {
+        let mut meta_page = MetaPage::read(&index);
+        let mut storage = meta_page.get_storage(None, None);
+
+        let it = match &mut storage {
+            Storage::None => {
+                pgrx::error!("not implemented");
+            }
+            Storage::PQ(pq) => {
+                pq.load(index, &meta_page);
+                pgrx::error!("not implemented");
+            }
+            Storage::BQ(bq) => {
+                bq.load(index, &meta_page);
+                TSVResponseIterator::new(bq, index, query, search_list_size, meta_page)
+            }
+        };
+
+        self.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(it);
+        self.storage = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(storage);
+    }
+}
+
+struct TSVResponseIterator<'a> {
     query: Vec<f32>,
     lsr: ListSearchResult,
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
-    storage: Storage<'b>,
     meta_page: MetaPage,
 }
 
-impl<'a, 'b> TSVResponseIterator<'a, 'b> {
-    fn new(index: &PgRelation, query: &[f32], search_list_size: usize) -> Self {
+impl<'a> TSVResponseIterator<'a> {
+    fn new<S: StorageTrait>(
+        storage: &S,
+        index: &PgRelation,
+        query: &[f32],
+        search_list_size: usize,
+        meta_page: MetaPage,
+    ) -> Self {
         let mut meta_page = MetaPage::read(&index);
-        let mut storage = meta_page.get_storage(None, None);
-        match &mut storage {
-            Storage::None => {}
-            Storage::PQ(pq) => pq.load(index, &meta_page),
-            Storage::BQ(bq) => bq.load(index, &meta_page),
-        }
         let graph = Graph::new(
             GraphNeighborStore::Disk(DiskIndexGraph::new()),
             &mut meta_page,
         );
-        use super::graph::Graph;
-        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, &storage);
+
+        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
+
         Self {
             query: query.to_vec(),
             search_list_size,
             lsr,
             current: 0,
             last_buffer: None,
-            storage: storage,
             meta_page,
         }
     }
 }
 
-impl<'a, 'b> TSVResponseIterator<'a, 'b> {
-    fn next(&mut self, index: &'a PgRelation) -> Option<HeapPointer> {
+impl<'a> TSVResponseIterator<'a> {
+    fn next<S: StorageTrait>(&mut self, index: &'a PgRelation, storage: &S) -> Option<HeapPointer> {
         let graph = Graph::new(
             GraphNeighborStore::Disk(DiskIndexGraph::new()),
             &mut self.meta_page,
@@ -63,10 +102,10 @@ impl<'a, 'b> TSVResponseIterator<'a, 'b> {
                 &self.query,
                 self.search_list_size,
                 None,
-                &self.storage,
+                storage,
             );
 
-            let item = self.lsr.consume(index, &self.storage);
+            let item = self.lsr.consume(index, storage);
 
             match item {
                 Some((heap_pointer, index_pointer)) => {
@@ -95,10 +134,11 @@ impl<'a, 'b> TSVResponseIterator<'a, 'b> {
     }
 }
 
+/*
 struct TSVScanState<'a, 'b> {
     iterator: *mut TSVResponseIterator<'a, 'b>,
 }
-
+*/
 #[pg_guard]
 pub extern "C" fn ambeginscan(
     index_relation: pg_sys::Relation,
@@ -119,10 +159,7 @@ pub extern "C" fn ambeginscan(
         Storage::None => pgrx::error!("not implemented"),
         Storage::PQ(_pq) => pgrx::error!("not implemented"),
         Storage::BQ(_bq) => {
-            let state = TSVScanState {
-                iterator: std::ptr::null_mut(),
-            };
-
+            let state = TSVScanState::new();
             scandesc.opaque = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(state)
                 as void_mut_ptr;
         }
@@ -164,16 +201,19 @@ pub extern "C" fn amrescan(
     //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
-    match &mut storage {
+    let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+    state.initialize(&indexrel, query, search_list_size);
+    /*match &mut storage {
         Storage::None => pgrx::error!("not implemented"),
         Storage::PQ(_pq) => pgrx::error!("not implemented"),
         Storage::BQ(_bq) => {
             let state =
                 unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+
             let res = TSVResponseIterator::new(&indexrel, query, search_list_size);
             state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
         }
-    }
+    }*/
 }
 
 #[pg_guard]
@@ -187,9 +227,23 @@ pub extern "C" fn amgettuple(
 
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
 
-    /* no need to recheck stuff for now */
+    let storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
+
+    match &storage {
+        Storage::None => pgrx::error!("not implemented"),
+        Storage::PQ(_pq) => pgrx::error!("not implemented"),
+        Storage::BQ(bq) => get_tuple(bq, &indexrel, iter, scan),
+    }
+}
+
+fn get_tuple<'a, S: StorageTrait>(
+    storage: &S,
+    index: &'a PgRelation,
+    iter: &'a mut TSVResponseIterator<'a>,
+    mut scan: PgBox<pg_sys::IndexScanDescData>,
+) -> bool {
     scan.xs_recheckorderby = false;
-    match iter.next(&indexrel) {
+    match iter.next(&index, storage) {
         Some(heap_pointer) => {
             let tid_to_set = &mut scan.xs_heaptid;
             heap_pointer.to_item_pointer_data(tid_to_set);

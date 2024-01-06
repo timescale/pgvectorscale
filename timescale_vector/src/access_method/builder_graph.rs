@@ -10,7 +10,7 @@ use super::graph::{Graph, PruneNeighborStats};
 
 use super::meta_page::MetaPage;
 use super::model::*;
-use super::storage::{Storage, StorageTrait};
+use super::storage::StorageTrait;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres

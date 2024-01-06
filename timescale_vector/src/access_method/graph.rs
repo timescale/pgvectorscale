@@ -159,7 +159,7 @@ impl ListSearchResult {
         }
     }
 
-    fn new(
+    fn new<S: StorageTrait>(
         index: &PgRelation,
         max_history_size: Option<usize>,
         _graph: &Graph,
@@ -168,7 +168,7 @@ impl ListSearchResult {
         sdm: SearchDistanceMeasure,
         search_list_size: usize,
         meta_page: &MetaPage,
-        storage: &Storage,
+        storage: &S,
     ) -> Self {
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
@@ -233,10 +233,10 @@ impl ListSearchResult {
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
     //into the best_candidate list, so it will never again be returned.
-    pub fn consume(
+    pub fn consume<S: StorageTrait>(
         &mut self,
         index: &PgRelation,
-        storage: &Storage,
+        storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.best_candidate.is_empty() {
             return None;
@@ -430,12 +430,12 @@ impl<'a> Graph<'a> {
     ///
     /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
-    fn greedy_search_for_build(
+    fn greedy_search_for_build<S: StorageTrait>(
         &self,
         index: &PgRelation,
         query: &[f32],
         meta_page: &MetaPage,
-        storage: &Storage,
+        storage: &S,
     ) -> (ListSearchResult, HashSet<NeighborWithDistance>) {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
@@ -470,12 +470,12 @@ impl<'a> Graph<'a> {
 
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
     /// the next elements.
-    pub fn greedy_search_streaming_init(
+    pub fn greedy_search_streaming_init<S: StorageTrait>(
         &self,
         index: &PgRelation,
         query: &[f32],
         search_list_size: usize,
-        storage: &Storage,
+        storage: &S,
     ) -> ListSearchResult {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
@@ -498,14 +498,14 @@ impl<'a> Graph<'a> {
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
-    pub fn greedy_search_iterate(
+    pub fn greedy_search_iterate<S: StorageTrait>(
         &self,
         lsr: &mut ListSearchResult,
         index: &PgRelation,
         query: &[f32],
         visit_n_closest: usize,
         mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
-        storage: &Storage,
+        storage: &S,
     ) {
         while let Some(list_search_entry_idx) = lsr.visit_closest(visit_n_closest) {
             match visited_nodes {
@@ -643,12 +643,12 @@ impl<'a> Graph<'a> {
         (results, stats)
     }
 
-    pub fn insert(
+    pub fn insert<S: StorageTrait>(
         &mut self,
         index: &PgRelation,
         index_pointer: IndexPointer,
         vec: &[f32],
-        storage: &Storage,
+        storage: &S,
     ) -> InsertStats {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
@@ -703,13 +703,13 @@ impl<'a> Graph<'a> {
         };
     }
 
-    fn update_back_pointer(
+    fn update_back_pointer<S: StorageTrait>(
         &mut self,
         index: &PgRelation,
         from: IndexPointer,
         to: IndexPointer,
         distance: f32,
-        storage: &Storage,
+        storage: &S,
         prune_stats: &mut PruneNeighborStats,
     ) -> bool {
         let new = vec![NeighborWithDistance::new(to, distance)];

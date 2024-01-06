@@ -329,28 +329,8 @@ impl<'a> BqStorage<'a> {
         }
     }
 
-    pub fn create_node(
-        &self,
-        _index_relation: &PgRelation,
-        full_vector: &[f32],
-        heap_pointer: HeapPointer,
-        meta_page: &MetaPage,
-        tape: &mut Tape,
-    ) -> ItemPointer {
-        let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
-
-        let node = BqNode::new(heap_pointer, &meta_page, bq_vector.as_slice());
-
-        let index_pointer: IndexPointer = node.write(tape);
-        index_pointer
-    }
-
     pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
         self.quantizer.start_training(meta_page);
-    }
-
-    pub fn add_sample(&mut self, sample: &[f32]) {
-        self.quantizer.add_sample(sample);
     }
 
     pub fn finish_training(&mut self, index: &PgRelation, graph: &Graph) -> WriteStats {
@@ -436,6 +416,30 @@ impl<'a> BqStorage<'a> {
 }
 
 impl<'a> StorageTrait for BqStorage<'a> {
+    fn page_type(&self) -> PageType {
+        PageType::BqNode
+    }
+
+    fn create_node(
+        &self,
+        _index_relation: &PgRelation,
+        full_vector: &[f32],
+        heap_pointer: HeapPointer,
+        meta_page: &MetaPage,
+        tape: &mut Tape,
+    ) -> ItemPointer {
+        let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
+
+        let node = BqNode::new(heap_pointer, &meta_page, bq_vector.as_slice());
+
+        let index_pointer: IndexPointer = node.write(tape);
+        index_pointer
+    }
+
+    fn add_sample(&mut self, sample: &[f32]) {
+        self.quantizer.add_sample(sample);
+    }
+
     unsafe fn get_full_vector_distance_state<'i>(
         &self,
         index: &'i PgRelation,

@@ -11,6 +11,7 @@ use crate::access_method::graph::InsertStats;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 
+use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
 
@@ -18,9 +19,42 @@ use super::builder_graph::BuilderGraph;
 
 use super::meta_page::MetaPage;
 
-use super::storage::Storage;
+use super::storage;
+use super::storage::{Storage, StorageTrait};
 
-struct BuildState<'a, 'b, 'c> {
+struct OuterBuildState<'a, 'b, 'c> {
+    inner: BuildState<'a, 'b>,
+    storage: Storage<'c>,
+}
+
+impl<'a, 'b, 'c> OuterBuildState<'a, 'b, 'c> {
+    fn new(
+        index_relation: &'a PgRelation,
+        meta_page: MetaPage,
+        graph: Graph<'b>,
+        mut storage: Storage<'c>,
+    ) -> Self {
+        let page_type = match &mut storage {
+            Storage::None => {
+                pgrx::error!("not implemented");
+            }
+            Storage::PQ(pq) => {
+                pq.start_training(&meta_page);
+                pgrx::error!("not implemented");
+            }
+            Storage::BQ(bq) => {
+                bq.start_training(&meta_page);
+                bq.page_type()
+            }
+        };
+        OuterBuildState {
+            inner: BuildState::new(index_relation, meta_page, graph, page_type),
+            storage,
+        }
+    }
+}
+
+struct BuildState<'a, 'b> {
     memcxt: PgMemoryContexts,
     meta_page: MetaPage,
     ntuples: usize,
@@ -28,27 +62,16 @@ struct BuildState<'a, 'b, 'c> {
     graph: Graph<'b>,
     started: Instant,
     stats: InsertStats,
-    storage: Storage<'c>,
 }
 
-impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
+impl<'a, 'b> BuildState<'a, 'b> {
     fn new(
         index_relation: &'a PgRelation,
         meta_page: MetaPage,
         graph: Graph<'b>,
-        mut storage: Storage<'c>,
+        page_type: PageType,
     ) -> Self {
-        let tape = unsafe { Tape::new(index_relation, storage.page_type()) };
-
-        match &mut storage {
-            Storage::None => {}
-            Storage::PQ(pq) => {
-                pq.start_training(&meta_page);
-            }
-            Storage::BQ(bq) => {
-                bq.start_training(&meta_page);
-            }
-        }
+        let tape = unsafe { Tape::new(index_relation, page_type) };
 
         //TODO: some ways to get rid of meta_page.clone?
         BuildState {
@@ -59,7 +82,6 @@ impl<'a, 'b, 'c> BuildState<'a, 'b, 'c> {
             graph: graph,
             started: Instant::now(),
             stats: InsertStats::new(),
-            storage,
         }
     }
 }
@@ -133,12 +155,24 @@ pub unsafe extern "C" fn aminsert(
         Storage::None => {}
         Storage::PQ(pq) => {
             pq.load(&index_relation, &meta_page);
+            //let _stats = insert_storage(&pq, &index_relation, vector, heap_pointer, &mut meta_page);
+            pgrx::error!("not implemented");
         }
         Storage::BQ(bq) => {
             bq.load(&index_relation, &meta_page);
+            let _stats = insert_storage(bq, &index_relation, vector, heap_pointer, &mut meta_page);
         }
     }
+    false
+}
 
+unsafe fn insert_storage<S: StorageTrait>(
+    storage: &S,
+    index_relation: &PgRelation,
+    vector: &[f32],
+    heap_pointer: ItemPointer,
+    meta_page: &mut MetaPage,
+) -> InsertStats {
     let mut tape = Tape::new(&index_relation, storage.page_type());
     let index_pointer = storage.create_node(
         &&index_relation,
@@ -148,12 +182,8 @@ pub unsafe extern "C" fn aminsert(
         &mut tape,
     );
 
-    let mut graph = Graph::new(
-        GraphNeighborStore::Disk(DiskIndexGraph::new()),
-        &mut meta_page,
-    );
-    let _stats = graph.insert(&index_relation, index_pointer, vector, &storage);
-    false
+    let mut graph = Graph::new(GraphNeighborStore::Disk(DiskIndexGraph::new()), meta_page);
+    graph.insert(&index_relation, index_pointer, vector, storage)
 }
 
 #[pg_guard]
@@ -175,7 +205,7 @@ fn do_heap_scan<'a>(
     let storage =
         meta_page.get_storage(Some(heap_relation), Some(get_attribute_number(index_info)));
 
-    let mut state = BuildState::new(
+    let mut state = OuterBuildState::new(
         index_relation,
         meta_page.clone(),
         Graph::new(
@@ -203,11 +233,11 @@ fn do_heap_scan<'a>(
             pq.finish_training();
             error!("not implemented")
         }
-        Storage::BQ(bq) => bq.finish_training(index_relation, &state.graph),
+        Storage::BQ(bq) => bq.finish_training(index_relation, &state.inner.graph),
     };
 
     info!("write done");
-    assert_eq!(write_stats.num_nodes, state.ntuples);
+    assert_eq!(write_stats.num_nodes, state.inner.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
@@ -228,7 +258,7 @@ fn do_heap_scan<'a>(
             write_stats.prune_stats.calls
         );
     }
-    let ntuples = state.ntuples;
+    let ntuples = state.inner.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
 
@@ -257,25 +287,42 @@ unsafe extern "C" fn build_callback(
     let index_relation = unsafe { PgRelation::from_pg(index) };
     let vec = PgVector::from_pg_parts(values, isnull, 0);
     if let Some(vec) = vec {
-        let state = (state as *mut BuildState).as_mut().unwrap();
+        let state = (state as *mut OuterBuildState).as_mut().unwrap();
 
-        let mut old_context = state.memcxt.set_as_current();
+        let mut old_context = state.inner.memcxt.set_as_current();
         let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
 
-        build_callback_internal(index_relation, heap_pointer, (*vec).to_slice(), state);
+        match &mut state.storage {
+            Storage::None => {
+                pgrx::error!("not implemented");
+            }
+            Storage::PQ(pq) => {
+                pgrx::error!("not implemented");
+            }
+            Storage::BQ(bq) => {
+                build_callback_internal(
+                    index_relation,
+                    heap_pointer,
+                    (*vec).to_slice(),
+                    &mut state.inner,
+                    bq,
+                );
+            }
+        }
 
         old_context.set_as_current();
-        state.memcxt.reset();
+        state.inner.memcxt.reset();
     }
     //todo: what do we do with nulls?
 }
 
 #[inline(always)]
-fn build_callback_internal(
+fn build_callback_internal<S: StorageTrait>(
     index: PgRelation,
     heap_pointer: ItemPointer,
     vector: &[f32],
     state: &mut BuildState,
+    storage: &mut S,
 ) {
     check_for_interrupts!();
 
@@ -293,17 +340,9 @@ fn build_callback_internal(
         );
     }
 
-    match &mut state.storage {
-        Storage::None => {}
-        Storage::PQ(pq) => {
-            pq.add_sample(vector);
-        }
-        Storage::BQ(bq) => {
-            bq.add_sample(vector);
-        }
-    }
+    storage.add_sample(vector);
 
-    let index_pointer = state.storage.create_node(
+    let index_pointer = storage.create_node(
         &index,
         vector,
         heap_pointer,
@@ -311,9 +350,7 @@ fn build_callback_internal(
         &mut state.tape,
     );
 
-    let new_stats = state
-        .graph
-        .insert(&index, index_pointer, vector, &state.storage);
+    let new_stats = state.graph.insert(&index, index_pointer, vector, storage);
     state.stats.combine(new_stats);
 }
 
