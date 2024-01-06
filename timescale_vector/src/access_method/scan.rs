@@ -2,8 +2,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore, meta_page::MetaPage,
-        model::PgVector,
+        bq::BqStorage, disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore,
+        meta_page::MetaPage, model::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
@@ -14,15 +14,17 @@ use super::{
     storage::{Storage, StorageTrait},
 };
 
+enum StorageType<'a, 'b> {
+    BQ(BqStorage<'a>, TSVResponseIterator<'b, BqStorage<'a>>),
+}
+
 struct TSVScanState<'a, 'b> {
-    iterator: *mut TSVResponseIterator<'a>,
-    storage: *mut Storage<'b>,
+    storage: *mut StorageType<'a, 'b>,
 }
 
 impl<'a, 'b> TSVScanState<'a, 'b> {
     fn new() -> Self {
         Self {
-            iterator: std::ptr::null_mut(),
             storage: std::ptr::null_mut(),
         }
     }
@@ -31,36 +33,36 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
         let mut meta_page = MetaPage::read(&index);
         let mut storage = meta_page.get_storage(None, None);
 
-        let it = match &mut storage {
+        let store_type = match storage {
             Storage::None => {
                 pgrx::error!("not implemented");
             }
-            Storage::PQ(pq) => {
+            Storage::PQ(mut pq) => {
                 pq.load(index, &meta_page);
                 pgrx::error!("not implemented");
             }
-            Storage::BQ(bq) => {
+            Storage::BQ(mut bq) => {
                 bq.load(index, &meta_page);
-                TSVResponseIterator::new(bq, index, query, search_list_size, meta_page)
+                let it = TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page);
+                StorageType::BQ(bq, it)
             }
         };
 
-        self.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(it);
-        self.storage = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(storage);
+        self.storage = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(store_type);
     }
 }
 
-struct TSVResponseIterator<'a> {
+struct TSVResponseIterator<'a, S: StorageTrait> {
     query: Vec<f32>,
-    lsr: ListSearchResult,
+    lsr: ListSearchResult<S>,
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare<'a>>,
     meta_page: MetaPage,
 }
 
-impl<'a> TSVResponseIterator<'a> {
-    fn new<S: StorageTrait>(
+impl<'a, S: StorageTrait> TSVResponseIterator<'a, S> {
+    fn new(
         storage: &S,
         index: &PgRelation,
         query: &[f32],
@@ -86,8 +88,8 @@ impl<'a> TSVResponseIterator<'a> {
     }
 }
 
-impl<'a> TSVResponseIterator<'a> {
-    fn next<S: StorageTrait>(&mut self, index: &'a PgRelation, storage: &S) -> Option<HeapPointer> {
+impl<'a, S: StorageTrait> TSVResponseIterator<'a, S> {
+    fn next(&mut self, index: &'a PgRelation, storage: &S) -> Option<HeapPointer> {
         let graph = Graph::new(
             GraphNeighborStore::Disk(DiskIndexGraph::new()),
             &mut self.meta_page,
@@ -159,7 +161,7 @@ pub extern "C" fn ambeginscan(
         Storage::None => pgrx::error!("not implemented"),
         Storage::PQ(_pq) => pgrx::error!("not implemented"),
         Storage::BQ(_bq) => {
-            let state = TSVScanState::new();
+            let state: TSVScanState = TSVScanState::new();
             scandesc.opaque = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(state)
                 as void_mut_ptr;
         }
@@ -223,23 +225,20 @@ pub extern "C" fn amgettuple(
 ) -> bool {
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-    let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
+    //let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
 
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
 
-    let storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
-
-    match &storage {
-        Storage::None => pgrx::error!("not implemented"),
-        Storage::PQ(_pq) => pgrx::error!("not implemented"),
-        Storage::BQ(bq) => get_tuple(bq, &indexrel, iter, scan),
+    let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
+    match &mut storage {
+        StorageType::BQ(bq, iter) => get_tuple(bq, &indexrel, iter, scan),
     }
 }
 
 fn get_tuple<'a, S: StorageTrait>(
     storage: &S,
     index: &'a PgRelation,
-    iter: &'a mut TSVResponseIterator<'a>,
+    iter: &'a mut TSVResponseIterator<'a, S>,
     mut scan: PgBox<pg_sys::IndexScanDescData>,
 ) -> bool {
     scan.xs_recheckorderby = false;
@@ -264,15 +263,22 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
         let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
         let state =
             unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-        let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
-        debug1!(
+
+        let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
+        match &mut storage {
+            StorageType::BQ(bq, iter) => end_scan(iter),
+        }
+    }
+}
+
+fn end_scan<S: StorageTrait>(iter: &mut TSVResponseIterator<S>) {
+    debug1!(
         "Query stats - node reads:{}, calls: {}, distance comparisons: {}, pq distance comparisons: {}",
         iter.lsr.stats.node_reads,
         iter.lsr.stats.calls,
         iter.lsr.stats.distance_comparisons,
         iter.lsr.stats.pq_distance_comparisons,
     );
-    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]

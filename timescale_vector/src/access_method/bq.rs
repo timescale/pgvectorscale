@@ -2,8 +2,8 @@ use super::{
     builder_graph::WriteStats,
     distance::distance_cosine as default_distance,
     graph::{
-        Graph, GraphNeighborStore, ListSearchNeighbor, ListSearchResult, NodeNeighbor,
-        SearchDistanceMeasure,
+        Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
+        NodeNeighbor,
     },
     storage::StorageTrait,
 };
@@ -11,7 +11,7 @@ use std::{collections::HashMap, iter::once, pin::Pin};
 
 use pgrx::{
     info,
-    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, Item},
+    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, Item},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
@@ -222,6 +222,39 @@ impl BqDistanceTable {
     }
 }
 
+pub enum SearchDistanceMeasure {
+    Full(fn(&[f32], &[f32]) -> f32),
+    Bq(BqDistanceTable),
+}
+
+impl SearchDistanceMeasure {
+    pub fn calculate_full_distance(
+        distance_fn: &fn(&[f32], &[f32]) -> f32,
+        heap_rel: &PgRelation,
+        heap_attr: AttrNumber,
+        heap_pointer: ItemPointer,
+        query: &[f32],
+        stats: &mut GreedySearchStats,
+    ) -> f32 {
+        let slot = unsafe { TableSlot::new(heap_rel, heap_pointer, heap_attr) };
+        let slice = unsafe { slot.get_slice() };
+        stats.distance_comparisons += 1;
+        distance_fn(slice, query)
+    }
+
+    pub fn calculate_bq_distance(
+        table: &BqDistanceTable,
+        bq_vector: &[BqVectorElement],
+        stats: &mut GreedySearchStats,
+    ) -> f32 {
+        assert!(bq_vector.len() > 0);
+        let vec = bq_vector;
+        stats.pq_distance_comparisons += 1;
+        stats.distance_comparisons += 1;
+        table.distance(vec)
+    }
+}
+
 struct QuantizedVectorCache {
     quantized_vector_map: HashMap<ItemPointer, Vec<BqVectorElement>>,
 }
@@ -416,6 +449,8 @@ impl<'a> BqStorage<'a> {
 }
 
 impl<'a> StorageTrait for BqStorage<'a> {
+    type DistanceMeasure = SearchDistanceMeasure;
+
     fn page_type(&self) -> PageType {
         PageType::BqNode
     }
@@ -506,9 +541,9 @@ impl<'a> StorageTrait for BqStorage<'a> {
 
     /* get_lsn and visit_lsn are different because the distance
     comparisons for BQ get the vector from different places */
-    fn get_lsn(
+    fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<BqStorage>,
         index: &PgRelation,
         index_pointer: ItemPointer,
         query: &[f32],
@@ -517,32 +552,23 @@ impl<'a> StorageTrait for BqStorage<'a> {
         lsr.stats.node_reads += 1;
         let node = rn.get_archived_node();
 
-        let distance = match &lsr.sdm {
+        let distance = match lsr.sdm.as_ref().unwrap() {
             SearchDistanceMeasure::Full(distance_fn) => {
                 let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-                let slot = unsafe {
-                    TableSlot::new(
-                        self.heap_rel.unwrap(),
-                        heap_pointer,
-                        self.heap_attr.unwrap(),
-                    )
-                };
-                let slice = unsafe { slot.get_slice() };
-                let distance = distance_fn(slice, query);
-                lsr.stats.distance_comparisons += 1;
-                distance
+                SearchDistanceMeasure::calculate_full_distance(
+                    distance_fn,
+                    self.heap_rel.unwrap(),
+                    self.heap_attr.unwrap(),
+                    heap_pointer,
+                    query,
+                    &mut lsr.stats,
+                )
             }
-            SearchDistanceMeasure::Bq(table) => {
-                assert!(node.bq_vector.len() > 0);
-                let vec = node.bq_vector.as_slice();
-                let distance = table.distance(vec);
-                lsr.stats.pq_distance_comparisons += 1;
-                lsr.stats.distance_comparisons += 1;
-                distance
-            }
-            _ => {
-                pgrx::error!("wrong distance measure");
-            }
+            SearchDistanceMeasure::Bq(table) => SearchDistanceMeasure::calculate_bq_distance(
+                table,
+                node.bq_vector.as_slice(),
+                &mut lsr.stats,
+            ),
         };
 
         let lsn =
@@ -554,19 +580,19 @@ impl<'a> StorageTrait for BqStorage<'a> {
     fn visit_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<BqStorage>,
         lsn_idx: usize,
         query: &[f32],
         gns: &GraphNeighborStore,
     ) {
         //Opt shouldn't need to read the node in the builder graph case.
         let lsn = &lsr.candidate_storage[lsn_idx];
-        let rn = unsafe { BqNode::read(index, lsn.index_pointer) };
+        let rn_visiting = unsafe { BqNode::read(index, lsn.index_pointer) };
         lsr.stats.node_reads += 1;
-        let node = rn.get_archived_node();
+        let node_visiting = rn_visiting.get_archived_node();
 
         let neighbors = match gns {
-            GraphNeighborStore::Disk(d) => d.get_neighbors(node),
+            GraphNeighborStore::Disk(d) => d.get_neighbors(node_visiting),
             GraphNeighborStore::Builder(b) => b.get_neighbors(lsn.index_pointer),
         };
 
@@ -575,23 +601,21 @@ impl<'a> StorageTrait for BqStorage<'a> {
                 continue;
             }
 
-            let dist = match &lsr.sdm {
+            let dist = match lsr.sdm.as_ref().unwrap() {
                 SearchDistanceMeasure::Full(distance_fn) => {
-                    let rn = unsafe { BqNode::read(index, neighbor_index_pointer) };
+                    let rn_neighbor = unsafe { BqNode::read(index, neighbor_index_pointer) };
                     lsr.stats.node_reads += 1;
-                    let node = rn.get_archived_node();
-                    let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-                    let slot = unsafe {
-                        TableSlot::new(
-                            self.heap_rel.unwrap(),
-                            heap_pointer,
-                            self.heap_attr.unwrap(),
-                        )
-                    };
-                    let slice = unsafe { slot.get_slice() };
-                    let distance = distance_fn(slice, query);
-                    lsr.stats.distance_comparisons += 1;
-                    distance
+                    let node_neighbor = rn_neighbor.get_archived_node();
+                    let heap_pointer_neighbor =
+                        node_neighbor.heap_item_pointer.deserialize_item_pointer();
+                    SearchDistanceMeasure::calculate_full_distance(
+                        distance_fn,
+                        self.heap_rel.unwrap(),
+                        self.heap_attr.unwrap(),
+                        heap_pointer_neighbor,
+                        query,
+                        &mut lsr.stats,
+                    )
                 }
                 SearchDistanceMeasure::Bq(table) => {
                     if let GraphNeighborStore::Builder(_) = gns {
@@ -600,16 +624,8 @@ impl<'a> StorageTrait for BqStorage<'a> {
                             "BQ distance should not be used with the builder graph store"
                         )
                     }
-                    let bq_vector = node.neighbor_vectors[i].as_slice();
-                    assert!(bq_vector.len() > 0);
-                    let vec = bq_vector;
-                    let distance = table.distance(vec);
-                    lsr.stats.pq_distance_comparisons += 1;
-                    lsr.stats.distance_comparisons += 1;
-                    distance
-                }
-                _ => {
-                    pgrx::error!("wrong distance measure");
+                    let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                    SearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
                 }
             };
             let lsn = ListSearchNeighbor::new(
@@ -620,28 +636,12 @@ impl<'a> StorageTrait for BqStorage<'a> {
 
             lsr.insert_neighbor(lsn);
         }
-
-        /*
-        //Opt shouldn't need to read the node in the builder graph case.
-        let rn = unsafe { BqNode::read(index, lsn.index_pointer) };
-        stats.node_reads += 1;
-        let node = rn.get_archived_node();
-
-        let neighbors = graph.get_neighbors(node, lsn.index_pointer);
-        for neighbor_index_pointer in neighbors.iter() {
-            //todo : check if the already visited lsn
-            let lsn = self.get_lsn(stats, dm, index, *neighbor_index_pointer, bq_vector, query)
-
-        }
-
-        stats.node_reads += 1;
-        */
     }
 
     fn return_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<BqStorage>,
         idx: usize,
     ) -> (HeapPointer, IndexPointer) {
         let lsn = &lsr.candidate_storage[idx];

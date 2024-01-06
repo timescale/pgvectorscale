@@ -95,13 +95,6 @@ impl FullVectorDistanceState<'_> {
     }
 }
 
-pub enum SearchDistanceMeasure {
-    Invalid,
-    Full(fn(&[f32], &[f32]) -> f32),
-    Pq(super::pq::PqDistanceTable),
-    Bq(super::bq::BqDistanceTable),
-}
-
 pub enum LsrPrivateData {
     None,
     /* neighbors, heap_pointer */
@@ -138,34 +131,34 @@ impl ListSearchNeighbor {
     }
 }
 
-pub struct ListSearchResult {
+pub struct ListSearchResult<S: StorageTrait> {
     pub candidate_storage: Vec<ListSearchNeighbor>, //plain storage
     best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
-    pub sdm: SearchDistanceMeasure,
+    pub sdm: Option<S::DistanceMeasure>,
     pub stats: GreedySearchStats,
 }
 
-impl ListSearchResult {
+impl<S: StorageTrait> ListSearchResult<S> {
     fn empty() -> Self {
         Self {
             candidate_storage: vec![],
             best_candidate: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
-            sdm: SearchDistanceMeasure::Invalid,
+            sdm: None,
             stats: GreedySearchStats::new(),
         }
     }
 
-    fn new<S: StorageTrait>(
+    fn new(
         index: &PgRelation,
         max_history_size: Option<usize>,
         _graph: &Graph,
         init_ids: Vec<ItemPointer>,
         query: &[f32],
-        sdm: SearchDistanceMeasure,
+        sdm: S::DistanceMeasure,
         search_list_size: usize,
         meta_page: &MetaPage,
         storage: &S,
@@ -177,11 +170,11 @@ impl ListSearchResult {
             inserted: HashSet::with_capacity(search_list_size * neigbors),
             max_history_size,
             stats: GreedySearchStats::new(),
-            sdm: sdm,
+            sdm: Some(sdm),
         };
         res.stats.calls += 1;
         for index_pointer in init_ids {
-            let lsn = storage.get_lsn(&mut res, index, index_pointer, query);
+            let lsn = storage.create_lsn_for_init_id(&mut res, index, index_pointer, query);
             res.insert_neighbor(lsn);
         }
         res
@@ -233,7 +226,7 @@ impl ListSearchResult {
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
     //into the best_candidate list, so it will never again be returned.
-    pub fn consume<S: StorageTrait>(
+    pub fn consume(
         &mut self,
         index: &PgRelation,
         storage: &S,
@@ -436,7 +429,7 @@ impl<'a> Graph<'a> {
         query: &[f32],
         meta_page: &MetaPage,
         storage: &S,
-    ) -> (ListSearchResult, HashSet<NeighborWithDistance>) {
+    ) -> (ListSearchResult<S>, HashSet<NeighborWithDistance>) {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
@@ -476,7 +469,7 @@ impl<'a> Graph<'a> {
         query: &[f32],
         search_list_size: usize,
         storage: &S,
-    ) -> ListSearchResult {
+    ) -> ListSearchResult<S> {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
@@ -500,7 +493,7 @@ impl<'a> Graph<'a> {
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     pub fn greedy_search_iterate<S: StorageTrait>(
         &self,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<S>,
         index: &PgRelation,
         query: &[f32],
         visit_n_closest: usize,

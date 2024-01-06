@@ -8,16 +8,15 @@ use crate::util::{
 
 use super::{
     bq::BqStorage,
-    graph::{
-        FullVectorDistanceState, GraphNeighborStore, ListSearchNeighbor, ListSearchResult,
-        SearchDistanceMeasure,
-    },
+    graph::{FullVectorDistanceState, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
     meta_page::MetaPage,
     model::{NeighborWithDistance, Node},
     pq::PqQuantizer,
 };
 
 pub trait StorageTrait {
+    type DistanceMeasure;
+
     fn page_type(&self) -> PageType;
 
     fn create_node(
@@ -49,7 +48,7 @@ pub trait StorageTrait {
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
         calc_distance_with_quantizer: bool,
-    ) -> SearchDistanceMeasure;
+    ) -> Self::DistanceMeasure;
 
     fn get_neighbors_with_distances(
         &self,
@@ -61,26 +60,31 @@ pub trait StorageTrait {
     fn visit_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<Self>,
         lsn_idx: usize,
         query: &[f32],
         gns: &GraphNeighborStore,
-    );
+    ) where
+        Self: Sized;
 
-    fn get_lsn(
+    fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<Self>,
         index: &PgRelation,
         index_pointer: ItemPointer,
         query: &[f32],
-    ) -> ListSearchNeighbor;
+    ) -> ListSearchNeighbor
+    where
+        Self: Sized;
 
     fn return_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult,
+        lsr: &mut ListSearchResult<Self>,
         idx: usize,
-    ) -> (HeapPointer, IndexPointer);
+    ) -> (HeapPointer, IndexPointer)
+    where
+        Self: Sized;
 
     fn set_neighbors_on_disk(
         &self,
