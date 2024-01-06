@@ -3,6 +3,7 @@ use std::{cmp::Ordering, collections::HashSet};
 use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{info, pg_sys, PgBox, PgRelation};
 
+use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
@@ -70,31 +71,6 @@ impl Drop for TableSlot {
     }
 }
 
-pub struct FullVectorDistanceState<'a> {
-    table_slot: Option<TableSlot>,
-    readable_node: Option<ReadableNode<'a>>,
-}
-
-impl FullVectorDistanceState<'_> {
-    pub fn with_table_slot(slot: TableSlot) -> Self {
-        Self {
-            table_slot: Some(slot),
-            readable_node: None,
-        }
-    }
-
-    /*pub fn with_readable_node(rn: ReadableNode) -> Self {
-        Self {
-            table_slot: None,
-            readable_node: Some(rn),
-        }
-    }*/
-
-    pub fn get_table_slot(&self) -> &TableSlot {
-        self.table_slot.as_ref().unwrap()
-    }
-}
-
 pub enum LsrPrivateData {
     None,
     /* neighbors, heap_pointer */
@@ -136,7 +112,7 @@ pub struct ListSearchResult<S: StorageTrait> {
     best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
-    pub sdm: Option<S::DistanceMeasure>,
+    pub sdm: Option<S::QueryDistanceMeasure>,
     pub stats: GreedySearchStats,
 }
 
@@ -158,7 +134,7 @@ impl<S: StorageTrait> ListSearchResult<S> {
         _graph: &Graph,
         init_ids: Vec<ItemPointer>,
         query: &[f32],
-        sdm: S::DistanceMeasure,
+        sdm: S::QueryDistanceMeasure,
         search_list_size: usize,
         meta_page: &MetaPage,
         storage: &S,
@@ -586,11 +562,8 @@ impl<'a> Graph<'a> {
 
                     //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {
-                        storage.get_distance_pair_for_full_vectors_from_state(
-                            &dist_state,
-                            index,
-                            candidate_neighbor.get_index_pointer_to_neighbor(),
-                        )
+                        dist_state
+                            .get_distance(index, candidate_neighbor.get_index_pointer_to_neighbor())
                     };
                     stats.node_reads += 2;
                     stats.distance_comparisons += 1;

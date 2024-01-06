@@ -5,7 +5,7 @@ use super::{
         Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
         NodeNeighbor,
     },
-    storage::StorageTrait,
+    storage::{NodeDistanceMeasure, StorageTrait},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
 
@@ -21,10 +21,7 @@ use crate::util::{
     ReadableBuffer,
 };
 
-use super::{
-    graph::FullVectorDistanceState, graph::TableSlot, meta_page::MetaPage,
-    model::NeighborWithDistance,
-};
+use super::{graph::TableSlot, meta_page::MetaPage, model::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
 type BqVectorElement = u8;
@@ -255,6 +252,40 @@ impl SearchDistanceMeasure {
     }
 }
 
+pub struct FullVectorDistanceState<'a> {
+    table_slot: Option<TableSlot>,
+    storage: &'a BqStorage<'a>,
+}
+
+impl<'a> FullVectorDistanceState<'a> {
+    pub fn with_table_slot(slot: TableSlot, storage: &'a BqStorage<'a>) -> Self {
+        Self {
+            table_slot: Some(slot),
+            storage: storage,
+        }
+    }
+
+    pub fn get_table_slot(&self) -> &TableSlot {
+        self.table_slot.as_ref().unwrap()
+    }
+}
+
+impl<'a> NodeDistanceMeasure for FullVectorDistanceState<'a> {
+    unsafe fn get_distance(&self, index: &PgRelation, index_pointer: IndexPointer) -> f32 {
+        let heap_pointer = self.storage.get_heap_pointer(index, index_pointer);
+        let slot = TableSlot::new(
+            self.storage.heap_rel.unwrap(),
+            heap_pointer,
+            self.storage.heap_attr.unwrap(),
+        );
+        let slice1 = slot.get_slice();
+        let slice2 = self.table_slot.as_ref().unwrap().get_slice();
+        self.storage
+            .quantizer
+            .get_full_vector_distance(slice1, slice2)
+    }
+}
+
 struct QuantizedVectorCache {
     quantized_vector_map: HashMap<ItemPointer, Vec<BqVectorElement>>,
 }
@@ -449,7 +480,8 @@ impl<'a> BqStorage<'a> {
 }
 
 impl<'a> StorageTrait for BqStorage<'a> {
-    type DistanceMeasure = SearchDistanceMeasure;
+    type QueryDistanceMeasure = SearchDistanceMeasure;
+    type NodeDistanceMeasure<'b> = FullVectorDistanceState<'b> where Self: 'b;
 
     fn page_type(&self) -> PageType {
         PageType::BqNode
@@ -475,35 +507,18 @@ impl<'a> StorageTrait for BqStorage<'a> {
         self.quantizer.add_sample(sample);
     }
 
-    unsafe fn get_full_vector_distance_state<'i>(
-        &self,
-        index: &'i PgRelation,
-        index_pointer: IndexPointer,
-    ) -> FullVectorDistanceState<'i> {
-        let heap_pointer = self.get_heap_pointer(index, index_pointer);
-        let slot = TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr.unwrap(),
-        );
-        FullVectorDistanceState::with_table_slot(slot)
-    }
-
-    unsafe fn get_distance_pair_for_full_vectors_from_state(
-        &self,
-        state: &FullVectorDistanceState,
+    unsafe fn get_full_vector_distance_state<'b>(
+        &'b self,
         index: &PgRelation,
         index_pointer: IndexPointer,
-    ) -> f32 {
+    ) -> FullVectorDistanceState<'b> {
         let heap_pointer = self.get_heap_pointer(index, index_pointer);
         let slot = TableSlot::new(
             self.heap_rel.unwrap(),
             heap_pointer,
             self.heap_attr.unwrap(),
         );
-        let slice1 = slot.get_slice();
-        let slice2 = state.get_table_slot().get_slice();
-        self.quantizer.get_full_vector_distance(slice1, slice2)
+        FullVectorDistanceState::with_table_slot(slot, self)
     }
 
     fn get_search_distance_measure(
@@ -531,9 +546,7 @@ impl<'a> StorageTrait for BqStorage<'a> {
         let dist_state = unsafe { self.get_full_vector_distance_state(index, neighbors_of) };
         rn.get_archived_node().apply_to_neighbors(|n| {
             let n = n.deserialize_item_pointer();
-            let dist = unsafe {
-                self.get_distance_pair_for_full_vectors_from_state(&dist_state, index, n)
-            };
+            let dist = unsafe { dist_state.get_distance(index, n) };
             result.push(NeighborWithDistance::new(n, dist))
         });
         true

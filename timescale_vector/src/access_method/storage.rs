@@ -8,14 +8,21 @@ use crate::util::{
 
 use super::{
     bq::BqStorage,
-    graph::{FullVectorDistanceState, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
+    graph::{GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
     meta_page::MetaPage,
-    model::{NeighborWithDistance, Node},
+    model::NeighborWithDistance,
     pq::PqQuantizer,
 };
 
+pub trait NodeDistanceMeasure {
+    unsafe fn get_distance(&self, index: &PgRelation, index_pointer: IndexPointer) -> f32;
+}
+
 pub trait StorageTrait {
-    type DistanceMeasure;
+    type QueryDistanceMeasure;
+    type NodeDistanceMeasure<'a>: NodeDistanceMeasure
+    where
+        Self: 'a;
 
     fn page_type(&self) -> PageType;
 
@@ -30,25 +37,18 @@ pub trait StorageTrait {
 
     fn add_sample(&mut self, sample: &[f32]);
 
-    unsafe fn get_full_vector_distance_state<'i>(
-        &self,
-        index: &'i PgRelation,
-        index_pointer: IndexPointer,
-    ) -> FullVectorDistanceState<'i>;
-
-    unsafe fn get_distance_pair_for_full_vectors_from_state(
-        &self,
-        state: &FullVectorDistanceState,
+    unsafe fn get_full_vector_distance_state<'a>(
+        &'a self,
         index: &PgRelation,
         index_pointer: IndexPointer,
-    ) -> f32;
+    ) -> Self::NodeDistanceMeasure<'a>;
 
     fn get_search_distance_measure(
         &self,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
         calc_distance_with_quantizer: bool,
-    ) -> Self::DistanceMeasure;
+    ) -> Self::QueryDistanceMeasure;
 
     fn get_neighbors_with_distances(
         &self,
