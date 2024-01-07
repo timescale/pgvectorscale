@@ -536,7 +536,7 @@ impl<'a> StorageTrait for BqStorage<'a> {
         }
     }
 
-    fn get_neighbors_with_distances(
+    fn get_neighbors_from_disk(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,

@@ -50,13 +50,6 @@ pub trait StorageTrait {
         calc_distance_with_quantizer: bool,
     ) -> Self::QueryDistanceMeasure;
 
-    fn get_neighbors_with_distances(
-        &self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        result: &mut Vec<NeighborWithDistance>,
-    ) -> bool;
-
     fn visit_lsn(
         &self,
         index: &PgRelation,
@@ -85,6 +78,13 @@ pub trait StorageTrait {
     ) -> (HeapPointer, IndexPointer)
     where
         Self: Sized;
+
+    fn get_neighbors_from_disk(
+        &self,
+        index: &PgRelation,
+        neighbors_of: ItemPointer,
+        result: &mut Vec<NeighborWithDistance>,
+    ) -> bool;
 
     fn set_neighbors_on_disk(
         &self,

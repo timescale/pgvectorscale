@@ -24,7 +24,7 @@ impl DiskIndexGraph {
         storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
-        storage.get_neighbors_with_distances(index, neighbors_of, result)
+        storage.get_neighbors_from_disk(index, neighbors_of, result)
     }
 
     pub fn is_empty(&self, meta_page: &MetaPage) -> bool {
