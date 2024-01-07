@@ -10,7 +10,6 @@ use crate::{
 
 use super::{
     graph::{Graph, ListSearchResult},
-    meta_page,
     storage::{Storage, StorageTrait},
 };
 
@@ -30,8 +29,8 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
     }
 
     fn initialize(&mut self, index: &PgRelation, query: &[f32], search_list_size: usize) {
-        let mut meta_page = MetaPage::read(&index);
-        let mut storage = meta_page.get_storage(None, None);
+        let meta_page = MetaPage::read(&index);
+        let storage = meta_page.get_storage(None, None);
 
         let store_type = match storage {
             Storage::None => {
@@ -67,7 +66,7 @@ impl<'a, S: StorageTrait> TSVResponseIterator<'a, S> {
         index: &PgRelation,
         query: &[f32],
         search_list_size: usize,
-        meta_page: MetaPage,
+        _meta_page: MetaPage,
     ) -> Self {
         let mut meta_page = MetaPage::read(&index);
         let graph = Graph::new(
@@ -94,7 +93,6 @@ impl<'a, S: StorageTrait> TSVResponseIterator<'a, S> {
             GraphNeighborStore::Disk(DiskIndexGraph::new()),
             &mut self.meta_page,
         );
-        use super::graph::Graph;
 
         /* Iterate until we find a non-deleted tuple */
         loop {
@@ -187,7 +185,7 @@ pub extern "C" fn amrescan(
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let meta_page = MetaPage::read(&indexrel);
-    let mut storage = meta_page.get_storage(None, None);
+    let _storage = meta_page.get_storage(None, None);
 
     if nkeys > 0 {
         scan.xs_recheck = true;
@@ -223,7 +221,7 @@ pub extern "C" fn amgettuple(
     scan: pg_sys::IndexScanDesc,
     _direction: pg_sys::ScanDirection,
 ) -> bool {
-    let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
+    let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
     //let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
 
@@ -266,7 +264,7 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
-            StorageType::BQ(bq, iter) => end_scan(iter),
+            StorageType::BQ(_bq, iter) => end_scan(iter),
         }
     }
 }

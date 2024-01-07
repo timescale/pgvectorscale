@@ -6,7 +6,7 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::{Graph, PruneNeighborStats};
+use super::graph::PruneNeighborStats;
 
 use super::meta_page::MetaPage;
 use super::model::*;

@@ -1,10 +1,6 @@
 use pgrx::PgRelation;
 
-use crate::util::{
-    page::{self, PageType},
-    tape::Tape,
-    HeapPointer, IndexPointer, ItemPointer,
-};
+use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
     bq::BqStorage,

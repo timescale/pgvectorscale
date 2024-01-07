@@ -11,7 +11,7 @@ use std::{collections::HashMap, iter::once, pin::Pin};
 
 use pgrx::{
     info,
-    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, Item},
+    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};

@@ -2,9 +2,9 @@ use std::time::Instant;
 
 use pgrx::*;
 
-use crate::access_method::builder_graph::WriteStats;
+
 use crate::access_method::disk_index_graph::DiskIndexGraph;
-use crate::access_method::graph;
+
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::GraphNeighborStore;
 use crate::access_method::graph::InsertStats;
@@ -19,7 +19,7 @@ use super::builder_graph::BuilderGraph;
 
 use super::meta_page::MetaPage;
 
-use super::storage;
+
 use super::storage::{Storage, StorageTrait};
 
 struct OuterBuildState<'a, 'b, 'c> {
@@ -296,7 +296,7 @@ unsafe extern "C" fn build_callback(
             Storage::None => {
                 pgrx::error!("not implemented");
             }
-            Storage::PQ(pq) => {
+            Storage::PQ(_pq) => {
                 pgrx::error!("not implemented");
             }
             Storage::BQ(bq) => {

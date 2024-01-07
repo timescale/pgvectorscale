@@ -1,7 +1,7 @@
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::pg_sys::{Datum, TupleTableSlot};
-use pgrx::{info, pg_sys, PgBox, PgRelation};
+use pgrx::{pg_sys, PgBox, PgRelation};
 
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::ports::slot_getattr;
@@ -10,13 +10,10 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
 use super::distance::distance_cosine as default_distance;
-use super::meta_page;
+
 use super::model::PgVector;
-use super::storage::{Storage, StorageTrait};
-use super::{
-    meta_page::MetaPage,
-    model::{NeighborWithDistance, ReadableNode},
-};
+use super::storage::StorageTrait;
+use super::{meta_page::MetaPage, model::NeighborWithDistance};
 
 pub struct TableSlot {
     slot: PgBox<TupleTableSlot>,
