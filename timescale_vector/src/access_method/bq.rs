@@ -264,10 +264,6 @@ impl<'a> FullVectorDistanceState<'a> {
             storage: storage,
         }
     }
-
-    pub fn get_table_slot(&self) -> &TableSlot {
-        self.table_slot.as_ref().unwrap()
-    }
 }
 
 impl<'a> NodeDistanceMeasure for FullVectorDistanceState<'a> {
@@ -353,7 +349,7 @@ impl<'a> BqStorage<'a> {
     pub fn load(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
         if self.quantizer.use_mean {
             if meta_page.get_pq_pointer().is_none() {
-                pgrx::error!("No PQ pointer found in meta page");
+                pgrx::error!("No BQ pointer found in meta page");
             }
             let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
             let (count, mean) = unsafe { read_bq(&index_relation, &pq_item_pointer) };
@@ -393,52 +389,6 @@ impl<'a> BqStorage<'a> {
         }
     }
 
-    pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
-        self.quantizer.start_training(meta_page);
-    }
-
-    pub fn finish_training(&mut self, index: &PgRelation, graph: &Graph) -> WriteStats {
-        self.quantizer.finish_training();
-
-        match graph.get_neighbor_store() {
-            GraphNeighborStore::Disk(_) => {
-                pgrx::error!("Disk graph neigbor store should not be used when building a graph")
-            }
-            GraphNeighborStore::Builder(builder) => {
-                info!("Finished scanning heap, now writing nodes");
-
-                let mut stats = WriteStats::new();
-                let mut cache = QuantizedVectorCache::new(1000);
-                for (index_pointer, neighbors) in builder.iter() {
-                    stats.num_nodes += 1;
-                    let prune_neighbors;
-                    let neighbors =
-                        if neighbors.len() > graph.get_meta_page().get_num_neighbors() as _ {
-                            let prune_stats;
-                            //OPT: get rid of this clone
-                            (prune_neighbors, prune_stats) =
-                                graph.prune_neighbors(index, neighbors.clone(), self);
-                            stats.prune_stats.combine(prune_stats);
-                            &prune_neighbors
-                        } else {
-                            neighbors
-                        };
-                    stats.num_neighbors += neighbors.len();
-
-                    self.update_node_after_traing(
-                        index,
-                        graph.get_meta_page(),
-                        *index_pointer,
-                        neighbors,
-                        &mut cache,
-                    );
-                }
-
-                return stats;
-            }
-        }
-    }
-
     fn get_quantized_vector_from_index_pointer(
         &self,
         index: &PgRelation,
@@ -464,7 +414,7 @@ impl<'a> BqStorage<'a> {
         self.quantizer.quantize(slice)
     }
 
-    pub fn write_metadata(&self, index: &PgRelation) {
+    fn write_metadata(&self, index: &PgRelation) {
         if self.quantizer.use_mean {
             let index_pointer =
                 unsafe { write_bq(&index, self.quantizer.count, &self.quantizer.mean) };
@@ -503,8 +453,56 @@ impl<'a> StorageTrait for BqStorage<'a> {
         index_pointer
     }
 
+    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+        self.quantizer.start_training(meta_page);
+    }
+
     fn add_sample(&mut self, sample: &[f32]) {
         self.quantizer.add_sample(sample);
+    }
+
+    fn finish_training(&mut self, index: &PgRelation, graph: &Graph) -> WriteStats {
+        self.quantizer.finish_training();
+
+        match graph.get_neighbor_store() {
+            GraphNeighborStore::Disk(_) => {
+                pgrx::error!("Disk graph neigbor store should not be used when building a graph")
+            }
+            GraphNeighborStore::Builder(builder) => {
+                info!("Finished scanning heap, now writing nodes");
+
+                let mut stats = WriteStats::new();
+                let mut cache = QuantizedVectorCache::new(1000);
+                for (index_pointer, neighbors) in builder.iter() {
+                    stats.num_nodes += 1;
+                    let prune_neighbors;
+                    let neighbors =
+                        if neighbors.len() > graph.get_meta_page().get_num_neighbors() as _ {
+                            let prune_stats;
+                            //OPT: get rid of this clone
+                            (prune_neighbors, prune_stats) =
+                                graph.prune_neighbors(index, neighbors.clone(), self);
+                            stats.prune_stats.combine(prune_stats);
+                            &prune_neighbors
+                        } else {
+                            neighbors
+                        };
+                    stats.num_neighbors += neighbors.len();
+
+                    self.update_node_after_traing(
+                        index,
+                        graph.get_meta_page(),
+                        *index_pointer,
+                        neighbors,
+                        &mut cache,
+                    );
+                }
+
+                self.write_metadata(index);
+
+                return stats;
+            }
+        }
     }
 
     unsafe fn get_full_vector_distance_state<'b>(

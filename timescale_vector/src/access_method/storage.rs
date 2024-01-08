@@ -4,7 +4,8 @@ use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPoi
 
 use super::{
     bq::BqStorage,
-    graph::{GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
+    builder_graph::WriteStats,
+    graph::{Graph, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
     meta_page::MetaPage,
     model::NeighborWithDistance,
     pq::PqQuantizer,
@@ -31,7 +32,9 @@ pub trait StorageTrait {
         tape: &mut Tape,
     ) -> ItemPointer;
 
+    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
+    fn finish_training(&mut self, index: &PgRelation, graph: &Graph) -> WriteStats;
 
     unsafe fn get_full_vector_distance_state<'a>(
         &'a self,

@@ -2,7 +2,6 @@ use std::time::Instant;
 
 use pgrx::*;
 
-
 use crate::access_method::disk_index_graph::DiskIndexGraph;
 
 use crate::access_method::graph::Graph;
@@ -15,43 +14,15 @@ use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
 
+use super::bq::BqStorage;
 use super::builder_graph::BuilderGraph;
 
 use super::meta_page::MetaPage;
 
-
 use super::storage::{Storage, StorageTrait};
 
-struct OuterBuildState<'a, 'b, 'c> {
-    inner: BuildState<'a, 'b>,
-    storage: Storage<'c>,
-}
-
-impl<'a, 'b, 'c> OuterBuildState<'a, 'b, 'c> {
-    fn new(
-        index_relation: &'a PgRelation,
-        meta_page: MetaPage,
-        graph: Graph<'b>,
-        mut storage: Storage<'c>,
-    ) -> Self {
-        let page_type = match &mut storage {
-            Storage::None => {
-                pgrx::error!("not implemented");
-            }
-            Storage::PQ(pq) => {
-                pq.start_training(&meta_page);
-                pgrx::error!("not implemented");
-            }
-            Storage::BQ(bq) => {
-                bq.start_training(&meta_page);
-                bq.page_type()
-            }
-        };
-        OuterBuildState {
-            inner: BuildState::new(index_relation, meta_page, graph, page_type),
-            storage,
-        }
-    }
+enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
+    BQ(&'d mut BqStorage<'c>, &'e mut BuildState<'a, 'b>),
 }
 
 struct BuildState<'a, 'b> {
@@ -117,6 +88,9 @@ pub extern "C" fn ambuild(
     }
     assert!(dimensions > 0 && dimensions < 2000);
     let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt.clone()) };
+    let storage =
+        meta_page.get_storage(Some(&heap_relation), Some(get_attribute_number(index_info)));
+
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
@@ -200,44 +174,52 @@ fn do_heap_scan<'a>(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &'a PgRelation,
     index_relation: &'a PgRelation,
-    mut meta_page: MetaPage,
+    meta_page: MetaPage,
 ) -> usize {
-    let storage =
+    let mut storage =
         meta_page.get_storage(Some(heap_relation), Some(get_attribute_number(index_info)));
 
-    let mut state = OuterBuildState::new(
-        index_relation,
-        meta_page.clone(),
-        Graph::new(
-            GraphNeighborStore::Builder(BuilderGraph::new()),
-            &mut meta_page,
-        ),
-        storage,
-    );
-    unsafe {
-        pg_sys::IndexBuildHeapScan(
-            heap_relation.as_ptr(),
-            index_relation.as_ptr(),
-            index_info,
-            Some(build_callback),
-            &mut state,
-        );
-    }
-
-    // we train the quantizer and add prepare to write quantized values to the nodes.
-    let write_stats = match &mut state.storage {
+    let mut mp2 = meta_page.clone();
+    let graph = Graph::new(GraphNeighborStore::Builder(BuilderGraph::new()), &mut mp2);
+    match storage {
         Storage::None => {
-            error!("not implemented");
+            pgrx::error!("not implemented");
         }
-        Storage::PQ(pq) => {
-            pq.finish_training();
-            error!("not implemented")
+        Storage::PQ(mut pq) => {
+            pq.start_training(&meta_page);
+            pgrx::error!("not implemented");
         }
-        Storage::BQ(bq) => bq.finish_training(index_relation, &state.inner.graph),
-    };
+        Storage::BQ(mut bq) => {
+            bq.start_training(&meta_page);
+            let page_type = bq.page_type();
+            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut state = StorageBuildState::BQ(&mut bq, &mut bs);
+
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback),
+                    &mut state,
+                );
+            }
+
+            do_heap_scan_with_state(index_relation, &mut bq, &mut bs)
+        }
+    }
+}
+
+fn do_heap_scan_with_state<'a, S: StorageTrait>(
+    index_relation: &'a PgRelation,
+    storage: &mut S,
+    state: &mut BuildState,
+) -> usize {
+    // we train the quantizer and add prepare to write quantized values to the nodes.
+    let write_stats = storage.finish_training(index_relation, &state.graph);
 
     info!("write done");
-    assert_eq!(write_stats.num_nodes, state.inner.ntuples);
+    assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
@@ -258,19 +240,9 @@ fn do_heap_scan<'a>(
             write_stats.prune_stats.calls
         );
     }
-    let ntuples = state.inner.ntuples;
+    let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
-
-    match state.storage {
-        Storage::None => {}
-        Storage::PQ(pq) => {
-            pq.write_metadata(index_relation);
-        }
-        Storage::BQ(bq) => {
-            bq.write_metadata(index_relation);
-        }
-    }
 
     ntuples
 }
@@ -287,33 +259,38 @@ unsafe extern "C" fn build_callback(
     let index_relation = unsafe { PgRelation::from_pg(index) };
     let vec = PgVector::from_pg_parts(values, isnull, 0);
     if let Some(vec) = vec {
-        let state = (state as *mut OuterBuildState).as_mut().unwrap();
-
-        let mut old_context = state.inner.memcxt.set_as_current();
+        let state = (state as *mut StorageBuildState).as_mut().unwrap();
         let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
 
-        match &mut state.storage {
-            Storage::None => {
-                pgrx::error!("not implemented");
-            }
-            Storage::PQ(_pq) => {
-                pgrx::error!("not implemented");
-            }
-            Storage::BQ(bq) => {
-                build_callback_internal(
+        match state {
+            StorageBuildState::BQ(bq, state) => {
+                build_callback_memory_wrapper(
                     index_relation,
                     heap_pointer,
                     (*vec).to_slice(),
-                    &mut state.inner,
-                    bq,
+                    state,
+                    *bq,
                 );
             }
         }
-
-        old_context.set_as_current();
-        state.inner.memcxt.reset();
     }
     //todo: what do we do with nulls?
+}
+
+#[inline(always)]
+unsafe fn build_callback_memory_wrapper<S: StorageTrait>(
+    index: PgRelation,
+    heap_pointer: ItemPointer,
+    vector: &[f32],
+    state: &mut BuildState,
+    storage: &mut S,
+) {
+    let mut old_context = state.memcxt.set_as_current();
+
+    build_callback_internal(index, heap_pointer, vector, state, storage);
+
+    old_context.set_as_current();
+    state.memcxt.reset();
 }
 
 #[inline(always)]
