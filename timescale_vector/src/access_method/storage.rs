@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use pgrx::PgRelation;
 
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
@@ -15,8 +17,16 @@ pub trait NodeDistanceMeasure {
     unsafe fn get_distance(&self, index: &PgRelation, index_pointer: IndexPointer) -> f32;
 }
 
+pub trait ArchivedData {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self>;
+    fn is_deleted(&self) -> bool;
+    fn delete(self: Pin<&mut Self>);
+    fn get_heap_item_pointer(&self) -> HeapPointer;
+}
+
 pub trait StorageTrait {
     type QueryDistanceMeasure;
+    type ArchivedType: ArchivedData;
     type NodeDistanceMeasure<'a>: NodeDistanceMeasure
     where
         Self: 'a;

@@ -5,7 +5,7 @@ use super::{
         Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
         NodeNeighbor,
     },
-    storage::{NodeDistanceMeasure, StorageTrait},
+    storage::{ArchivedData, NodeDistanceMeasure, StorageTrait},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
 
@@ -379,12 +379,8 @@ impl<'a> BqStorage<'a> {
             archived.as_mut().set_neighbors(neighbors, &meta, cache);
 
             let bq_vector = cache.must_get(index_pointer);
+            archived.as_mut().set_bq_vector(bq_vector);
 
-            assert!(bq_vector.len() == archived.bq_vector.len());
-            for i in 0..=bq_vector.len() - 1 {
-                let mut pgv = archived.as_mut().bq_vectors().index_pin(i);
-                *pgv = bq_vector[i];
-            }
             node.commit();
         }
     }
@@ -432,6 +428,7 @@ impl<'a> BqStorage<'a> {
 impl<'a> StorageTrait for BqStorage<'a> {
     type QueryDistanceMeasure = SearchDistanceMeasure;
     type NodeDistanceMeasure<'b> = FullVectorDistanceState<'b> where Self: 'b;
+    type ArchivedType = ArchivedBqNode;
 
     fn page_type(&self) -> PageType {
         PageType::BqNode
@@ -582,6 +579,9 @@ impl<'a> StorageTrait for BqStorage<'a> {
             ),
         };
 
+        if !lsr.prepare_insert(index_pointer) {
+            panic!("should not have had an init id already inserted");
+        }
         let lsn =
             ListSearchNeighbor::new(index_pointer, distance, super::graph::LsrPrivateData::None);
 
@@ -612,7 +612,7 @@ impl<'a> StorageTrait for BqStorage<'a> {
                 continue;
             }
 
-            let dist = match lsr.sdm.as_ref().unwrap() {
+            let distance = match lsr.sdm.as_ref().unwrap() {
                 SearchDistanceMeasure::Full(distance_fn) => {
                     let rn_neighbor = unsafe { BqNode::read(index, neighbor_index_pointer) };
                     lsr.stats.node_reads += 1;
@@ -641,7 +641,7 @@ impl<'a> StorageTrait for BqStorage<'a> {
             };
             let lsn = ListSearchNeighbor::new(
                 neighbor_index_pointer,
-                dist,
+                distance,
                 super::graph::LsrPrivateData::None,
             );
 
@@ -680,11 +680,10 @@ impl<'a> StorageTrait for BqStorage<'a> {
             .chain(once(index_pointer));
         cache.preload(index, iter, self);
 
-        if self.quantizer.vector_needs_update_after_training() {
-            let node = unsafe { BqNode::modify(index, index_pointer) };
-            let mut archived = node.get_archived_node();
-            archived.as_mut().set_neighbors(neighbors, &meta, &cache);
-        }
+        let node = unsafe { BqNode::modify(index, index_pointer) };
+        let mut archived = node.get_archived_node();
+        archived.as_mut().set_neighbors(neighbors, &meta, &cache);
+        node.commit();
     }
 }
 
@@ -735,8 +734,16 @@ impl ArchivedBqNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_vectors) }
     }
 
-    pub fn bq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
+    pub fn bq_vector(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<BqVectorElement>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.bq_vector) }
+    }
+
+    fn set_bq_vector(mut self: Pin<&mut Self>, bq_vector: &[BqVectorElement]) {
+        assert!(bq_vector.len() == self.bq_vector.len());
+        for i in 0..=bq_vector.len() - 1 {
+            let mut pgv = self.as_mut().bq_vector().index_pin(i);
+            *pgv = bq_vector[i];
+        }
     }
 
     fn set_neighbors(
@@ -792,5 +799,117 @@ impl NodeNeighbor for ArchivedBqNode {
         let mut result = vec![];
         self.apply_to_neighbors(|n| result.push(n.deserialize_item_pointer()));
         result
+    }
+}
+
+impl ArchivedData for ArchivedBqNode {
+    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedBqNode> {
+        let pinned_bytes = Pin::new(data);
+        unsafe { rkyv::archived_root_mut::<BqNode>(pinned_bytes) }
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.heap_item_pointer.offset == InvalidOffsetNumber
+    }
+
+    fn delete(self: Pin<&mut Self>) {
+        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
+        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        heap_pointer.offset = InvalidOffsetNumber;
+        heap_pointer.block_number = InvalidBlockNumber;
+    }
+
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        self.heap_item_pointer.deserialize_item_pointer()
+    }
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::*;
+
+    unsafe fn test_bq_index_creation_scaffold(num_neighbors: usize) -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_bq (
+                embedding vector (1536)
+            );
+
+           -- generate 300 vectors
+            INSERT INTO test_bq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 300) i
+                GROUP BY
+                    i % 300) g;
+
+            CREATE INDEX idx_tsv_bq ON test_bq USING tsv (embedding) WITH (num_neighbors = {num_neighbors}, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
+
+            ;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            -- test insert 2 vectors
+            INSERT INTO test_bq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 2) i
+                GROUP BY
+                    i % 2) g;
+
+
+            EXPLAIN ANALYZE
+            SELECT
+                *
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            DROP INDEX idx_tsv_bq;
+            ",
+        ))?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_creation() -> spi::Result<()> {
+        test_bq_index_creation_scaffold(38)?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_creation_few_neighbors() -> spi::Result<()> {
+        //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
+        test_bq_index_creation_scaffold(10)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_index_delete_vacuum_plain() {
+        crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
+            "num_neighbors = 10, use_bq = TRUE",
+        );
     }
 }

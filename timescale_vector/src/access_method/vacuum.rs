@@ -1,13 +1,20 @@
-use pgrx::{pg_sys::FirstOffsetNumber, *};
+use pgrx::{
+    pg_sys::{FirstOffsetNumber, IndexBulkDeleteResult},
+    *,
+};
 
 use crate::{
-    access_method::model::ArchivedNode,
+    access_method::meta_page::MetaPage,
     util::{
         page::{PageType, WritablePage},
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
         ItemPointer,
     },
 };
+
+use crate::access_method::storage::ArchivedData;
+
+use super::storage::{Storage, StorageTrait};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
@@ -29,8 +36,40 @@ pub extern "C" fn ambulkdelete(
             pg_sys::ForkNumber_MAIN_FORKNUM,
         )
     };
+
+    let meta_page = MetaPage::read(&index_relation);
+    let storage = meta_page.get_storage(None, None);
+    match storage {
+        Storage::BQ(bq) => {
+            bulk_delete_for_storage(
+                &bq,
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
+        }
+        Storage::PQ(pq) => {
+            unimplemented!();
+        }
+        Storage::None => {
+            unimplemented!();
+        }
+    }
+    results
+}
+
+fn bulk_delete_for_storage<S: StorageTrait>(
+    _storage: &S,
+    index: &PgRelation,
+    nblocks: u32,
+    results: *mut IndexBulkDeleteResult,
+    callback: pg_sys::IndexBulkDeleteCallback,
+    callback_state: *mut ::std::os::raw::c_void,
+) {
     for block_number in 0..nblocks {
-        let page = unsafe { WritablePage::cleanup(&index_relation, block_number) };
+        let page = unsafe { WritablePage::cleanup(&index, block_number) };
         if page.get_type() != PageType::Node {
             continue;
         }
@@ -45,13 +84,13 @@ pub extern "C" fn ambulkdelete(
                 let item = PageGetItem(*page, item_id) as *mut u8;
                 let len = (*item_id).lp_len();
                 let data = std::slice::from_raw_parts_mut(item, len as _);
-                let node = ArchivedNode::with_data(data);
+                let node = S::ArchivedType::with_data(data);
 
                 if node.is_deleted() {
                     continue;
                 }
 
-                let heap_pointer: ItemPointer = node.heap_item_pointer.deserialize_item_pointer();
+                let heap_pointer: ItemPointer = node.get_heap_item_pointer();
                 let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
                     ..Default::default()
                 };
@@ -71,7 +110,6 @@ pub extern "C" fn ambulkdelete(
             page.commit();
         }
     }
-    results
 }
 
 #[pg_guard]
@@ -97,11 +135,12 @@ pub extern "C" fn amvacuumcleanup(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod tests {
+pub mod tests {
     use pgrx::*;
 
-    #[test]
-    fn test_delete_vacuum_plain() {
+    //#[test]
+    #[cfg(test)]
+    pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -117,7 +156,7 @@ mod tests {
         let (mut client, _) = pgrx_tests::client().unwrap();
 
         client
-            .batch_execute(
+            .batch_execute(&format!(
                 "CREATE TABLE test_vac(embedding vector(3));
 
         INSERT INTO test_vac(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
@@ -125,9 +164,9 @@ mod tests {
         CREATE INDEX idxtest_vac
               ON test_vac
            USING tsv(embedding)
-            WITH (num_neighbors=30);
-            ",
-            )
+            WITH ({index_options});
+            "
+            ))
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
@@ -160,6 +199,11 @@ mod tests {
 
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
+    }
+
+    #[test]
+    fn test_delete_vacuum_plain() {
+        test_delete_vacuum_plain_scaffold("num_neighbors=30");
     }
 
     #[test]
