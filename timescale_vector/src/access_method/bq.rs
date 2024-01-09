@@ -912,4 +912,11 @@ mod tests {
             "num_neighbors = 10, use_bq = TRUE",
         );
     }
+
+    #[test]
+    fn test_bq_index_delete_vacuum_full() {
+        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
+            "num_neighbors = 38, use_bq = TRUE",
+        );
+    }
 }

@@ -138,7 +138,6 @@ pub extern "C" fn amvacuumcleanup(
 pub mod tests {
     use pgrx::*;
 
-    //#[test]
     #[cfg(test)]
     pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
         //we need to run vacuum in this test which cannot be run from SPI.
@@ -206,8 +205,8 @@ pub mod tests {
         test_delete_vacuum_plain_scaffold("num_neighbors=30");
     }
 
-    #[test]
-    fn test_delete_vacuum_full() {
+    #[cfg(test)]
+    pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -223,7 +222,7 @@ pub mod tests {
         let (mut client, _) = pgrx_tests::client().unwrap();
 
         client
-            .batch_execute(
+            .batch_execute(&format!(
                 "CREATE TABLE test_vac_full(embedding vector(3));
 
         INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
@@ -231,9 +230,9 @@ pub mod tests {
         CREATE INDEX idxtest_vac_full
               ON test_vac_full
            USING tsv(embedding)
-            WITH (num_neighbors=30);
-            ",
-            )
+            WITH ({index_options});
+            "
+            ))
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
@@ -262,6 +261,12 @@ pub mod tests {
         client.execute("DROP INDEX idxtest_vac_full", &[]).unwrap();
         client.execute("DROP TABLE test_vac_full", &[]).unwrap();
     }
+
+    #[test]
+    fn test_delete_vacuum_full() {
+        test_delete_vacuum_full_scaffold("num_neighbors=30")
+    }
+
     #[pg_test]
     ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
     fn test_delete_mock_fn() -> spi::Result<()> {
