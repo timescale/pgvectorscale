@@ -335,7 +335,7 @@ fn build_callback_internal<S: Storage>(
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
-mod tests {
+pub mod tests {
     use pgrx::*;
 
     #[pg_test]
@@ -447,15 +447,15 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test]
-    unsafe fn test_empty_table_insert() -> spi::Result<()> {
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_empty_table_insert_scaffold(index_options: &str) -> spi::Result<()> {
         Spi::run(&format!(
             "CREATE TABLE test(embedding vector(3));
 
             CREATE INDEX idxtest
                   ON test
                USING tsv(embedding)
-                WITH (num_neighbors=30);
+                WITH ({index_options});
 
             INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
             ",
@@ -472,15 +472,15 @@ mod tests {
         Ok(())
     }
 
-    #[pg_test]
-    unsafe fn test_insert_empty_insert() -> spi::Result<()> {
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_insert_empty_insert_scaffold(index_options: &str) -> spi::Result<()> {
         Spi::run(&format!(
             "CREATE TABLE test(embedding vector(3));
 
             CREATE INDEX idxtest
                   ON test
                USING tsv(embedding)
-                WITH (num_neighbors=30);
+                WITH ({index_options});
 
             INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
             DELETE FROM test;
@@ -497,5 +497,15 @@ mod tests {
         Spi::run(&format!("drop index idxtest;",))?;
 
         Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_empty_table_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_empty_table_insert_scaffold("num_neighbors=30")
+    }
+
+    #[pg_test]
+    unsafe fn test_insert_empty_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_insert_empty_insert_scaffold("num_neighbors=30")
     }
 }

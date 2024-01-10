@@ -1043,4 +1043,18 @@ FROM generate_series(1, 1536)"
             "num_neighbors = 38, use_bq = TRUE",
         );
     }
+
+    #[pg_test]
+    unsafe fn test_bq_index_empty_table_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_empty_table_insert_scaffold(
+            "num_neighbors=38, use_bq = TRUE",
+        )
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_index_insert_empty_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
+            "num_neighbors=38, use_bq = TRUE",
+        )
+    }
 }
