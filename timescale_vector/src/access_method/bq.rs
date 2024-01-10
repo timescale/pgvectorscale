@@ -827,7 +827,11 @@ impl ArchivedData for ArchivedBqNode {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
+    use std::collections::HashSet;
+
     use pgrx::*;
+
+    use crate::util::ItemPointer;
 
     unsafe fn test_bq_index_creation_scaffold(num_neighbors: usize) -> spi::Result<()> {
         Spi::run(&format!(
@@ -835,6 +839,7 @@ mod tests {
                 embedding vector (1536)
             );
 
+            select setseed(0.5);
            -- generate 300 vectors
             INSERT INTO test_bq (embedding)
             SELECT
@@ -887,9 +892,98 @@ mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
 
-            DROP INDEX idx_tsv_bq;
             ",
         ))?;
+
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(random()), ',', '0') || '}}')::real[] AS embedding
+FROM generate_series(1, 1536)"
+        ))?;
+
+        let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET tsv.query_search_list_size = 25;
+        WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 30
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+
+        /*let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        EXPLAIN (format json) WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+        warning!("explain: {}", explain.unwrap().0);
+        assert!(false);*/
+
+        let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 1;
+        SET enable_indexscan = 0;
+        WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_bq
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.into_datum(),
+            )],
+        )?;
+
+        let set: HashSet<_> = without_index
+            .unwrap()
+            .iter()
+            .map(|&ctid| ItemPointer::with_item_pointer_data(ctid))
+            .collect();
+
+        let mut matches = 0;
+        for ctid in with_index.unwrap() {
+            if set.contains(&ItemPointer::with_item_pointer_data(ctid)) {
+                matches += 1;
+            }
+        }
+        //pgrx::warning!("matches: {}", matches);
+        assert!(matches > 4);
+
         Ok(())
     }
 
