@@ -9,62 +9,9 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
 
-use super::model::PgVector;
+use super::pg_vector::PgVector;
 use super::storage::Storage;
 use super::{meta_page::MetaPage, model::NeighborWithDistance};
-
-pub struct TableSlot {
-    slot: PgBox<TupleTableSlot>,
-    attribute_number: pg_sys::AttrNumber,
-}
-
-impl TableSlot {
-    pub unsafe fn new(
-        heap_rel: &PgRelation,
-        heap_pointer: HeapPointer,
-        attribute_number: pg_sys::AttrNumber,
-    ) -> Self {
-        let slot = PgBox::from_pg(pg_sys::table_slot_create(
-            heap_rel.as_ptr(),
-            std::ptr::null_mut(),
-        ));
-
-        let table_am = heap_rel.rd_tableam;
-        let fetch_row_version = (*table_am).tuple_fetch_row_version.unwrap();
-        let mut ctid: pg_sys::ItemPointerData = pg_sys::ItemPointerData {
-            ..Default::default()
-        };
-        heap_pointer.to_item_pointer_data(&mut ctid);
-        fetch_row_version(
-            heap_rel.as_ptr(),
-            &mut ctid,
-            &mut pg_sys::SnapshotAnyData,
-            slot.as_ptr(),
-        );
-
-        Self {
-            slot,
-            attribute_number,
-        }
-    }
-
-    unsafe fn get_attribute(&self, attribute_number: pg_sys::AttrNumber) -> Option<Datum> {
-        slot_getattr(&self.slot, attribute_number)
-    }
-
-    pub unsafe fn get_pg_vector(&self) -> PgVector {
-        let vector = PgVector::from_datum(self.get_attribute(self.attribute_number).unwrap());
-
-        //note pgvector slice is only valid as long as the slot is valid that's why the lifetime is tied to it.
-        vector
-    }
-}
-
-impl Drop for TableSlot {
-    fn drop(&mut self) {
-        unsafe { pg_sys::ExecDropSingleTupleTableSlot(self.slot.as_ptr()) };
-    }
-}
 
 pub enum LsrPrivateData {
     None,

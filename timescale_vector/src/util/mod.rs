@@ -1,6 +1,7 @@
 pub mod buffer;
 pub mod page;
 pub mod ports;
+pub mod table_slot;
 pub mod tape;
 
 use pgrx::PgRelation;

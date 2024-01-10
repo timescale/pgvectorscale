@@ -2,7 +2,7 @@ use super::{
     distance::distance_cosine as default_distance,
     graph::{Graph, GreedySearchStats, ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::{GraphNeighborStore, WriteStats},
-    model::PgVector,
+    pg_vector::PgVector,
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
@@ -15,11 +15,11 @@ use pgrx::{
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
 
 use crate::util::{
-    page::PageType, tape::Tape, ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer,
-    ReadableBuffer,
+    page::PageType, table_slot::TableSlot, tape::Tape, ArchivedItemPointer, HeapPointer,
+    IndexPointer, ItemPointer, ReadableBuffer,
 };
 
-use super::{graph::TableSlot, meta_page::MetaPage, model::NeighborWithDistance};
+use super::{meta_page::MetaPage, model::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
 type BqVectorElement = u8;

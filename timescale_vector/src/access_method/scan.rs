@@ -3,7 +3,7 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 use crate::{
     access_method::{
         bq::BqStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
-        model::PgVector,
+        pg_vector::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };

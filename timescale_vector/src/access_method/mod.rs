@@ -8,6 +8,7 @@ pub mod guc;
 mod meta_page;
 mod model;
 pub mod options;
+pub mod pg_vector;
 mod scan;
 mod storage;
 mod vacuum;

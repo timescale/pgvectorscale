@@ -8,7 +8,8 @@ use super::{
     graph::{Graph, ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::{GraphNeighborStore, WriteStats},
     meta_page::MetaPage,
-    model::{NeighborWithDistance, PgVector},
+    model::NeighborWithDistance,
+    pg_vector::PgVector,
 };
 
 pub trait NodeDistanceMeasure {

@@ -5,8 +5,8 @@ use pgrx::*;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph::InsertStats;
 use crate::access_method::graph_neighbor_store::GraphNeighborStore;
-use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
+use crate::access_method::pg_vector::PgVector;
 
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
