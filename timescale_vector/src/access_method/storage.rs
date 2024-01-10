@@ -20,6 +20,7 @@ pub trait ArchivedData {
     fn is_deleted(&self) -> bool;
     fn delete(self: Pin<&mut Self>);
     fn get_heap_item_pointer(&self) -> HeapPointer;
+    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer>;
 }
 
 pub trait Storage {

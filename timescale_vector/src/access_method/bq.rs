@@ -1,10 +1,7 @@
 use super::{
     builder_graph::WriteStats,
     distance::distance_cosine as default_distance,
-    graph::{
-        Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
-        NodeNeighbor,
-    },
+    graph::{Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult},
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
@@ -818,18 +815,16 @@ impl ArchivedBqNode {
     }
 }
 
-impl NodeNeighbor for ArchivedBqNode {
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
-        let mut result = vec![];
-        self.apply_to_neighbors(|n| result.push(n.deserialize_item_pointer()));
-        result
-    }
-}
-
 impl ArchivedData for ArchivedBqNode {
     fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedBqNode> {
         let pinned_bytes = Pin::new(data);
         unsafe { rkyv::archived_root_mut::<BqNode>(pinned_bytes) }
+    }
+
+    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+        let mut result = vec![];
+        self.apply_to_neighbors(|n| result.push(n.deserialize_item_pointer()));
+        result
     }
 
     fn is_deleted(&self) -> bool {

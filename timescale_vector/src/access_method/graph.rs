@@ -213,10 +213,6 @@ impl<S: Storage> ListSearchResult<S> {
     }
 }
 
-pub trait NodeNeighbor {
-    fn get_index_pointer_to_neighbors(&self) -> Vec<IndexPointer>;
-}
-
 pub enum GraphNeighborStore {
     Builder(BuilderGraph),
     Disk(DiskIndexGraph),
