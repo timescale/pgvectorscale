@@ -3,7 +3,7 @@ use pgrx::PgRelation;
 use crate::util::ItemPointer;
 
 use super::{
-    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, storage::StorageTrait,
+    graph::NodeNeighbor, meta_page::MetaPage, model::NeighborWithDistance, storage::Storage,
 };
 
 pub struct DiskIndexGraph {}
@@ -17,7 +17,7 @@ impl DiskIndexGraph {
         node.get_index_pointer_to_neighbors()
     }
 
-    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -27,7 +27,7 @@ impl DiskIndexGraph {
         storage.get_neighbors_with_full_vector_distances_from_disk(index, neighbors_of, result)
     }
 
-    pub fn set_neighbors<S: StorageTrait>(
+    pub fn set_neighbors<S: Storage>(
         &mut self,
         storage: &S,
         index: &PgRelation,

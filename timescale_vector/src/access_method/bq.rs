@@ -5,7 +5,7 @@ use super::{
         Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult,
         NodeNeighbor,
     },
-    storage::{ArchivedData, NodeDistanceMeasure, StorageTrait},
+    storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
 
@@ -328,26 +328,57 @@ pub struct BqStorage<'a> {
 }
 
 impl<'a> BqStorage<'a> {
-    pub fn new(
-        heap_rel: Option<&'a PgRelation>,
-        heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+    pub fn new_for_build(
+        heap_rel: &'a PgRelation,
+        heap_attr: pgrx::pg_sys::AttrNumber,
     ) -> BqStorage<'a> {
         Self {
             distance_fn: default_distance,
             quantizer: BqQuantizer::new(),
-            heap_rel: heap_rel,
-            heap_attr: heap_attr,
+            heap_rel: Some(heap_rel),
+            heap_attr: Some(heap_attr),
         }
     }
 
-    pub fn load(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
-        if self.quantizer.use_mean {
+    fn load_quantizer(
+        index_relation: &PgRelation,
+        meta_page: &super::meta_page::MetaPage,
+    ) -> BqQuantizer {
+        let mut quantizer = BqQuantizer::new();
+        if quantizer.use_mean {
             if meta_page.get_pq_pointer().is_none() {
                 pgrx::error!("No BQ pointer found in meta page");
             }
             let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
             let (count, mean) = unsafe { read_bq(&index_relation, &pq_item_pointer) };
-            self.quantizer.load(count, mean);
+            quantizer.load(count, mean);
+        }
+        quantizer
+    }
+
+    pub fn load_for_insert(
+        heap_rel: &'a PgRelation,
+        heap_attr: pgrx::pg_sys::AttrNumber,
+        index_relation: &PgRelation,
+        meta_page: &super::meta_page::MetaPage,
+    ) -> BqStorage<'a> {
+        Self {
+            distance_fn: default_distance,
+            quantizer: Self::load_quantizer(index_relation, meta_page),
+            heap_rel: Some(heap_rel),
+            heap_attr: Some(heap_attr),
+        }
+    }
+
+    pub fn load_for_search(
+        index_relation: &PgRelation,
+        meta_page: &super::meta_page::MetaPage,
+    ) -> BqStorage<'a> {
+        Self {
+            distance_fn: default_distance,
+            quantizer: Self::load_quantizer(index_relation, meta_page),
+            heap_rel: None,
+            heap_attr: None,
         }
     }
 
@@ -419,7 +450,7 @@ impl<'a> BqStorage<'a> {
     }
 }
 
-impl<'a> StorageTrait for BqStorage<'a> {
+impl<'a> Storage for BqStorage<'a> {
     type QueryDistanceMeasure = SearchDistanceMeasure;
     type NodeDistanceMeasure<'b> = FullVectorDistanceState<'b> where Self: 'b;
     type ArchivedType = ArchivedBqNode;

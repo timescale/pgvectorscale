@@ -19,7 +19,7 @@ use super::builder_graph::BuilderGraph;
 
 use super::meta_page::MetaPage;
 
-use super::storage::{Storage, StorageTrait};
+use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
     BQ(&'d mut BqStorage<'c>, &'e mut BuildState<'a, 'b>),
@@ -88,8 +88,6 @@ pub extern "C" fn ambuild(
     }
     assert!(dimensions > 0 && dimensions < 2000);
     let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt.clone()) };
-    let storage =
-        meta_page.get_storage(Some(&heap_relation), Some(get_attribute_number(index_info)));
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -123,24 +121,28 @@ pub unsafe extern "C" fn aminsert(
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut meta_page = MetaPage::read(&index_relation);
 
-    let mut storage =
-        meta_page.get_storage(Some(&heap_relation), Some(get_attribute_number(index_info)));
+    let mut storage = meta_page.get_storage_type();
     match &mut storage {
-        Storage::None => {}
-        Storage::PQ(pq) => {
-            pq.load(&index_relation, &meta_page);
+        StorageType::None => {}
+        StorageType::PQ => {
+            //pq.load(&index_relation, &meta_page);
             //let _stats = insert_storage(&pq, &index_relation, vector, heap_pointer, &mut meta_page);
             pgrx::error!("not implemented");
         }
-        Storage::BQ(bq) => {
-            bq.load(&index_relation, &meta_page);
-            let _stats = insert_storage(bq, &index_relation, vector, heap_pointer, &mut meta_page);
+        StorageType::BQ => {
+            let bq = BqStorage::load_for_insert(
+                &heap_relation,
+                get_attribute_number(index_info),
+                &index_relation,
+                &meta_page,
+            );
+            let _stats = insert_storage(&bq, &index_relation, vector, heap_pointer, &mut meta_page);
         }
     }
     false
 }
 
-unsafe fn insert_storage<S: StorageTrait>(
+unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
     vector: &[f32],
@@ -176,20 +178,20 @@ fn do_heap_scan<'a>(
     index_relation: &'a PgRelation,
     meta_page: MetaPage,
 ) -> usize {
-    let mut storage =
-        meta_page.get_storage(Some(heap_relation), Some(get_attribute_number(index_info)));
+    let mut storage = meta_page.get_storage_type();
 
     let mut mp2 = meta_page.clone();
     let graph = Graph::new(GraphNeighborStore::Builder(BuilderGraph::new()), &mut mp2);
     match storage {
-        Storage::None => {
+        StorageType::None => {
             pgrx::error!("not implemented");
         }
-        Storage::PQ(mut pq) => {
-            pq.start_training(&meta_page);
+        StorageType::PQ => {
+            //pq.start_training(&meta_page);
             pgrx::error!("not implemented");
         }
-        Storage::BQ(mut bq) => {
+        StorageType::BQ => {
+            let mut bq = BqStorage::new_for_build(heap_relation, get_attribute_number(index_info));
             bq.start_training(&meta_page);
             let page_type = bq.page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
@@ -210,7 +212,7 @@ fn do_heap_scan<'a>(
     }
 }
 
-fn do_heap_scan_with_state<'a, S: StorageTrait>(
+fn do_heap_scan_with_state<'a, S: Storage>(
     index_relation: &'a PgRelation,
     storage: &mut S,
     state: &mut BuildState,
@@ -278,7 +280,7 @@ unsafe extern "C" fn build_callback(
 }
 
 #[inline(always)]
-unsafe fn build_callback_memory_wrapper<S: StorageTrait>(
+unsafe fn build_callback_memory_wrapper<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
     vector: &[f32],
@@ -294,7 +296,7 @@ unsafe fn build_callback_memory_wrapper<S: StorageTrait>(
 }
 
 #[inline(always)]
-fn build_callback_internal<S: StorageTrait>(
+fn build_callback_internal<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
     vector: &[f32],

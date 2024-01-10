@@ -10,7 +10,7 @@ use super::graph::PruneNeighborStats;
 
 use super::meta_page::MetaPage;
 use super::model::*;
-use super::storage::StorageTrait;
+use super::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
@@ -43,7 +43,7 @@ impl BuilderGraph {
         }
     }
 
-    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,

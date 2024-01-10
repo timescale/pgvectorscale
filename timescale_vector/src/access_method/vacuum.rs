@@ -4,7 +4,7 @@ use pgrx::{
 };
 
 use crate::{
-    access_method::meta_page::MetaPage,
+    access_method::{bq::BqStorage, meta_page::MetaPage},
     util::{
         page::{PageType, WritablePage},
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
@@ -14,7 +14,7 @@ use crate::{
 
 use crate::access_method::storage::ArchivedData;
 
-use super::storage::{Storage, StorageTrait};
+use super::storage::{Storage, StorageType};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
@@ -38,11 +38,10 @@ pub extern "C" fn ambulkdelete(
     };
 
     let meta_page = MetaPage::read(&index_relation);
-    let storage = meta_page.get_storage(None, None);
+    let storage = meta_page.get_storage_type();
     match storage {
-        Storage::BQ(bq) => {
-            bulk_delete_for_storage(
-                &bq,
+        StorageType::BQ => {
+            bulk_delete_for_storage::<BqStorage>(
                 &index_relation,
                 nblocks,
                 results,
@@ -50,18 +49,17 @@ pub extern "C" fn ambulkdelete(
                 callback_state,
             );
         }
-        Storage::PQ(pq) => {
+        StorageType::PQ => {
             unimplemented!();
         }
-        Storage::None => {
+        StorageType::None => {
             unimplemented!();
         }
     }
     results
 }
 
-fn bulk_delete_for_storage<S: StorageTrait>(
-    _storage: &S,
+fn bulk_delete_for_storage<S: Storage>(
     index: &PgRelation,
     nblocks: u32,
     results: *mut IndexBulkDeleteResult,

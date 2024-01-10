@@ -7,7 +7,7 @@ use crate::util::*;
 
 use super::bq::BqStorage;
 use super::pq::PqQuantizer;
-use super::storage::Storage;
+use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 1;
@@ -64,17 +64,13 @@ impl MetaPage {
         self.use_pq
     }
 
-    pub fn get_storage<'a>(
-        &self,
-        heap_rel: Option<&'a PgRelation>,
-        heap_attr_number: Option<pgrx::pg_sys::AttrNumber>,
-    ) -> Storage<'a> {
+    pub fn get_storage_type(&self) -> StorageType {
         if self.get_use_pq() {
-            Storage::PQ(PqQuantizer::new())
+            StorageType::PQ
         } else if self.use_bq {
-            Storage::BQ(BqStorage::new(heap_rel, heap_attr_number))
+            StorageType::BQ
         } else {
-            Storage::None
+            StorageType::None
         }
     }
 

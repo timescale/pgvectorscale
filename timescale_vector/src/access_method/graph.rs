@@ -11,7 +11,7 @@ use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
 
 use super::model::PgVector;
-use super::storage::StorageTrait;
+use super::storage::Storage;
 use super::{meta_page::MetaPage, model::NeighborWithDistance};
 
 pub struct TableSlot {
@@ -103,7 +103,7 @@ impl ListSearchNeighbor {
     }
 }
 
-pub struct ListSearchResult<S: StorageTrait> {
+pub struct ListSearchResult<S: Storage> {
     pub candidate_storage: Vec<ListSearchNeighbor>, //plain storage
     best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
@@ -112,7 +112,7 @@ pub struct ListSearchResult<S: StorageTrait> {
     pub stats: GreedySearchStats,
 }
 
-impl<S: StorageTrait> ListSearchResult<S> {
+impl<S: Storage> ListSearchResult<S> {
     fn empty() -> Self {
         Self {
             candidate_storage: vec![],
@@ -223,7 +223,7 @@ pub enum GraphNeighborStore {
 }
 
 impl GraphNeighborStore {
-    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -240,7 +240,7 @@ impl GraphNeighborStore {
         }
     }
 
-    pub fn set_neighbors<S: StorageTrait>(
+    pub fn set_neighbors<S: Storage>(
         &mut self,
         storage: &S,
         index: &PgRelation,
@@ -285,7 +285,7 @@ impl<'a> Graph<'a> {
         self.meta_page.get_init_ids()
     }
 
-    fn add_neighbors<S: StorageTrait>(
+    fn add_neighbors<S: Storage>(
         &mut self,
         storage: &S,
         index: &PgRelation,
@@ -360,7 +360,7 @@ impl<'a> Graph<'a> {
     ///
     /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
-    fn greedy_search_for_build<S: StorageTrait>(
+    fn greedy_search_for_build<S: Storage>(
         &self,
         index: &PgRelation,
         query: &[f32],
@@ -400,7 +400,7 @@ impl<'a> Graph<'a> {
 
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
     /// the next elements.
-    pub fn greedy_search_streaming_init<S: StorageTrait>(
+    pub fn greedy_search_streaming_init<S: Storage>(
         &self,
         index: &PgRelation,
         query: &[f32],
@@ -428,7 +428,7 @@ impl<'a> Graph<'a> {
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
-    pub fn greedy_search_iterate<S: StorageTrait>(
+    pub fn greedy_search_iterate<S: Storage>(
         &self,
         lsr: &mut ListSearchResult<S>,
         index: &PgRelation,
@@ -463,7 +463,7 @@ impl<'a> Graph<'a> {
     ///
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
-    pub fn prune_neighbors<S: StorageTrait>(
+    pub fn prune_neighbors<S: Storage>(
         &self,
         index: &PgRelation,
         mut candidates: Vec<NeighborWithDistance>,
@@ -577,7 +577,7 @@ impl<'a> Graph<'a> {
         (results, stats)
     }
 
-    pub fn insert<S: StorageTrait>(
+    pub fn insert<S: Storage>(
         &mut self,
         index: &PgRelation,
         index_pointer: IndexPointer,
@@ -643,7 +643,7 @@ impl<'a> Graph<'a> {
         };
     }
 
-    fn update_back_pointer<S: StorageTrait>(
+    fn update_back_pointer<S: Storage>(
         &mut self,
         index: &PgRelation,
         from: IndexPointer,

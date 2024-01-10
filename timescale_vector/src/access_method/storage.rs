@@ -5,12 +5,10 @@ use pgrx::PgRelation;
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
-    bq::BqStorage,
     builder_graph::WriteStats,
     graph::{Graph, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
     meta_page::MetaPage,
     model::NeighborWithDistance,
-    pq::PqQuantizer,
 };
 
 pub trait NodeDistanceMeasure {
@@ -24,7 +22,7 @@ pub trait ArchivedData {
     fn get_heap_item_pointer(&self) -> HeapPointer;
 }
 
-pub trait StorageTrait {
+pub trait Storage {
     type QueryDistanceMeasure;
     type ArchivedType: ArchivedData;
     type NodeDistanceMeasure<'a>: NodeDistanceMeasure
@@ -103,8 +101,8 @@ pub trait StorageTrait {
     );
 }
 
-pub enum Storage<'a> {
-    BQ(BqStorage<'a>),
-    PQ(PqQuantizer),
+pub enum StorageType {
+    BQ,
+    PQ,
     None,
 }
