@@ -32,10 +32,6 @@ impl BuilderGraph {
         self.neighbor_map.iter()
     }
 
-    pub fn iter_mut(&mut self) -> IterMut<ItemPointer, Vec<NeighborWithDistance>> {
-        self.neighbor_map.iter_mut()
-    }
-
     pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
@@ -64,10 +60,6 @@ impl BuilderGraph {
             }
             None => false,
         }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.neighbor_map.len() == 0
     }
 
     pub fn set_neighbors(

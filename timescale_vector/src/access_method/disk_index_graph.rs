@@ -27,10 +27,6 @@ impl DiskIndexGraph {
         storage.get_neighbors_with_full_vector_distances_from_disk(index, neighbors_of, result)
     }
 
-    pub fn is_empty(&self, meta_page: &MetaPage) -> bool {
-        meta_page.get_init_ids().is_none()
-    }
-
     pub fn set_neighbors<S: StorageTrait>(
         &mut self,
         storage: &S,

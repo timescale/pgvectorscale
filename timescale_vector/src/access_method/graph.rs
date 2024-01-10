@@ -285,27 +285,6 @@ impl<'a> Graph<'a> {
         self.meta_page.get_init_ids()
     }
 
-    /*     fn get_neighbors<N: NodeNeighbor>(
-        &self,
-        node: &N,
-        neighbors_of: ItemPointer,
-    ) -> Vec<IndexPointer>;
-    fn get_neighbors_with_full_vector_distances(
-        &self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        storage: &Quantizer,
-        result: &mut Vec<NeighborWithDistance>,
-    ) -> bool;
-    */
-
-    fn is_empty(&self) -> bool {
-        match &self.neighbor_store {
-            GraphNeighborStore::Builder(b) => b.is_empty(),
-            GraphNeighborStore::Disk(d) => d.is_empty(&self.meta_page),
-        }
-    }
-
     fn add_neighbors<S: StorageTrait>(
         &mut self,
         storage: &S,
@@ -315,7 +294,8 @@ impl<'a> Graph<'a> {
         prune_stats: &mut PruneNeighborStats,
     ) -> (bool, Vec<NeighborWithDistance>) {
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page().get_max_neighbors_during_build() + 1,
+            (self.neighbor_store.max_neighbors(self.get_meta_page()) as usize)
+                + additional_neighbors.len(),
         );
         self.neighbor_store
             .get_neighbors_with_full_vector_distances(
@@ -354,30 +334,14 @@ impl<'a> Graph<'a> {
             };
 
         //OPT: remove clone
-        self.set_neighbors(storage, index, neighbors_of, new_neighbors.clone());
-        (pruned, new_neighbors)
-    }
-
-    fn set_neighbors<S: StorageTrait>(
-        &mut self,
-        storage: &S,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        new_neighbors: Vec<NeighborWithDistance>,
-    ) {
-        //todo find a better place for this?
-        if self.meta_page.get_init_ids().is_none() {
-            //TODO probably better set off of centeroids
-            MetaPage::update_init_ids(index, vec![neighbors_of]);
-            *self.meta_page = MetaPage::read(index);
-        }
         self.neighbor_store.set_neighbors(
             storage,
             index,
             self.meta_page,
             neighbors_of,
-            new_neighbors,
+            new_neighbors.clone(),
         );
+        (pruned, new_neighbors)
     }
 
     pub fn get_meta_page(&self) -> &MetaPage {
@@ -518,7 +482,7 @@ impl<'a> Graph<'a> {
         //sort by distance
         candidates.sort();
         let mut results = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page().get_max_neighbors_during_build(),
+            self.get_meta_page().get_num_neighbors() as _,
         );
 
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
@@ -622,15 +586,19 @@ impl<'a> Graph<'a> {
     ) -> InsertStats {
         let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
         let mut greedy_search_stats = GreedySearchStats::new();
-        let meta_page = self.get_meta_page();
 
-        if self.is_empty() {
-            self.set_neighbors(
+        if self.meta_page.get_init_ids().is_none() {
+            //TODO probably better set off of centeroids
+            MetaPage::update_init_ids(index, vec![index_pointer]);
+            *self.meta_page = MetaPage::read(index);
+
+            self.neighbor_store.set_neighbors(
                 storage,
                 index,
+                self.meta_page,
                 index_pointer,
                 Vec::<NeighborWithDistance>::with_capacity(
-                    meta_page.get_max_neighbors_during_build() as _,
+                    self.neighbor_store.max_neighbors(self.meta_page) as _,
                 ),
             );
             return InsertStats {
@@ -638,6 +606,8 @@ impl<'a> Graph<'a> {
                 greedy_search_stats: greedy_search_stats,
             };
         }
+
+        let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
         let (l, v) = self.greedy_search_for_build(index, vec, meta_page, storage);
