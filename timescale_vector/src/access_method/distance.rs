@@ -109,9 +109,16 @@ pub fn distance_cosine_unoptimized(a: &[f32], b: &[f32]) -> f32 {
 
 pub fn preprocess_cosine(a: &mut [f32]) {
     let norm = a.iter().map(|v| v * v).sum::<f32>();
+
+    /* this mainly handles the zero-vector case */
     if norm < f32::EPSILON {
         return;
     }
+    /* no need to renormalize if norm around 1.0 */
+    if norm > 1.0 - f32::EPSILON && norm < 1.0 + f32::EPSILON {
+        return;
+    }
+
     let norm = norm.sqrt();
     if norm > 1.0 + f32::EPSILON || norm < 1.0 - f32::EPSILON {
         a.iter_mut().for_each(|v| *v /= norm);

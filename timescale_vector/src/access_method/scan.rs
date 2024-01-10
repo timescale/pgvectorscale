@@ -28,7 +28,7 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
         }
     }
 
-    fn initialize(&mut self, index: &PgRelation, query: &[f32], search_list_size: usize) {
+    fn initialize(&mut self, index: &PgRelation, query: PgVector, search_list_size: usize) {
         let meta_page = MetaPage::read(&index);
         let storage = meta_page.get_storage_type();
 
@@ -52,7 +52,6 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
 }
 
 struct TSVResponseIterator<'a, S: Storage> {
-    query: Vec<f32>,
     lsr: ListSearchResult<S>,
     search_list_size: usize,
     current: usize,
@@ -64,7 +63,7 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
     fn new(
         storage: &S,
         index: &PgRelation,
-        query: &[f32],
+        query: PgVector,
         search_list_size: usize,
         _meta_page: MetaPage,
     ) -> Self {
@@ -77,7 +76,6 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
         let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
 
         Self {
-            query: query.to_vec(),
             search_list_size,
             lsr,
             current: 0,
@@ -96,14 +94,7 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
 
         /* Iterate until we find a non-deleted tuple */
         loop {
-            graph.greedy_search_iterate(
-                &mut self.lsr,
-                index,
-                &self.query,
-                self.search_list_size,
-                None,
-                storage,
-            );
+            graph.greedy_search_iterate(&mut self.lsr, index, self.search_list_size, None, storage);
 
             let item = self.lsr.consume(index, storage);
 
@@ -186,8 +177,7 @@ pub extern "C" fn amrescan(
     let orderby_keys = unsafe {
         std::slice::from_raw_parts(orderbys as *const pg_sys::ScanKeyData, norderbys as _)
     };
-    let vec = unsafe { PgVector::from_datum(orderby_keys[0].sk_argument) };
-    let query = unsafe { (*vec).to_slice() };
+    let query = unsafe { PgVector::from_datum(orderby_keys[0].sk_argument) };
 
     //TODO need to set search_list_size correctly
     //TODO right now doesn't handle more than LIMIT 100;

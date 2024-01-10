@@ -117,7 +117,6 @@ pub unsafe extern "C" fn aminsert(
         return false;
     }
     let vec = vec.unwrap();
-    let vector = (*vec).to_slice();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut meta_page = MetaPage::read(&index_relation);
 
@@ -136,7 +135,7 @@ pub unsafe extern "C" fn aminsert(
                 &index_relation,
                 &meta_page,
             );
-            let _stats = insert_storage(&bq, &index_relation, vector, heap_pointer, &mut meta_page);
+            let _stats = insert_storage(&bq, &index_relation, vec, heap_pointer, &mut meta_page);
         }
     }
     false
@@ -145,14 +144,14 @@ pub unsafe extern "C" fn aminsert(
 unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
-    vector: &[f32],
+    vector: PgVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
 ) -> InsertStats {
     let mut tape = Tape::new(&index_relation, storage.page_type());
     let index_pointer = storage.create_node(
         &&index_relation,
-        vector,
+        vector.to_slice(),
         heap_pointer,
         &meta_page,
         &mut tape,
@@ -266,13 +265,7 @@ unsafe extern "C" fn build_callback(
 
         match state {
             StorageBuildState::BQ(bq, state) => {
-                build_callback_memory_wrapper(
-                    index_relation,
-                    heap_pointer,
-                    (*vec).to_slice(),
-                    state,
-                    *bq,
-                );
+                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
             }
         }
     }
@@ -283,7 +276,7 @@ unsafe extern "C" fn build_callback(
 unsafe fn build_callback_memory_wrapper<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
-    vector: &[f32],
+    vector: PgVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -299,7 +292,7 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
 fn build_callback_internal<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
-    vector: &[f32],
+    vector: PgVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -319,11 +312,11 @@ fn build_callback_internal<S: Storage>(
         );
     }
 
-    storage.add_sample(vector);
+    storage.add_sample(vector.to_slice());
 
     let index_pointer = storage.create_node(
         &index,
-        vector,
+        vector.to_slice(),
         heap_pointer,
         &state.meta_page,
         &mut state.tape,

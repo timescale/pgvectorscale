@@ -8,7 +8,7 @@ use super::{
     builder_graph::WriteStats,
     graph::{Graph, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
     meta_page::MetaPage,
-    model::NeighborWithDistance,
+    model::{NeighborWithDistance, PgVector},
 };
 
 pub trait NodeDistanceMeasure {
@@ -53,7 +53,7 @@ pub trait Storage {
 
     fn get_search_distance_measure(
         &self,
-        query: &[f32],
+        query: PgVector,
         calc_distance_with_quantizer: bool,
     ) -> Self::QueryDistanceMeasure;
 
@@ -62,7 +62,6 @@ pub trait Storage {
         index: &PgRelation,
         lsr: &mut ListSearchResult<Self>,
         lsn_idx: usize,
-        query: &[f32],
         gns: &GraphNeighborStore,
     ) where
         Self: Sized;
@@ -72,7 +71,6 @@ pub trait Storage {
         lsr: &mut ListSearchResult<Self>,
         index: &PgRelation,
         index_pointer: ItemPointer,
-        query: &[f32],
     ) -> ListSearchNeighbor
     where
         Self: Sized;

@@ -23,11 +23,34 @@ use super::storage::StorageType;
 //Ported from pg_vector code
 #[repr(C)]
 #[derive(Debug)]
-pub struct PgVector {
+pub struct PgVectorInternal {
     vl_len_: i32, /* varlena header (do not touch directly!) */
     pub dim: i16, /* number of dimensions */
     unused: i16,
     pub x: pg_sys::__IncompleteArrayField<std::os::raw::c_float>,
+}
+
+impl PgVectorInternal {
+    pub fn to_slice(&self) -> &[f32] {
+        let dim = (*self).dim;
+        let raw_slice = unsafe { (*self).x.as_slice(dim as _) };
+        raw_slice
+    }
+}
+
+pub struct PgVector {
+    inner: *mut PgVectorInternal,
+    need_pfree: bool,
+}
+
+impl Drop for PgVector {
+    fn drop(&mut self) {
+        if self.need_pfree {
+            unsafe {
+                pg_sys::pfree(self.inner.cast());
+            }
+        }
+    }
 }
 
 impl PgVector {
@@ -35,7 +58,7 @@ impl PgVector {
         datum_parts: *mut pg_sys::Datum,
         isnull_parts: *mut bool,
         index: usize,
-    ) -> Option<*mut PgVector> {
+    ) -> Option<PgVector> {
         let isnulls = std::slice::from_raw_parts(isnull_parts, index + 1);
         if isnulls[index] {
             return None;
@@ -44,17 +67,26 @@ impl PgVector {
         Some(Self::from_datum(datums[index]))
     }
 
-    pub unsafe fn from_datum(datum: pg_sys::Datum) -> *mut PgVector {
+    pub unsafe fn from_datum(datum: pg_sys::Datum) -> PgVector {
         let detoasted = pg_sys::pg_detoast_datum(datum.cast_mut_ptr());
-        let casted = detoasted.cast::<PgVector>();
-        casted
+        let is_copy = !std::ptr::eq(
+            detoasted.cast::<PgVectorInternal>(),
+            datum.cast_mut_ptr::<PgVectorInternal>(),
+        );
+        let casted = detoasted.cast::<PgVectorInternal>();
+
+        let dim = (*casted).dim;
+        let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
+        preprocess_cosine(raw_slice);
+
+        PgVector {
+            inner: casted,
+            need_pfree: is_copy,
+        }
     }
 
-    pub fn to_slice(&mut self) -> &[f32] {
-        let dim = (*self).dim;
-        let raw_slice = unsafe { (*self).x.as_mut_slice(dim as _) };
-        preprocess_cosine(raw_slice);
-        raw_slice
+    pub fn to_slice(&self) -> &[f32] {
+        unsafe { (*self.inner).to_slice() }
     }
 }
 
@@ -234,6 +266,7 @@ pub struct NeighborWithDistance {
 
 impl NeighborWithDistance {
     pub fn new(neighbor_index_pointer: ItemPointer, distance: Distance) -> Self {
+        assert!(!distance.is_nan());
         Self {
             index_pointer: neighbor_index_pointer,
             distance,
