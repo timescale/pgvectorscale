@@ -9,7 +9,6 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::builder_graph::BuilderGraph;
 use super::disk_index_graph::DiskIndexGraph;
-use super::distance::distance_cosine as default_distance;
 
 use super::model::PgVector;
 use super::storage::StorageTrait;
@@ -224,7 +223,7 @@ pub enum GraphNeighborStore {
 }
 
 impl GraphNeighborStore {
-    pub fn get_neighbors_with_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -233,10 +232,10 @@ impl GraphNeighborStore {
     ) -> bool {
         match self {
             GraphNeighborStore::Builder(b) => {
-                b.get_neighbors_with_distances(index, neighbors_of, storage, result)
+                b.get_neighbors_with_full_vector_distances(index, neighbors_of, storage, result)
             }
             GraphNeighborStore::Disk(d) => {
-                d.get_neighbors_with_distances(index, neighbors_of, storage, result)
+                d.get_neighbors_with_full_vector_distances(index, neighbors_of, storage, result)
             }
         }
     }
@@ -291,7 +290,7 @@ impl<'a> Graph<'a> {
         node: &N,
         neighbors_of: ItemPointer,
     ) -> Vec<IndexPointer>;
-    fn get_neighbors_with_distances(
+    fn get_neighbors_with_full_vector_distances(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -318,12 +317,13 @@ impl<'a> Graph<'a> {
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
             self.get_meta_page().get_max_neighbors_during_build() + 1,
         );
-        self.neighbor_store.get_neighbors_with_distances(
-            index,
-            neighbors_of,
-            storage,
-            &mut candidates,
-        );
+        self.neighbor_store
+            .get_neighbors_with_full_vector_distances(
+                index,
+                neighbors_of,
+                storage,
+                &mut candidates,
+            );
 
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
@@ -408,7 +408,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return (ListSearchResult::empty(), HashSet::with_capacity(0));
         }
-        let dm = storage.get_search_distance_measure(query, default_distance, false);
+        let dm = storage.get_search_distance_measure(query, false);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
@@ -448,7 +448,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = storage.get_search_distance_measure(query, default_distance, true);
+        let dm = storage.get_search_distance_measure(query, true);
 
         ListSearchResult::new(
             index,
@@ -524,6 +524,7 @@ impl<'a> Graph<'a> {
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
+        let dimension_epsilon = self.get_meta_page().get_num_dimensions() as f32 * f32::EPSILON;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
@@ -571,18 +572,24 @@ impl<'a> Graph<'a> {
                     //Otherwise, the case where distance_between_candidate_and_point > 0 and distance_between_candidate_and_existing_neighbor < 0 is totally wrong.
                     //If we implement inner product distance we'll have to figure something else out.
                     if distance_between_candidate_and_point < 0.0
-                        && distance_between_candidate_and_point >= 0.0 - f32::EPSILON
+                        && distance_between_candidate_and_point >= 0.0 - dimension_epsilon
                     {
                         distance_between_candidate_and_point = 0.0;
                     }
 
                     if distance_between_candidate_and_existing_neighbor < 0.0
-                        && distance_between_candidate_and_existing_neighbor >= 0.0 - f32::EPSILON
+                        && distance_between_candidate_and_existing_neighbor
+                            >= 0.0 - dimension_epsilon
                     {
                         distance_between_candidate_and_existing_neighbor = 0.0;
                     }
 
-                    debug_assert!(distance_between_candidate_and_point >= 0.0);
+                    debug_assert!(
+                        distance_between_candidate_and_point >= 0.0,
+                        "distance_between_candidate_and_point is negative: {}, {}",
+                        distance_between_candidate_and_point,
+                        f32::EPSILON
+                    );
                     debug_assert!(distance_between_candidate_and_existing_neighbor >= 0.0);
 
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for

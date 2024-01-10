@@ -47,7 +47,7 @@ impl BuilderGraph {
         }
     }
 
-    pub fn get_neighbors_with_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
         &self,
         _index: &PgRelation,
         neighbors_of: ItemPointer,

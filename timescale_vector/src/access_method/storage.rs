@@ -55,7 +55,6 @@ pub trait StorageTrait {
     fn get_search_distance_measure(
         &self,
         query: &[f32],
-        distance_fn: fn(&[f32], &[f32]) -> f32,
         calc_distance_with_quantizer: bool,
     ) -> Self::QueryDistanceMeasure;
 
@@ -88,7 +87,7 @@ pub trait StorageTrait {
     where
         Self: Sized;
 
-    fn get_neighbors_from_disk(
+    fn get_neighbors_with_full_vector_distances_from_disk(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,

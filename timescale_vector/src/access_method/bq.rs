@@ -85,7 +85,6 @@ pub struct BqQuantizer {
     training: bool,
     pub count: u64,
     pub mean: Vec<f32>,
-    pub distance_fn: fn(&[f32], &[f32]) -> f32,
 }
 
 impl BqQuantizer {
@@ -95,7 +94,6 @@ impl BqQuantizer {
             training: false,
             count: 0,
             mean: vec![],
-            distance_fn: default_distance,
         }
     }
 
@@ -182,10 +180,6 @@ impl BqQuantizer {
         _distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> BqDistanceTable {
         BqDistanceTable::new(self.quantize(query))
-    }
-
-    fn get_full_vector_distance(&self, left: &[f32], right: &[f32]) -> f32 {
-        (self.distance_fn)(left, right)
     }
 }
 
@@ -276,9 +270,7 @@ impl<'a> NodeDistanceMeasure for FullVectorDistanceState<'a> {
         );
         let slice1 = slot.get_slice();
         let slice2 = self.table_slot.as_ref().unwrap().get_slice();
-        self.storage
-            .quantizer
-            .get_full_vector_distance(slice1, slice2)
+        (self.storage.distance_fn)(slice1, slice2)
     }
 }
 
@@ -329,6 +321,7 @@ impl QuantizedVectorCache {
 }
 
 pub struct BqStorage<'a> {
+    pub distance_fn: fn(&[f32], &[f32]) -> f32,
     quantizer: BqQuantizer,
     heap_rel: Option<&'a PgRelation>,
     heap_attr: Option<pgrx::pg_sys::AttrNumber>,
@@ -340,6 +333,7 @@ impl<'a> BqStorage<'a> {
         heap_attr: Option<pgrx::pg_sys::AttrNumber>,
     ) -> BqStorage<'a> {
         Self {
+            distance_fn: default_distance,
             quantizer: BqQuantizer::new(),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -519,19 +513,18 @@ impl<'a> StorageTrait for BqStorage<'a> {
     fn get_search_distance_measure(
         &self,
         query: &[f32],
-        distance_fn: fn(&[f32], &[f32]) -> f32,
         calc_distance_with_quantizer: bool,
     ) -> SearchDistanceMeasure {
         if !calc_distance_with_quantizer {
-            return SearchDistanceMeasure::Full(distance_fn);
+            return SearchDistanceMeasure::Full(self.distance_fn);
         } else {
             return SearchDistanceMeasure::Bq(
-                self.quantizer.get_distance_table(query, distance_fn),
+                self.quantizer.get_distance_table(query, self.distance_fn),
             );
         }
     }
 
-    fn get_neighbors_from_disk(
+    fn get_neighbors_with_full_vector_distances_from_disk(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
@@ -892,11 +885,23 @@ mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
 
+            -- test insert 10 vectors to search for that aren't random
+            INSERT INTO test_bq (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(1.0), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 10) i
+                GROUP BY
+                    i % 10) g;
+
             ",
         ))?;
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(random()), ',', '0') || '}}')::real[] AS embedding
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
 FROM generate_series(1, 1536)"
         ))?;
 
@@ -913,7 +918,7 @@ FROM generate_series(1, 1536)"
                 test_bq
             ORDER BY
                 embedding <=> $1::vector
-            LIMIT 30
+            LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
             ),
@@ -981,8 +986,7 @@ FROM generate_series(1, 1536)"
                 matches += 1;
             }
         }
-        //pgrx::warning!("matches: {}", matches);
-        assert!(matches > 4);
+        assert!(matches > 9, "Low number of matches: {}", matches);
 
         Ok(())
     }

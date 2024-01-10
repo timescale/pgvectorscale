@@ -17,14 +17,14 @@ impl DiskIndexGraph {
         node.get_index_pointer_to_neighbors()
     }
 
-    pub fn get_neighbors_with_distances<S: StorageTrait>(
+    pub fn get_neighbors_with_full_vector_distances<S: StorageTrait>(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
         storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
-        storage.get_neighbors_from_disk(index, neighbors_of, result)
+        storage.get_neighbors_with_full_vector_distances_from_disk(index, neighbors_of, result)
     }
 
     pub fn is_empty(&self, meta_page: &MetaPage) -> bool {
