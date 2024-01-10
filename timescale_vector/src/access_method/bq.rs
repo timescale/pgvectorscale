@@ -1,7 +1,7 @@
 use super::{
-    builder_graph::WriteStats,
     distance::distance_cosine as default_distance,
-    graph::{Graph, GraphNeighborStore, GreedySearchStats, ListSearchNeighbor, ListSearchResult},
+    graph::{Graph, GreedySearchStats, ListSearchNeighbor, ListSearchResult},
+    graph_neighbor_store::{GraphNeighborStore, WriteStats},
     model::PgVector,
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
@@ -488,7 +488,7 @@ impl<'a> Storage for BqStorage<'a> {
         self.quantizer.finish_training();
 
         match graph.get_neighbor_store() {
-            GraphNeighborStore::Disk(_) => {
+            GraphNeighborStore::Disk => {
                 pgrx::error!("Disk graph neigbor store should not be used when building a graph")
             }
             GraphNeighborStore::Builder(builder) => {
@@ -627,7 +627,7 @@ impl<'a> Storage for BqStorage<'a> {
         let node_visiting = rn_visiting.get_archived_node();
 
         let neighbors = match gns {
-            GraphNeighborStore::Disk(d) => d.get_neighbors(node_visiting),
+            GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
             GraphNeighborStore::Builder(b) => b.get_neighbors(lsn.index_pointer),
         };
 

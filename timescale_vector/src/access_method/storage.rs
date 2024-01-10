@@ -5,8 +5,8 @@ use pgrx::PgRelation;
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
-    builder_graph::WriteStats,
-    graph::{Graph, GraphNeighborStore, ListSearchNeighbor, ListSearchResult},
+    graph::{Graph, ListSearchNeighbor, ListSearchResult},
+    graph_neighbor_store::{GraphNeighborStore, WriteStats},
     meta_page::MetaPage,
     model::{NeighborWithDistance, PgVector},
 };

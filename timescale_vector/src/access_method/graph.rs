@@ -7,8 +7,7 @@ use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
-use super::builder_graph::BuilderGraph;
-use super::disk_index_graph::DiskIndexGraph;
+use super::graph_neighbor_store::GraphNeighborStore;
 
 use super::model::PgVector;
 use super::storage::Storage;
@@ -210,53 +209,6 @@ impl<S: Storage> ListSearchResult<S> {
         //let f = &self.candidate_storage[self.best_candidate.remove(0)];
         let res = storage.return_lsn(index, self, idx);
         return Some(res);
-    }
-}
-
-pub enum GraphNeighborStore {
-    Builder(BuilderGraph),
-    Disk(DiskIndexGraph),
-}
-
-impl GraphNeighborStore {
-    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
-        &self,
-        index: &PgRelation,
-        neighbors_of: ItemPointer,
-        storage: &S,
-        result: &mut Vec<NeighborWithDistance>,
-    ) -> bool {
-        match self {
-            GraphNeighborStore::Builder(b) => {
-                b.get_neighbors_with_full_vector_distances(index, neighbors_of, storage, result)
-            }
-            GraphNeighborStore::Disk(d) => {
-                d.get_neighbors_with_full_vector_distances(index, neighbors_of, storage, result)
-            }
-        }
-    }
-
-    pub fn set_neighbors<S: Storage>(
-        &mut self,
-        storage: &S,
-        index: &PgRelation,
-        meta_page: &MetaPage,
-        neighbors_of: ItemPointer,
-        new_neighbors: Vec<NeighborWithDistance>,
-    ) {
-        match self {
-            GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, new_neighbors),
-            GraphNeighborStore::Disk(d) => {
-                d.set_neighbors(storage, index, meta_page, neighbors_of, new_neighbors)
-            }
-        }
-    }
-
-    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
-        match self {
-            GraphNeighborStore::Builder(b) => b.max_neighbors(meta_page),
-            GraphNeighborStore::Disk(d) => d.max_neighbors(meta_page),
-        }
     }
 }
 

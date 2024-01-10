@@ -1,10 +1,9 @@
 use pgrx::*;
 mod build;
-mod builder_graph;
 mod cost_estimate;
 mod debugging;
-mod disk_index_graph;
 mod graph;
+mod graph_neighbor_store;
 pub mod guc;
 mod meta_page;
 mod model;

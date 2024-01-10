@@ -2,8 +2,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        bq::BqStorage, disk_index_graph::DiskIndexGraph, graph::GraphNeighborStore,
-        meta_page::MetaPage, model::PgVector,
+        bq::BqStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
+        model::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
@@ -68,10 +68,7 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
         _meta_page: MetaPage,
     ) -> Self {
         let mut meta_page = MetaPage::read(&index);
-        let graph = Graph::new(
-            GraphNeighborStore::Disk(DiskIndexGraph::new()),
-            &mut meta_page,
-        );
+        let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
 
@@ -87,10 +84,7 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
 
 impl<'a, S: Storage> TSVResponseIterator<'a, S> {
     fn next(&mut self, index: &'a PgRelation, storage: &S) -> Option<HeapPointer> {
-        let graph = Graph::new(
-            GraphNeighborStore::Disk(DiskIndexGraph::new()),
-            &mut self.meta_page,
-        );
+        let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
         loop {

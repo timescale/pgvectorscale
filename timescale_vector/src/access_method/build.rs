@@ -2,11 +2,9 @@ use std::time::Instant;
 
 use pgrx::*;
 
-use crate::access_method::disk_index_graph::DiskIndexGraph;
-
 use crate::access_method::graph::Graph;
-use crate::access_method::graph::GraphNeighborStore;
 use crate::access_method::graph::InsertStats;
+use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::model::PgVector;
 use crate::access_method::options::TSVIndexOptions;
 
@@ -15,7 +13,7 @@ use crate::util::tape::Tape;
 use crate::util::*;
 
 use super::bq::BqStorage;
-use super::builder_graph::BuilderGraph;
+use super::graph_neighbor_store::BuilderNeighborCache;
 
 use super::meta_page::MetaPage;
 
@@ -157,7 +155,7 @@ unsafe fn insert_storage<S: Storage>(
         &mut tape,
     );
 
-    let mut graph = Graph::new(GraphNeighborStore::Disk(DiskIndexGraph::new()), meta_page);
+    let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
     graph.insert(&index_relation, index_pointer, vector, storage)
 }
 
@@ -180,7 +178,10 @@ fn do_heap_scan<'a>(
     let mut storage = meta_page.get_storage_type();
 
     let mut mp2 = meta_page.clone();
-    let graph = Graph::new(GraphNeighborStore::Builder(BuilderGraph::new()), &mut mp2);
+    let graph = Graph::new(
+        GraphNeighborStore::Builder(BuilderNeighborCache::new()),
+        &mut mp2,
+    );
     match storage {
         StorageType::None => {
             pgrx::error!("not implemented");
