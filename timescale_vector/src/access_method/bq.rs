@@ -4,7 +4,10 @@ use super::{
     graph_neighbor_store::GraphNeighborStore,
     meta_page,
     pg_vector::PgVector,
-    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats},
+    stats::{
+        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
+        WriteStats,
+    },
     storage::{ArchivedData, NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
     storage_common::{calculate_full_distance, HeapFullDistanceMeasure},
 };
@@ -504,14 +507,14 @@ impl<'a> Storage for BqStorage<'a> {
         lsn_idx: usize,
         gns: &GraphNeighborStore,
     ) {
+        let lsn_index_pointer = lsr.get_lsn_by_idx(lsn_idx).index_pointer;
         //Opt shouldn't need to read the node in the builder graph case.
-        let lsn = &lsr.candidate_storage[lsn_idx];
-        let rn_visiting = unsafe { BqNode::read(index, lsn.index_pointer, &mut lsr.stats) };
+        let rn_visiting = unsafe { BqNode::read(index, lsn_index_pointer, &mut lsr.stats) };
         let node_visiting = rn_visiting.get_archived_node();
 
         let neighbors = match gns {
             GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
-            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn.index_pointer),
+            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn_index_pointer),
         };
 
         for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
@@ -559,14 +562,14 @@ impl<'a> Storage for BqStorage<'a> {
     fn return_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult<BqStorage>,
-        idx: usize,
-    ) -> (HeapPointer, IndexPointer) {
-        let lsn = &lsr.candidate_storage[idx];
-        let rn = unsafe { BqNode::read(index, lsn.index_pointer, &mut lsr.stats) };
+        lsn: &ListSearchNeighbor,
+        stats: &mut GreedySearchStats,
+    ) -> HeapPointer {
+        let lsn_index_pointer = lsn.index_pointer;
+        let rn = unsafe { BqNode::read(index, lsn_index_pointer, stats) };
         let node = rn.get_archived_node();
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-        (heap_pointer, lsn.index_pointer)
+        heap_pointer
     }
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(

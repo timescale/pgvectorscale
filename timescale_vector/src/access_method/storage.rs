@@ -12,7 +12,10 @@ use super::{
     meta_page::MetaPage,
     model::NeighborWithDistance,
     pg_vector::PgVector,
-    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats},
+    stats::{
+        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
+        WriteStats,
+    },
 };
 
 pub trait NodeFullDistanceMeasure {
@@ -97,9 +100,9 @@ pub trait Storage {
     fn return_lsn(
         &self,
         index: &PgRelation,
-        lsr: &mut ListSearchResult<Self>,
-        idx: usize,
-    ) -> (HeapPointer, IndexPointer)
+        lsn: &ListSearchNeighbor,
+        stats: &mut GreedySearchStats,
+    ) -> HeapPointer
     where
         Self: Sized;
 

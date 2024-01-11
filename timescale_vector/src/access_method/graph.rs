@@ -52,8 +52,8 @@ impl ListSearchNeighbor {
 }
 
 pub struct ListSearchResult<S: Storage> {
-    pub candidate_storage: Vec<ListSearchNeighbor>, //plain storage
-    best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
+    candidate_storage: Vec<ListSearchNeighbor>, //plain storage
+    best_candidate: Vec<usize>,                 //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
     pub sdm: Option<S::QueryDistanceMeasure>,
@@ -124,6 +124,10 @@ impl<S: Storage> ListSearchResult<S> {
         self.best_candidate.insert(idx, pos)
     }
 
+    pub fn get_lsn_by_idx(&self, idx: usize) -> &ListSearchNeighbor {
+        &self.candidate_storage[idx]
+    }
+
     fn visit_closest(&mut self, pos_limit: usize) -> Option<usize> {
         //OPT: should we optimize this not to do a linear search each time?
         let neighbor_position = self
@@ -154,9 +158,9 @@ impl<S: Storage> ListSearchResult<S> {
             return None;
         }
         let idx = self.best_candidate.remove(0);
-        //let f = &self.candidate_storage[self.best_candidate.remove(0)];
-        let res = storage.return_lsn(index, self, idx);
-        return Some(res);
+        let lsn = &self.candidate_storage[idx];
+        let heap_pointer = storage.return_lsn(index, lsn, &mut self.stats);
+        return Some((heap_pointer, lsn.index_pointer));
     }
 }
 
