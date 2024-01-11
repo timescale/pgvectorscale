@@ -1,13 +1,11 @@
 use std::pin::Pin;
 
-use pgrx::PgRelation;
-
 use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
 };
 
 use super::{
-    graph::{Graph, ListSearchNeighbor, ListSearchResult},
+    graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     meta_page::MetaPage,
     model::NeighborWithDistance,
@@ -21,7 +19,6 @@ use super::{
 pub trait NodeFullDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> f32;
@@ -55,11 +52,10 @@ pub trait Storage {
 
     fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, index: &PgRelation, stats: &mut WriteStats);
+    fn finish_training(&mut self, stats: &mut WriteStats);
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
-        index: &PgRelation,
         meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &Vec<NeighborWithDistance>,
@@ -68,7 +64,6 @@ pub trait Storage {
 
     unsafe fn get_full_vector_distance_state<'a, S: StatsNodeRead>(
         &'a self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Self::NodeFullDistanceMeasure<'a>;
@@ -81,8 +76,7 @@ pub trait Storage {
 
     fn visit_lsn(
         &self,
-        index: &PgRelation,
-        lsr: &mut ListSearchResult<Self>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
     ) where
@@ -90,19 +84,13 @@ pub trait Storage {
 
     fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult<Self>,
-        index: &PgRelation,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
         index_pointer: ItemPointer,
     ) -> ListSearchNeighbor
     where
         Self: Sized;
 
-    fn return_lsn(
-        &self,
-        index: &PgRelation,
-        lsn: &ListSearchNeighbor,
-        stats: &mut GreedySearchStats,
-    ) -> HeapPointer
+    fn return_lsn(&self, lsn: &ListSearchNeighbor, stats: &mut GreedySearchStats) -> HeapPointer
     where
         Self: Sized;
 
@@ -110,7 +98,6 @@ pub trait Storage {
         S: StatsNodeRead + StatsDistanceComparison,
     >(
         &self,
-        index: &PgRelation,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
@@ -118,7 +105,6 @@ pub trait Storage {
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
-        index: &PgRelation,
         meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
@@ -131,7 +117,6 @@ pub trait Storage {
 pub trait StorageFullDistanceFromHeap {
     unsafe fn get_heap_table_slot_from_index_pointer<T: StatsNodeRead>(
         &self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> TableSlot;

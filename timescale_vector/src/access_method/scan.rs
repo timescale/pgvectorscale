@@ -9,20 +9,24 @@ use crate::{
 };
 
 use super::{
+    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure},
     graph::{Graph, ListSearchResult},
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
 
-enum StorageState<'a, 'b> {
-    BQ(BqStorage<'a>, TSVResponseIterator<'b, BqStorage<'a>>),
+/* Be very careful not to transfer PgRelations in the state, as they can change between calls. That means we shouldn't be
+using lifetimes here. Everything should be owned */
+enum StorageState {
+    BQ(BqQuantizer, TSVResponseIterator<BqSearchDistanceMeasure>),
 }
 
-struct TSVScanState<'a, 'b> {
-    storage: *mut StorageState<'a, 'b>,
+/* no lifetime usage here. */
+struct TSVScanState {
+    storage: *mut StorageState,
 }
 
-impl<'a, 'b> TSVScanState<'a, 'b> {
+impl TSVScanState {
     fn new() -> Self {
         Self {
             storage: std::ptr::null_mut(),
@@ -43,10 +47,11 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
             }
             StorageType::BQ => {
                 let mut stats = QuantizerStats::new();
-                let bq = BqStorage::load_for_search(index, &meta_page, &mut stats);
+                let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
+                let bq = BqStorage::load_for_search(index, &quantizer);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
-                StorageState::BQ(bq, it)
+                StorageState::BQ(quantizer, it)
             }
         };
 
@@ -54,16 +59,16 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
     }
 }
 
-struct TSVResponseIterator<'a, S: Storage> {
-    lsr: ListSearchResult<S>,
+struct TSVResponseIterator<QDM> {
+    lsr: ListSearchResult<QDM>,
     search_list_size: usize,
     current: usize,
-    last_buffer: Option<PinnedBufferShare<'a>>,
+    last_buffer: Option<PinnedBufferShare>,
     meta_page: MetaPage,
 }
 
-impl<'a, S: Storage> TSVResponseIterator<'a, S> {
-    fn new(
+impl<QDM> TSVResponseIterator<QDM> {
+    fn new<S: Storage<QueryDistanceMeasure = QDM>>(
         storage: &S,
         index: &PgRelation,
         query: PgVector,
@@ -74,7 +79,7 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
         let mut meta_page = MetaPage::read(&index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
-        let mut lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
+        let mut lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
         lsr.stats.set_quantizer_stats(stats);
 
         Self {
@@ -87,15 +92,19 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
     }
 }
 
-impl<'a, S: Storage> TSVResponseIterator<'a, S> {
-    fn next(&mut self, index: &'a PgRelation, storage: &S) -> Option<HeapPointer> {
+impl<QDM> TSVResponseIterator<QDM> {
+    fn next<S: Storage<QueryDistanceMeasure = QDM>>(
+        &mut self,
+        index: &PgRelation,
+        storage: &S,
+    ) -> Option<HeapPointer> {
         let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
         loop {
-            graph.greedy_search_iterate(&mut self.lsr, index, self.search_list_size, None, storage);
+            graph.greedy_search_iterate(&mut self.lsr, self.search_list_size, None, storage);
 
-            let item = self.lsr.consume(index, storage);
+            let item = self.lsr.consume(storage);
 
             match item {
                 Some((heap_pointer, index_pointer)) => {
@@ -210,14 +219,17 @@ pub extern "C" fn amgettuple(
 
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
-        StorageState::BQ(bq, iter) => get_tuple(bq, &indexrel, iter, scan),
+        StorageState::BQ(quantizer, iter) => {
+            let bq = BqStorage::load_for_search(&indexrel, quantizer);
+            get_tuple(&bq, &indexrel, iter, scan)
+        }
     }
 }
 
 fn get_tuple<'a, S: Storage>(
     storage: &S,
     index: &'a PgRelation,
-    iter: &'a mut TSVResponseIterator<'a, S>,
+    iter: &'a mut TSVResponseIterator<S::QueryDistanceMeasure>,
     mut scan: PgBox<pg_sys::IndexScanDescData>,
 ) -> bool {
     scan.xs_recheckorderby = false;
@@ -245,12 +257,12 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
-            StorageState::BQ(_bq, iter) => end_scan(iter),
+            StorageState::BQ(_bq, iter) => end_scan::<BqStorage>(iter),
         }
     }
 }
 
-fn end_scan<S: Storage>(iter: &mut TSVResponseIterator<S>) {
+fn end_scan<S: Storage>(iter: &mut TSVResponseIterator<S::QueryDistanceMeasure>) {
     debug1!(
         "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}",
         iter.lsr.stats.get_node_reads(),

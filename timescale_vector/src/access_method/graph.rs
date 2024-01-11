@@ -51,16 +51,16 @@ impl ListSearchNeighbor {
     }
 }
 
-pub struct ListSearchResult<S: Storage> {
+pub struct ListSearchResult<QDM> {
     candidate_storage: Vec<ListSearchNeighbor>, //plain storage
     best_candidate: Vec<usize>,                 //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
-    pub sdm: Option<S::QueryDistanceMeasure>,
+    pub sdm: Option<QDM>,
     pub stats: GreedySearchStats,
 }
 
-impl<S: Storage> ListSearchResult<S> {
+impl<QDM> ListSearchResult<QDM> {
     fn empty() -> Self {
         Self {
             candidate_storage: vec![],
@@ -72,10 +72,8 @@ impl<S: Storage> ListSearchResult<S> {
         }
     }
 
-    fn new(
-        index: &PgRelation,
+    fn new<S: Storage<QueryDistanceMeasure = QDM>>(
         max_history_size: Option<usize>,
-        _graph: &Graph,
         init_ids: Vec<ItemPointer>,
         sdm: S::QueryDistanceMeasure,
         search_list_size: usize,
@@ -93,7 +91,7 @@ impl<S: Storage> ListSearchResult<S> {
         };
         res.stats.record_call();
         for index_pointer in init_ids {
-            let lsn = storage.create_lsn_for_init_id(&mut res, index, index_pointer);
+            let lsn = storage.create_lsn_for_init_id(&mut res, index_pointer);
             res.insert_neighbor(lsn);
         }
         res
@@ -149,9 +147,8 @@ impl<S: Storage> ListSearchResult<S> {
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
     //into the best_candidate list, so it will never again be returned.
-    pub fn consume(
+    pub fn consume<S: Storage<QueryDistanceMeasure = QDM>>(
         &mut self,
-        index: &PgRelation,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.best_candidate.is_empty() {
@@ -159,7 +156,7 @@ impl<S: Storage> ListSearchResult<S> {
         }
         let idx = self.best_candidate.remove(0);
         let lsn = &self.candidate_storage[idx];
-        let heap_pointer = storage.return_lsn(index, lsn, &mut self.stats);
+        let heap_pointer = storage.return_lsn(lsn, &mut self.stats);
         return Some((heap_pointer, lsn.index_pointer));
     }
 }
@@ -188,7 +185,6 @@ impl<'a> Graph<'a> {
     fn add_neighbors<S: Storage>(
         &mut self,
         storage: &S,
-        index: &PgRelation,
         neighbors_of: ItemPointer,
         additional_neighbors: Vec<NeighborWithDistance>,
         stats: &mut PruneNeighborStats,
@@ -199,7 +195,6 @@ impl<'a> Graph<'a> {
         );
         self.neighbor_store
             .get_neighbors_with_full_vector_distances(
-                index,
                 neighbors_of,
                 storage,
                 &mut candidates,
@@ -227,7 +222,7 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(index, candidates, storage, stats);
+                let new_list = self.prune_neighbors(candidates, storage, stats);
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -236,7 +231,6 @@ impl<'a> Graph<'a> {
         //OPT: remove clone
         self.neighbor_store.set_neighbors(
             storage,
-            index,
             self.meta_page,
             neighbors_of,
             new_neighbors.clone(),
@@ -263,11 +257,13 @@ impl<'a> Graph<'a> {
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     fn greedy_search_for_build<S: Storage>(
         &self,
-        index: &PgRelation,
         query: PgVector,
         meta_page: &MetaPage,
         storage: &S,
-    ) -> (ListSearchResult<S>, HashSet<NeighborWithDistance>) {
+    ) -> (
+        ListSearchResult<S::QueryDistanceMeasure>,
+        HashSet<NeighborWithDistance>,
+    ) {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
@@ -277,9 +273,7 @@ impl<'a> Graph<'a> {
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
-            index,
             Some(search_list_size),
-            self,
             init_ids.unwrap(),
             dm,
             search_list_size,
@@ -287,13 +281,7 @@ impl<'a> Graph<'a> {
             storage,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
-        self.greedy_search_iterate(
-            &mut l,
-            index,
-            search_list_size,
-            Some(&mut visited_nodes),
-            storage,
-        );
+        self.greedy_search_iterate(&mut l, search_list_size, Some(&mut visited_nodes), storage);
         return (l, visited_nodes);
     }
 
@@ -301,11 +289,10 @@ impl<'a> Graph<'a> {
     /// the next elements.
     pub fn greedy_search_streaming_init<S: Storage>(
         &self,
-        index: &PgRelation,
         query: PgVector,
         search_list_size: usize,
         storage: &S,
-    ) -> ListSearchResult<S> {
+    ) -> ListSearchResult<S::QueryDistanceMeasure> {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
@@ -314,9 +301,7 @@ impl<'a> Graph<'a> {
         let dm = storage.get_search_distance_measure(query, true);
 
         ListSearchResult::new(
-            index,
             None,
-            self,
             init_ids.unwrap(),
             dm,
             search_list_size,
@@ -328,8 +313,7 @@ impl<'a> Graph<'a> {
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     pub fn greedy_search_iterate<S: Storage>(
         &self,
-        lsr: &mut ListSearchResult<S>,
-        index: &PgRelation,
+        lsr: &mut ListSearchResult<S::QueryDistanceMeasure>,
         visit_n_closest: usize,
         mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
         storage: &S,
@@ -345,7 +329,7 @@ impl<'a> Graph<'a> {
                     ));
                 }
             }
-            storage.visit_lsn(index, lsr, list_search_entry_idx, &self.neighbor_store);
+            storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store);
         }
     }
 
@@ -356,7 +340,6 @@ impl<'a> Graph<'a> {
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
         &self,
-        index: &PgRelation,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -401,7 +384,6 @@ impl<'a> Graph<'a> {
 
                 let dist_state = unsafe {
                     storage.get_full_vector_distance_state(
-                        index,
                         existing_neighbor.get_index_pointer_to_neighbor(),
                         stats,
                     )
@@ -416,11 +398,8 @@ impl<'a> Graph<'a> {
 
                     //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {
-                        dist_state.get_distance(
-                            index,
-                            candidate_neighbor.get_index_pointer_to_neighbor(),
-                            stats,
-                        )
+                        dist_state
+                            .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)
                     };
                     let mut distance_between_candidate_and_point =
                         candidate_neighbor.get_distance();
@@ -485,7 +464,6 @@ impl<'a> Graph<'a> {
 
             self.neighbor_store.set_neighbors(
                 storage,
-                index,
                 self.meta_page,
                 index_pointer,
                 Vec::<NeighborWithDistance>::with_capacity(
@@ -498,11 +476,10 @@ impl<'a> Graph<'a> {
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
-        let (l, v) = self.greedy_search_for_build(index, vec, meta_page, storage);
+        let (l, v) = self.greedy_search_for_build(vec, meta_page, storage);
 
         let (_, neighbor_list) = self.add_neighbors(
             storage,
-            index,
             index_pointer,
             v.into_iter().collect(),
             &mut stats.prune_neighbor_stats,
@@ -512,7 +489,6 @@ impl<'a> Graph<'a> {
         let mut cnt = 0;
         for neighbor in neighbor_list {
             let needed_prune = self.update_back_pointer(
-                index,
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
@@ -527,7 +503,6 @@ impl<'a> Graph<'a> {
 
     fn update_back_pointer<S: Storage>(
         &mut self,
-        index: &PgRelation,
         from: IndexPointer,
         to: IndexPointer,
         distance: f32,
@@ -535,7 +510,7 @@ impl<'a> Graph<'a> {
         prune_stats: &mut PruneNeighborStats,
     ) -> bool {
         let new = vec![NeighborWithDistance::new(to, distance)];
-        let (pruned, _) = self.add_neighbors(storage, index, from, new, prune_stats);
+        let (pruned, _) = self.add_neighbors(storage, from, new, prune_stats);
         pruned
     }
 }

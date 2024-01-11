@@ -201,7 +201,11 @@ fn do_heap_scan<'a>(
             pgrx::error!("not implemented");
         }
         StorageType::BQ => {
-            let mut bq = BqStorage::new_for_build(heap_relation, get_attribute_number(index_info));
+            let mut bq = BqStorage::new_for_build(
+                index_relation,
+                heap_relation,
+                get_attribute_number(index_info),
+            );
             bq.start_training(&meta_page);
             let page_type = bq.page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
@@ -217,19 +221,15 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(index_relation, &mut bq, &mut bs)
+            do_heap_scan_with_state(&mut bq, &mut bs)
         }
     }
 }
 
-fn do_heap_scan_with_state<'a, S: Storage>(
-    index_relation: &'a PgRelation,
-    storage: &mut S,
-    state: &mut BuildState,
-) -> usize {
+fn do_heap_scan_with_state<S: Storage>(storage: &mut S, state: &mut BuildState) -> usize {
     // we train the quantizer and add prepare to write quantized values to the nodes.\
     let mut write_stats = WriteStats::new();
-    storage.finish_training(index_relation, &mut write_stats);
+    storage.finish_training(&mut write_stats);
 
     match state.graph.get_neighbor_store() {
         GraphNeighborStore::Builder(builder) => {
@@ -240,7 +240,6 @@ fn do_heap_scan_with_state<'a, S: Storage>(
                     if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
                         //OPT: get rid of this clone
                         prune_neighbors = state.graph.prune_neighbors(
-                            index_relation,
                             neighbors.clone(),
                             storage,
                             &mut write_stats.prune_stats,
@@ -252,7 +251,6 @@ fn do_heap_scan_with_state<'a, S: Storage>(
                 write_stats.num_neighbors += neighbors.len();
 
                 storage.finalize_node_at_end_of_build(
-                    index_relation,
                     &state.meta_page,
                     index_pointer,
                     neighbors,

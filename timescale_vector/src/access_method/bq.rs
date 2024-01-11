@@ -1,8 +1,7 @@
 use super::{
     distance::distance_cosine as default_distance,
-    graph::{Graph, ListSearchNeighbor, ListSearchResult},
+    graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    meta_page,
     pg_vector::PgVector,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
@@ -75,6 +74,7 @@ impl BqMeans {
     }
 }
 
+#[derive(Clone)]
 pub struct BqQuantizer {
     pub use_mean: bool,
     training: bool,
@@ -208,12 +208,12 @@ impl BqDistanceTable {
     }
 }
 
-pub enum SearchDistanceMeasure {
+pub enum BqSearchDistanceMeasure {
     Full(PgVector),
     Bq(BqDistanceTable),
 }
 
-impl SearchDistanceMeasure {
+impl BqSearchDistanceMeasure {
     pub fn calculate_bq_distance<S: StatsDistanceComparison>(
         table: &BqDistanceTable,
         bq_vector: &[BqVectorElement],
@@ -242,7 +242,6 @@ impl QuantizedVectorCache {
 
     fn get<S: StatsNodeRead>(
         &mut self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         storage: &BqStorage,
         stats: &mut S,
@@ -250,7 +249,7 @@ impl QuantizedVectorCache {
         self.quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
-                storage.get_quantized_vector_from_index_pointer(index, index_pointer, stats)
+                storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
             })
     }
 
@@ -263,18 +262,18 @@ impl QuantizedVectorCache {
 
     fn preload<I: Iterator<Item = IndexPointer>, S: StatsNodeRead>(
         &mut self,
-        index: &PgRelation,
         index_pointers: I,
         storage: &BqStorage,
         stats: &mut S,
     ) {
         for index_pointer in index_pointers {
-            self.get(index, index_pointer, storage, stats);
+            self.get(index_pointer, storage, stats);
         }
     }
 }
 
 pub struct BqStorage<'a> {
+    pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
     quantizer: BqQuantizer,
     heap_rel: Option<&'a PgRelation>,
@@ -284,10 +283,12 @@ pub struct BqStorage<'a> {
 
 impl<'a> BqStorage<'a> {
     pub fn new_for_build(
+        index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
     ) -> BqStorage<'a> {
         Self {
+            index: index,
             distance_fn: default_distance,
             quantizer: BqQuantizer::new(),
             heap_rel: Some(heap_rel),
@@ -307,11 +308,12 @@ impl<'a> BqStorage<'a> {
     pub fn load_for_insert<S: StatsNodeRead>(
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
-        index_relation: &PgRelation,
+        index_relation: &'a PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
     ) -> BqStorage<'a> {
         Self {
+            index: index_relation,
             distance_fn: default_distance,
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: Some(heap_rel),
@@ -320,14 +322,15 @@ impl<'a> BqStorage<'a> {
         }
     }
 
-    pub fn load_for_search<S: StatsNodeRead>(
-        index_relation: &PgRelation,
-        meta_page: &super::meta_page::MetaPage,
-        stats: &mut S,
+    pub fn load_for_search(
+        index_relation: &'a PgRelation,
+        quantizer: &BqQuantizer,
     ) -> BqStorage<'a> {
         Self {
+            index: index_relation,
             distance_fn: default_distance,
-            quantizer: Self::load_quantizer(index_relation, meta_page, stats),
+            //OPT: get rid of clone
+            quantizer: quantizer.clone(),
             heap_rel: None,
             heap_attr: None,
             qv_cache: None,
@@ -336,26 +339,24 @@ impl<'a> BqStorage<'a> {
 
     fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
         &self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Vec<BqVectorElement> {
-        let slot =
-            unsafe { self.get_heap_table_slot_from_index_pointer(index, index_pointer, stats) };
+        let slot = unsafe { self.get_heap_table_slot_from_index_pointer(index_pointer, stats) };
         let slice = unsafe { slot.get_pg_vector() };
         self.quantizer.quantize(slice.to_slice())
     }
 
-    fn write_quantizer_metadata<S: StatsNodeWrite>(&self, index: &PgRelation, stats: &mut S) {
+    fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
         if self.quantizer.use_mean {
-            let index_pointer = unsafe { BqMeans::store(&index, &self.quantizer, stats) };
-            super::meta_page::MetaPage::update_pq_pointer(&index, index_pointer);
+            let index_pointer = unsafe { BqMeans::store(&self.index, &self.quantizer, stats) };
+            super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
         }
     }
 }
 
 impl<'a> Storage for BqStorage<'a> {
-    type QueryDistanceMeasure = SearchDistanceMeasure;
+    type QueryDistanceMeasure = BqSearchDistanceMeasure;
     type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqStorage<'b>> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
 
@@ -387,15 +388,14 @@ impl<'a> Storage for BqStorage<'a> {
         self.quantizer.add_sample(sample);
     }
 
-    fn finish_training(&mut self, index: &PgRelation, stats: &mut WriteStats) {
+    fn finish_training(&mut self, stats: &mut WriteStats) {
         self.quantizer.finish_training();
-        self.write_quantizer_metadata(index, stats);
+        self.write_quantizer_metadata(stats);
         self.qv_cache = Some(QuantizedVectorCache::new(1000));
     }
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
-        index: &PgRelation,
         meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &Vec<NeighborWithDistance>,
@@ -408,9 +408,9 @@ impl<'a> Storage for BqStorage<'a> {
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
-        cache.preload(index, iter, self, stats);
+        cache.preload(iter, self, stats);
 
-        let node = unsafe { BqNode::modify(index, index_pointer, stats) };
+        let node = unsafe { BqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
 
@@ -425,22 +425,21 @@ impl<'a> Storage for BqStorage<'a> {
 
     unsafe fn get_full_vector_distance_state<'b, S: StatsNodeRead>(
         &'b self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> HeapFullDistanceMeasure<'b, BqStorage<'b>> {
-        HeapFullDistanceMeasure::new(self, index, index_pointer, stats)
+        HeapFullDistanceMeasure::new(self, index_pointer, stats)
     }
 
     fn get_search_distance_measure(
         &self,
         query: PgVector,
         calc_distance_with_quantizer: bool,
-    ) -> SearchDistanceMeasure {
+    ) -> BqSearchDistanceMeasure {
         if !calc_distance_with_quantizer {
-            return SearchDistanceMeasure::Full(query);
+            return BqSearchDistanceMeasure::Full(query);
         } else {
-            return SearchDistanceMeasure::Bq(
+            return BqSearchDistanceMeasure::Bq(
                 self.quantizer
                     .get_distance_table(query.to_slice(), self.distance_fn),
             );
@@ -451,16 +450,15 @@ impl<'a> Storage for BqStorage<'a> {
         S: StatsNodeRead + StatsDistanceComparison,
     >(
         &self,
-        index: &PgRelation,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
     ) -> bool {
-        let rn = unsafe { BqNode::read(index, neighbors_of, stats) };
-        let dist_state = unsafe { self.get_full_vector_distance_state(index, neighbors_of, stats) };
+        let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
+        let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
         rn.get_archived_node().apply_to_neighbors(|n| {
             let n = n.deserialize_item_pointer();
-            let dist = unsafe { dist_state.get_distance(index, n, stats) };
+            let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
         });
         true
@@ -470,21 +468,20 @@ impl<'a> Storage for BqStorage<'a> {
     comparisons for BQ get the vector from different places */
     fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult<BqStorage>,
-        index: &PgRelation,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
         index_pointer: ItemPointer,
     ) -> ListSearchNeighbor {
-        let rn = unsafe { BqNode::read(index, index_pointer, &mut lsr.stats) };
+        let rn = unsafe { BqNode::read(self.index, index_pointer, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            SearchDistanceMeasure::Full(query) => {
+            BqSearchDistanceMeasure::Full(query) => {
                 let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
                 unsafe {
                     calculate_full_distance(self, heap_pointer, query.to_slice(), &mut lsr.stats)
                 }
             }
-            SearchDistanceMeasure::Bq(table) => SearchDistanceMeasure::calculate_bq_distance(
+            BqSearchDistanceMeasure::Bq(table) => BqSearchDistanceMeasure::calculate_bq_distance(
                 table,
                 node.bq_vector.as_slice(),
                 &mut lsr.stats,
@@ -502,14 +499,13 @@ impl<'a> Storage for BqStorage<'a> {
 
     fn visit_lsn(
         &self,
-        index: &PgRelation,
-        lsr: &mut ListSearchResult<BqStorage>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
     ) {
         let lsn_index_pointer = lsr.get_lsn_by_idx(lsn_idx).index_pointer;
         //Opt shouldn't need to read the node in the builder graph case.
-        let rn_visiting = unsafe { BqNode::read(index, lsn_index_pointer, &mut lsr.stats) };
+        let rn_visiting = unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
         let node_visiting = rn_visiting.get_archived_node();
 
         let neighbors = match gns {
@@ -523,9 +519,9 @@ impl<'a> Storage for BqStorage<'a> {
             }
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                SearchDistanceMeasure::Full(query) => {
+                BqSearchDistanceMeasure::Full(query) => {
                     let rn_neighbor =
-                        unsafe { BqNode::read(index, neighbor_index_pointer, &mut lsr.stats) };
+                        unsafe { BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
                     let node_neighbor = rn_neighbor.get_archived_node();
                     let heap_pointer_neighbor =
                         node_neighbor.heap_item_pointer.deserialize_item_pointer();
@@ -538,7 +534,7 @@ impl<'a> Storage for BqStorage<'a> {
                         )
                     }
                 }
-                SearchDistanceMeasure::Bq(table) => {
+                BqSearchDistanceMeasure::Bq(table) => {
                     if let GraphNeighborStore::Builder(_) = gns {
                         assert!(
                             false,
@@ -546,7 +542,7 @@ impl<'a> Storage for BqStorage<'a> {
                         )
                     }
                     let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                    SearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
+                    BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
                 }
             };
             let lsn = ListSearchNeighbor::new(
@@ -559,14 +555,9 @@ impl<'a> Storage for BqStorage<'a> {
         }
     }
 
-    fn return_lsn(
-        &self,
-        index: &PgRelation,
-        lsn: &ListSearchNeighbor,
-        stats: &mut GreedySearchStats,
-    ) -> HeapPointer {
+    fn return_lsn(&self, lsn: &ListSearchNeighbor, stats: &mut GreedySearchStats) -> HeapPointer {
         let lsn_index_pointer = lsn.index_pointer;
-        let rn = unsafe { BqNode::read(index, lsn_index_pointer, stats) };
+        let rn = unsafe { BqNode::read(self.index, lsn_index_pointer, stats) };
         let node = rn.get_archived_node();
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         heap_pointer
@@ -574,7 +565,6 @@ impl<'a> Storage for BqStorage<'a> {
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
-        index: &PgRelation,
         meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
@@ -588,9 +578,9 @@ impl<'a> Storage for BqStorage<'a> {
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
-        cache.preload(index, iter, self, stats);
+        cache.preload(iter, self, stats);
 
-        let node = unsafe { BqNode::modify(index, index_pointer, stats) };
+        let node = unsafe { BqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
         node.commit();
@@ -604,11 +594,10 @@ impl<'a> Storage for BqStorage<'a> {
 impl<'a> StorageFullDistanceFromHeap for BqStorage<'a> {
     unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead>(
         &self,
-        index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> TableSlot {
-        let rn = unsafe { BqNode::read(index, index_pointer, stats) };
+        let rn = unsafe { BqNode::read(self.index, index_pointer, stats) };
         let node = rn.get_archived_node();
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
 

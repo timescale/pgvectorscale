@@ -42,11 +42,9 @@ impl BuilderNeighborCache {
         }
     }
 
-    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
+    pub fn get_neighbors_with_full_vector_distances(
         &self,
-        _index: &PgRelation,
         neighbors_of: ItemPointer,
-        _storage: &S,
         result: &mut Vec<NeighborWithDistance>,
     ) -> bool {
         let neighbors = self.neighbor_map.get(&neighbors_of);
@@ -85,7 +83,6 @@ impl GraphNeighborStore {
         T: StatsNodeRead + StatsDistanceComparison,
     >(
         &self,
-        index: &PgRelation,
         neighbors_of: ItemPointer,
         storage: &S,
         result: &mut Vec<NeighborWithDistance>,
@@ -93,11 +90,10 @@ impl GraphNeighborStore {
     ) -> bool {
         match self {
             GraphNeighborStore::Builder(b) => {
-                b.get_neighbors_with_full_vector_distances(index, neighbors_of, storage, result)
+                b.get_neighbors_with_full_vector_distances(neighbors_of, result)
             }
             GraphNeighborStore::Disk => unsafe {
                 storage.get_neighbors_with_full_vector_distances_from_disk(
-                    index,
                     neighbors_of,
                     result,
                     stats,
@@ -109,7 +105,6 @@ impl GraphNeighborStore {
     pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(
         &mut self,
         storage: &S,
-        index: &PgRelation,
         meta_page: &MetaPage,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
@@ -118,7 +113,6 @@ impl GraphNeighborStore {
         match self {
             GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, new_neighbors),
             GraphNeighborStore::Disk => storage.set_neighbors_on_disk(
-                index,
                 meta_page,
                 neighbors_of,
                 new_neighbors.as_slice(),
