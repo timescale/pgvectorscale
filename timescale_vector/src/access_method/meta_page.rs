@@ -70,7 +70,7 @@ impl MetaPage {
         } else if self.use_bq {
             StorageType::BQ
         } else {
-            StorageType::None
+            StorageType::Plain
         }
     }
 

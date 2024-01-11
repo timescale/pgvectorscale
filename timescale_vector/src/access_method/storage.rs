@@ -131,5 +131,5 @@ pub trait StorageFullDistanceFromHeap {
 pub enum StorageType {
     BQ,
     PQ,
-    None,
+    Plain,
 }

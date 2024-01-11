@@ -17,10 +17,12 @@ use super::graph_neighbor_store::BuilderNeighborCache;
 
 use super::meta_page::MetaPage;
 
+use super::plain_storage::PlainStorage;
 use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
-    BQ(&'d mut BqStorage<'c>, &'e mut BuildState<'a, 'b>),
+    BQ(&'a mut BqStorage<'b>, &'c mut BuildState<'d, 'e>),
+    Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
 }
 
 struct BuildState<'a, 'b> {
@@ -121,7 +123,17 @@ pub unsafe extern "C" fn aminsert(
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();
     match &mut storage {
-        StorageType::None => {}
+        StorageType::Plain => {
+            let plain = PlainStorage::load_for_insert(&index_relation);
+            insert_storage(
+                &plain,
+                &index_relation,
+                vec,
+                heap_pointer,
+                &mut meta_page,
+                &mut stats,
+            );
+        }
         StorageType::PQ => {
             //pq.load(&index_relation, &meta_page);
             //let _stats = insert_storage(&pq, &index_relation, vector, heap_pointer, &mut meta_page);
@@ -193,8 +205,24 @@ fn do_heap_scan<'a>(
         &mut mp2,
     );
     match storage {
-        StorageType::None => {
-            pgrx::error!("not implemented");
+        StorageType::Plain => {
+            let mut plain = PlainStorage::new_for_build(index_relation);
+            plain.start_training(&meta_page);
+            let page_type = plain.page_type();
+            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
+
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback),
+                    &mut state,
+                );
+            }
+
+            do_heap_scan_with_state(&mut plain, &mut bs)
         }
         StorageType::PQ => {
             //pq.start_training(&meta_page);
@@ -311,6 +339,9 @@ unsafe extern "C" fn build_callback(
             StorageBuildState::BQ(bq, state) => {
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
             }
+            StorageBuildState::Plain(plain, state) => {
+                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
+            }
         }
     }
     //todo: what do we do with nulls?
@@ -374,7 +405,178 @@ fn build_callback_internal<S: Storage>(
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 pub mod tests {
+    use std::collections::HashSet;
+
     use pgrx::*;
+
+    use crate::util::ItemPointer;
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_index_creation_and_accuracy_scaffold(
+        index_options: &str,
+    ) -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_data (
+                embedding vector (1536)
+            );
+
+            select setseed(0.5);
+           -- generate 300 vectors
+            INSERT INTO test_data (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 300) i
+                GROUP BY
+                    i % 300) g;
+
+            CREATE INDEX idx_tsv_bq ON test_data USING tsv (embedding) WITH ({index_options});
+
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            -- test insert 2 vectors
+            INSERT INTO test_data (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 2) i
+                GROUP BY
+                    i % 2) g;
+
+
+            EXPLAIN ANALYZE
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));
+
+            -- test insert 10 vectors to search for that aren't random
+            INSERT INTO test_data (embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    ('[' || array_to_string(array_agg(1.0), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * 10) i
+                GROUP BY
+                    i % 10) g;
+
+            ",
+        ))?;
+
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+FROM generate_series(1, 1536)"
+        ))?;
+
+        let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET tsv.query_search_list_size = 25;
+        WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+
+        /*let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        EXPLAIN (format json) WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+        warning!("explain: {}", explain.unwrap().0);
+        assert!(false);*/
+
+        let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 1;
+        SET enable_indexscan = 0;
+        WITH cte AS (
+            SELECT
+                ctid
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.into_datum(),
+            )],
+        )?;
+
+        let set: HashSet<_> = without_index
+            .unwrap()
+            .iter()
+            .map(|&ctid| ItemPointer::with_item_pointer_data(ctid))
+            .collect();
+
+        let mut matches = 0;
+        for ctid in with_index.unwrap() {
+            if set.contains(&ItemPointer::with_item_pointer_data(ctid)) {
+                matches += 1;
+            }
+        }
+        assert!(matches > 9, "Low number of matches: {}", matches);
+
+        Ok(())
+    }
 
     #[pg_test]
     unsafe fn test_index_creation() -> spi::Result<()> {

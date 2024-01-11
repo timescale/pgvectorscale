@@ -4,7 +4,7 @@ use pgrx::{
 };
 
 use crate::{
-    access_method::{bq::BqStorage, meta_page::MetaPage},
+    access_method::{bq::BqStorage, meta_page::MetaPage, plain_storage::PlainStorage},
     util::{
         page::{PageType, WritablePage},
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
@@ -52,8 +52,14 @@ pub extern "C" fn ambulkdelete(
         StorageType::PQ => {
             unimplemented!();
         }
-        StorageType::None => {
-            unimplemented!();
+        StorageType::Plain => {
+            bulk_delete_for_storage::<PlainStorage>(
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
         }
     }
     results

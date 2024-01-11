@@ -9,6 +9,8 @@ mod meta_page;
 mod model;
 pub mod options;
 pub mod pg_vector;
+mod plain_node;
+mod plain_storage;
 mod scan;
 pub mod stats;
 mod storage;

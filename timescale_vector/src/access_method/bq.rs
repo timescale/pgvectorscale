@@ -727,8 +727,7 @@ impl ArchivedBqNode {
 
 impl ArchivedData for ArchivedBqNode {
     fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedBqNode> {
-        let pinned_bytes = Pin::new(data);
-        unsafe { rkyv::archived_root_mut::<BqNode>(pinned_bytes) }
+        ArchivedBqNode::with_data(data)
     }
 
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
@@ -756,213 +755,48 @@ impl ArchivedData for ArchivedBqNode {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use std::collections::HashSet;
-
     use pgrx::*;
 
-    use crate::util::ItemPointer;
-
-    unsafe fn test_bq_index_creation_scaffold(num_neighbors: usize) -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test_bq (
-                embedding vector (1536)
-            );
-
-            select setseed(0.5);
-           -- generate 300 vectors
-            INSERT INTO test_bq (embedding)
-            SELECT
-                *
-            FROM (
-                SELECT
-                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                FROM
-                    generate_series(1, 1536 * 300) i
-                GROUP BY
-                    i % 300) g;
-
-            CREATE INDEX idx_tsv_bq ON test_bq USING tsv (embedding) WITH (num_neighbors = {num_neighbors}, search_list_size = 125, max_alpha = 1.0, use_bq = TRUE);
-
-            ;
-
-            SET enable_seqscan = 0;
-            -- perform index scans on the vectors
-            SELECT
-                *
-            FROM
-                test_bq
-            ORDER BY
-                embedding <=> (
-                    SELECT
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
-
-            -- test insert 2 vectors
-            INSERT INTO test_bq (embedding)
-            SELECT
-                *
-            FROM (
-                SELECT
-                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                FROM
-                    generate_series(1, 1536 * 2) i
-                GROUP BY
-                    i % 2) g;
-
-
-            EXPLAIN ANALYZE
-            SELECT
-                *
-            FROM
-                test_bq
-            ORDER BY
-                embedding <=> (
-                    SELECT
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
-
-            -- test insert 10 vectors to search for that aren't random
-            INSERT INTO test_bq (embedding)
-            SELECT
-                *
-            FROM (
-                SELECT
-                    ('[' || array_to_string(array_agg(1.0), ',', '0') || ']')::vector AS embedding
-                FROM
-                    generate_series(1, 1536 * 10) i
-                GROUP BY
-                    i % 10) g;
-
-            ",
-        ))?;
-
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-FROM generate_series(1, 1536)"
-        ))?;
-
-        let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
-            &format!(
-                "
-        SET enable_seqscan = 0;
-        SET enable_indexscan = 1;
-        SET tsv.query_search_list_size = 25;
-        WITH cte AS (
-            SELECT
-                ctid
-            FROM
-                test_bq
-            ORDER BY
-                embedding <=> $1::vector
-            LIMIT 10
-        )
-        SELECT array_agg(ctid) from cte;"
-            ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
+    #[pg_test]
+    unsafe fn test_bq_storage_index_creation() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "num_neighbors=38, USE_BQ = TRUE",
         )?;
-
-        /*let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
-            &format!(
-                "
-        SET enable_seqscan = 0;
-        SET enable_indexscan = 1;
-        EXPLAIN (format json) WITH cte AS (
-            SELECT
-                ctid
-            FROM
-                test_bq
-            ORDER BY
-                embedding <=> $1::vector
-            LIMIT 10
-        )
-        SELECT array_agg(ctid) from cte;"
-            ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
-        )?;
-        warning!("explain: {}", explain.unwrap().0);
-        assert!(false);*/
-
-        let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
-            &format!(
-                "
-        SET enable_seqscan = 1;
-        SET enable_indexscan = 0;
-        WITH cte AS (
-            SELECT
-                ctid
-            FROM
-                test_bq
-            ORDER BY
-                embedding <=> $1::vector
-            LIMIT 10
-        )
-        SELECT array_agg(ctid) from cte;"
-            ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.into_datum(),
-            )],
-        )?;
-
-        let set: HashSet<_> = without_index
-            .unwrap()
-            .iter()
-            .map(|&ctid| ItemPointer::with_item_pointer_data(ctid))
-            .collect();
-
-        let mut matches = 0;
-        for ctid in with_index.unwrap() {
-            if set.contains(&ItemPointer::with_item_pointer_data(ctid)) {
-                matches += 1;
-            }
-        }
-        assert!(matches > 9, "Low number of matches: {}", matches);
-
         Ok(())
     }
 
     #[pg_test]
-    unsafe fn test_bq_index_creation() -> spi::Result<()> {
-        test_bq_index_creation_scaffold(38)?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_index_creation_few_neighbors() -> spi::Result<()> {
+    unsafe fn test_bq_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
-        test_bq_index_creation_scaffold(10)?;
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "num_neighbors=10, USE_BQ = TRUE",
+        )?;
         Ok(())
     }
 
     #[test]
-    fn test_bq_index_delete_vacuum_plain() {
+    fn test_bq_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
             "num_neighbors = 10, use_bq = TRUE",
         );
     }
 
     #[test]
-    fn test_bq_index_delete_vacuum_full() {
+    fn test_bq_storage_delete_vacuum_full() {
         crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
             "num_neighbors = 38, use_bq = TRUE",
         );
     }
 
     #[pg_test]
-    unsafe fn test_bq_index_empty_table_insert() -> spi::Result<()> {
+    unsafe fn test_bq_storage_empty_table_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_empty_table_insert_scaffold(
             "num_neighbors=38, use_bq = TRUE",
         )
     }
 
     #[pg_test]
-    unsafe fn test_bq_index_insert_empty_insert() -> spi::Result<()> {
+    unsafe fn test_bq_storage_insert_empty_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_insert_empty_insert_scaffold(
             "num_neighbors=38, use_bq = TRUE",
         )

@@ -11,6 +11,7 @@ use crate::{
 use super::{
     bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure},
     graph::{Graph, ListSearchResult},
+    plain_storage::{PlainDistanceMeasure, PlainStorage},
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -19,6 +20,7 @@ use super::{
 using lifetimes here. Everything should be owned */
 enum StorageState {
     BQ(BqQuantizer, TSVResponseIterator<BqSearchDistanceMeasure>),
+    Plain(TSVResponseIterator<PlainDistanceMeasure>),
 }
 
 /* no lifetime usage here. */
@@ -38,8 +40,12 @@ impl TSVScanState {
         let storage = meta_page.get_storage_type();
 
         let store_type = match storage {
-            StorageType::None => {
-                pgrx::error!("not implemented");
+            StorageType::Plain => {
+                let mut stats = QuantizerStats::new();
+                let bq = PlainStorage::load_for_search(index);
+                let it =
+                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
+                StorageState::Plain(it)
             }
             StorageType::PQ => {
                 //pq.load(index, &meta_page);
@@ -223,6 +229,10 @@ pub extern "C" fn amgettuple(
             let bq = BqStorage::load_for_search(&indexrel, quantizer);
             get_tuple(&bq, &indexrel, iter, scan)
         }
+        StorageState::Plain(iter) => {
+            let bq = PlainStorage::load_for_search(&indexrel);
+            get_tuple(&bq, &indexrel, iter, scan)
+        }
     }
 }
 
@@ -258,6 +268,7 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
             StorageState::BQ(_bq, iter) => end_scan::<BqStorage>(iter),
+            StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
         }
     }
 }
