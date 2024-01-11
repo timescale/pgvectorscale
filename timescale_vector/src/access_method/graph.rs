@@ -3,7 +3,7 @@ use std::{cmp::Ordering, collections::HashSet};
 use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
-use crate::access_method::storage::NodeDistanceMeasure;
+use crate::access_method::storage::NodeFullDistanceMeasure;
 use crate::util::ports::slot_getattr;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 

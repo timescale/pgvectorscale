@@ -10,6 +10,7 @@ use crate::{
 
 use super::{
     graph::{Graph, ListSearchResult},
+    stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
 
@@ -41,8 +42,10 @@ impl<'a, 'b> TSVScanState<'a, 'b> {
                 pgrx::error!("not implemented");
             }
             StorageType::BQ => {
-                let bq = BqStorage::load_for_search(index, &meta_page);
-                let it = TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page);
+                let mut stats = QuantizerStats::new();
+                let bq = BqStorage::load_for_search(index, &meta_page, &mut stats);
+                let it =
+                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::BQ(bq, it)
             }
         };
@@ -66,11 +69,13 @@ impl<'a, S: Storage> TSVResponseIterator<'a, S> {
         query: PgVector,
         search_list_size: usize,
         _meta_page: MetaPage,
+        stats: QuantizerStats,
     ) -> Self {
         let mut meta_page = MetaPage::read(&index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
-        let lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
+        let mut lsr = graph.greedy_search_streaming_init(&index, query, search_list_size, storage);
+        lsr.stats.set_quantizer_stats(stats);
 
         Self {
             search_list_size,

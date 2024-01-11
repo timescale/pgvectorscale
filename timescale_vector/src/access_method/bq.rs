@@ -3,10 +3,8 @@ use super::{
     graph::{Graph, ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
-    stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, WriteStats,
-    },
-    storage::{ArchivedData, NodeDistanceMeasure, Storage},
+    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats},
+    storage::{ArchivedData, NodeFullDistanceMeasure, Storage},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
 
@@ -28,7 +26,7 @@ use crate::util::WritableBuffer;
 type BqVectorElement = u8;
 const BITS_STORE_TYPE_SIZE: usize = 8;
 
-#[derive(Archive, Deserialize, Serialize)]
+#[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 #[repr(C)]
 pub struct BqMeans {
@@ -37,48 +35,31 @@ pub struct BqMeans {
 }
 
 impl BqMeans {
-    pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
-        let bytes = rkyv::to_bytes::<_, 8192>(self).unwrap();
-        tape.write(&bytes)
+    pub unsafe fn load<S: StatsNodeRead>(
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> (u64, Vec<f32>) {
+        let rpq = BqMeans::read(index, index_pointer, stats);
+        let rpn = rpq.get_archived_node();
+        (rpn.count, rpn.means.as_slice().to_vec())
     }
-    pub unsafe fn read<'a>(
-        index: &'a PgRelation,
-        index_pointer: &ItemPointer,
-    ) -> ReadableBqMeans<'a> {
-        let rb = index_pointer.read_bytes(index);
-        ReadableBqMeans { _rb: rb }
+
+    pub unsafe fn store<S: StatsNodeWrite>(
+        index: &PgRelation,
+        count: u64,
+        means: &[f32],
+        stats: &mut S,
+    ) -> ItemPointer {
+        let mut tape = Tape::new(index, PageType::BqMeans);
+        let node = BqMeans {
+            count,
+            means: means.to_vec(),
+        };
+        let ptr = node.write(&mut tape, stats);
+        tape.close();
+        ptr
     }
-}
-
-//ReadablePqNode ties an archive node to it's underlying buffer
-pub struct ReadableBqMeans<'a> {
-    _rb: ReadableBuffer<'a>,
-}
-
-impl<'a> ReadableBqMeans<'a> {
-    pub fn get_archived_node(&self) -> &ArchivedBqMeans {
-        // checking the code here is expensive during build, so skip it.
-        // TODO: should we check the data during queries?
-        //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
-        unsafe { rkyv::archived_root::<BqMeans>(self._rb.get_data_slice()) }
-    }
-}
-
-pub unsafe fn read_bq(index: &PgRelation, index_pointer: &IndexPointer) -> (u64, Vec<f32>) {
-    let rpq = BqMeans::read(index, &index_pointer);
-    let rpn = rpq.get_archived_node();
-    (rpn.count, rpn.means.as_slice().to_vec())
-}
-
-pub unsafe fn write_bq(index: &PgRelation, count: u64, means: &[f32]) -> ItemPointer {
-    let mut tape = Tape::new(index, PageType::BqMeans);
-    let node = BqMeans {
-        count,
-        means: means.to_vec(),
-    };
-    let ptr = node.write(&mut tape);
-    tape.close();
-    ptr
 }
 
 pub struct BqQuantizer {
@@ -89,7 +70,7 @@ pub struct BqQuantizer {
 }
 
 impl BqQuantizer {
-    pub fn new() -> BqQuantizer {
+    fn new() -> BqQuantizer {
         Self {
             use_mean: true,
             training: false,
@@ -98,7 +79,7 @@ impl BqQuantizer {
         }
     }
 
-    pub fn load(&mut self, count: u64, mean: Vec<f32>) {
+    fn load(&mut self, count: u64, mean: Vec<f32>) {
         self.count = count;
         self.mean = mean;
     }
@@ -111,7 +92,7 @@ impl BqQuantizer {
         }
     }
 
-    pub fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
+    fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
         if self.use_mean {
             let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
 
@@ -135,7 +116,7 @@ impl BqQuantizer {
         }
     }
 
-    pub fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
         self.training = true;
         if self.use_mean {
             self.count = 0;
@@ -143,7 +124,7 @@ impl BqQuantizer {
         }
     }
 
-    pub fn add_sample(&mut self, sample: &[f32]) {
+    fn add_sample(&mut self, sample: &[f32]) {
         if self.use_mean {
             self.count += 1;
             assert!(self.mean.len() == sample.len());
@@ -155,11 +136,11 @@ impl BqQuantizer {
         }
     }
 
-    pub fn finish_training(&mut self) {
+    fn finish_training(&mut self) {
         self.training = false;
     }
 
-    pub fn vector_for_new_node(
+    fn vector_for_new_node(
         &self,
         meta_page: &super::meta_page::MetaPage,
         full_vector: &[f32],
@@ -184,7 +165,7 @@ impl BqQuantizer {
     }
 }
 
-/// DistanceCalculator encapsulates the code to generate distances between a PQ vector and a query.
+/// DistanceCalculator encapsulates the code to generate distances between a BQ vector and a query.
 pub struct BqDistanceTable {
     quantized_vector: Vec<BqVectorElement>,
 }
@@ -249,12 +230,12 @@ impl SearchDistanceMeasure {
     }
 }
 
-pub struct FullVectorDistanceState<'a> {
+pub struct HeapFullDistanceMeasure<'a> {
     table_slot: Option<TableSlot>,
     storage: &'a BqStorage<'a>,
 }
 
-impl<'a> FullVectorDistanceState<'a> {
+impl<'a> HeapFullDistanceMeasure<'a> {
     pub fn with_table_slot(slot: TableSlot, storage: &'a BqStorage<'a>) -> Self {
         Self {
             table_slot: Some(slot),
@@ -263,7 +244,7 @@ impl<'a> FullVectorDistanceState<'a> {
     }
 }
 
-impl<'a> NodeDistanceMeasure for FullVectorDistanceState<'a> {
+impl<'a> NodeFullDistanceMeasure for HeapFullDistanceMeasure<'a> {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index: &PgRelation,
@@ -351,9 +332,10 @@ impl<'a> BqStorage<'a> {
         }
     }
 
-    fn load_quantizer(
+    fn load_quantizer<S: StatsNodeRead>(
         index_relation: &PgRelation,
         meta_page: &super::meta_page::MetaPage,
+        stats: &mut S,
     ) -> BqQuantizer {
         let mut quantizer = BqQuantizer::new();
         if quantizer.use_mean {
@@ -361,33 +343,35 @@ impl<'a> BqStorage<'a> {
                 pgrx::error!("No BQ pointer found in meta page");
             }
             let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-            let (count, mean) = unsafe { read_bq(&index_relation, &pq_item_pointer) };
+            let (count, mean) = unsafe { BqMeans::load(&index_relation, pq_item_pointer, stats) };
             quantizer.load(count, mean);
         }
         quantizer
     }
 
-    pub fn load_for_insert(
+    pub fn load_for_insert<S: StatsNodeRead>(
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
         index_relation: &PgRelation,
         meta_page: &super::meta_page::MetaPage,
+        stats: &mut S,
     ) -> BqStorage<'a> {
         Self {
             distance_fn: default_distance,
-            quantizer: Self::load_quantizer(index_relation, meta_page),
+            quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: Some(heap_rel),
             heap_attr: Some(heap_attr),
         }
     }
 
-    pub fn load_for_search(
+    pub fn load_for_search<S: StatsNodeRead>(
         index_relation: &PgRelation,
         meta_page: &super::meta_page::MetaPage,
+        stats: &mut S,
     ) -> BqStorage<'a> {
         Self {
             distance_fn: default_distance,
-            quantizer: Self::load_quantizer(index_relation, meta_page),
+            quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: None,
             heap_attr: None,
         }
@@ -410,16 +394,16 @@ impl<'a> BqStorage<'a> {
             .chain(once(index_pointer));
         cache.preload(index, iter, self, stats);
 
-        if self.quantizer.vector_needs_update_after_training() {
-            let node = unsafe { BqNode::modify(index, index_pointer, stats) };
-            let mut archived = node.get_archived_node();
-            archived.as_mut().set_neighbors(neighbors, &meta, cache);
+        let node = unsafe { BqNode::modify(index, index_pointer, stats) };
+        let mut archived = node.get_archived_node();
+        archived.as_mut().set_neighbors(neighbors, &meta, cache);
 
+        if self.quantizer.vector_needs_update_after_training() {
             let bq_vector = cache.must_get(index_pointer);
             archived.as_mut().set_bq_vector(bq_vector);
-
-            node.commit();
         }
+
+        node.commit();
     }
 
     fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
@@ -448,10 +432,11 @@ impl<'a> BqStorage<'a> {
         self.quantizer.quantize(slice.to_slice())
     }
 
-    fn write_metadata(&self, index: &PgRelation) {
+    fn write_metadata<S: StatsNodeWrite>(&self, index: &PgRelation, stats: &mut S) {
         if self.quantizer.use_mean {
-            let index_pointer =
-                unsafe { write_bq(&index, self.quantizer.count, &self.quantizer.mean) };
+            let index_pointer = unsafe {
+                BqMeans::store(&index, self.quantizer.count, &self.quantizer.mean, stats)
+            };
             super::meta_page::MetaPage::update_pq_pointer(&index, index_pointer);
         }
     }
@@ -470,26 +455,27 @@ impl<'a> BqStorage<'a> {
 
 impl<'a> Storage for BqStorage<'a> {
     type QueryDistanceMeasure = SearchDistanceMeasure;
-    type NodeDistanceMeasure<'b> = FullVectorDistanceState<'b> where Self: 'b;
+    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
 
     fn page_type(&self) -> PageType {
         PageType::BqNode
     }
 
-    fn create_node(
+    fn create_node<S: StatsNodeWrite>(
         &self,
         _index_relation: &PgRelation,
         full_vector: &[f32],
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        stats: &mut S,
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
         let node = BqNode::new(heap_pointer, &meta_page, bq_vector.as_slice());
 
-        let index_pointer: IndexPointer = node.write(tape);
+        let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
 
@@ -540,7 +526,7 @@ impl<'a> Storage for BqStorage<'a> {
                     );
                 }
 
-                self.write_metadata(index);
+                self.write_metadata(index, stats);
             }
         }
     }
@@ -550,14 +536,14 @@ impl<'a> Storage for BqStorage<'a> {
         index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> FullVectorDistanceState<'b> {
+    ) -> HeapFullDistanceMeasure<'b> {
         let heap_pointer = self.get_heap_pointer(index, index_pointer, stats);
         let slot = TableSlot::new(
             self.heap_rel.unwrap(),
             heap_pointer,
             self.heap_attr.unwrap(),
         );
-        FullVectorDistanceState::with_table_slot(slot, self)
+        HeapFullDistanceMeasure::with_table_slot(slot, self)
     }
 
     fn get_search_distance_measure(

@@ -79,8 +79,9 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
                 #writeable_name { wb: wb }
             }
 
-            pub fn write(&self, tape: &mut Tape) -> ItemPointer {
+            pub fn write<S: StatsNodeWrite>(&self, tape: &mut Tape, stats: &mut S) -> ItemPointer {
                 let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
+                stats.record_write();
                 unsafe { tape.write(&bytes) }
             }
         }

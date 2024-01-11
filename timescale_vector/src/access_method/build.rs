@@ -133,6 +133,7 @@ pub unsafe extern "C" fn aminsert(
                 get_attribute_number(index_info),
                 &index_relation,
                 &meta_page,
+                &mut stats.quantizer_stats,
             );
             insert_storage(
                 &bq,
@@ -162,6 +163,7 @@ unsafe fn insert_storage<S: Storage>(
         heap_pointer,
         &meta_page,
         &mut tape,
+        stats,
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
@@ -331,6 +333,7 @@ fn build_callback_internal<S: Storage>(
         heap_pointer,
         &state.meta_page,
         &mut state.tape,
+        &mut state.stats,
     );
 
     state

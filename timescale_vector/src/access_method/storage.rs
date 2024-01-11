@@ -10,10 +10,10 @@ use super::{
     meta_page::MetaPage,
     model::NeighborWithDistance,
     pg_vector::PgVector,
-    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, WriteStats},
+    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats},
 };
 
-pub trait NodeDistanceMeasure {
+pub trait NodeFullDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index: &PgRelation,
@@ -32,20 +32,21 @@ pub trait ArchivedData {
 
 pub trait Storage {
     type QueryDistanceMeasure;
-    type ArchivedType: ArchivedData;
-    type NodeDistanceMeasure<'a>: NodeDistanceMeasure
+    type NodeFullDistanceMeasure<'a>: NodeFullDistanceMeasure
     where
         Self: 'a;
+    type ArchivedType: ArchivedData;
 
     fn page_type(&self) -> PageType;
 
-    fn create_node(
+    fn create_node<S: StatsNodeWrite>(
         &self,
         _index_relation: &PgRelation,
         full_vector: &[f32],
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        stats: &mut S,
     ) -> ItemPointer;
 
     fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
@@ -57,7 +58,7 @@ pub trait Storage {
         index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> Self::NodeDistanceMeasure<'a>;
+    ) -> Self::NodeFullDistanceMeasure<'a>;
 
     fn get_search_distance_measure(
         &self,

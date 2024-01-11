@@ -8,6 +8,10 @@ pub trait StatsNodeModify {
     fn record_modify(&mut self);
 }
 
+pub trait StatsNodeWrite {
+    fn record_write(&mut self);
+}
+
 pub trait StatsDistanceComparison {
     fn record_full_distance_comparison(&mut self);
     fn record_quantized_distance_comparison(&mut self);
@@ -64,6 +68,7 @@ pub struct GreedySearchStats {
     full_distance_comparisons: usize,
     node_reads: usize,
     quantized_distance_comparisons: usize,
+    quantizer_stats: Option<QuantizerStats>,
 }
 
 impl GreedySearchStats {
@@ -73,7 +78,12 @@ impl GreedySearchStats {
             full_distance_comparisons: 0,
             node_reads: 0,
             quantized_distance_comparisons: 0,
+            quantizer_stats: None,
         }
+    }
+
+    pub fn set_quantizer_stats(&mut self, quantizer_stats: QuantizerStats) {
+        self.quantizer_stats = Some(quantizer_stats);
     }
 
     pub fn get_calls(&self) -> usize {
@@ -118,11 +128,39 @@ impl StatsDistanceComparison for GreedySearchStats {
 }
 
 #[derive(Debug)]
+pub struct QuantizerStats {
+    pub node_reads: usize,
+    pub node_writes: usize,
+}
+
+impl QuantizerStats {
+    pub fn new() -> Self {
+        QuantizerStats {
+            node_reads: 0,
+            node_writes: 0,
+        }
+    }
+}
+
+impl StatsNodeRead for QuantizerStats {
+    fn record_read(&mut self) {
+        self.node_reads += 1;
+    }
+}
+
+impl StatsNodeWrite for QuantizerStats {
+    fn record_write(&mut self) {
+        self.node_writes += 1;
+    }
+}
+#[derive(Debug)]
 pub struct InsertStats {
     pub prune_neighbor_stats: PruneNeighborStats,
     pub greedy_search_stats: GreedySearchStats,
+    pub quantizer_stats: QuantizerStats,
     pub node_reads: usize,
     pub node_modify: usize,
+    pub node_writes: usize,
 }
 
 impl InsertStats {
@@ -130,8 +168,10 @@ impl InsertStats {
         return InsertStats {
             prune_neighbor_stats: PruneNeighborStats::new(),
             greedy_search_stats: GreedySearchStats::new(),
+            quantizer_stats: QuantizerStats::new(),
             node_reads: 0,
             node_modify: 0,
+            node_writes: 0,
         };
     }
 }
@@ -148,11 +188,18 @@ impl StatsNodeModify for InsertStats {
     }
 }
 
+impl StatsNodeWrite for InsertStats {
+    fn record_write(&mut self) {
+        self.node_writes += 1;
+    }
+}
+
 pub struct WriteStats {
     pub started: Instant,
     pub num_nodes: usize,
     pub nodes_read: usize,
     pub nodes_modified: usize,
+    pub nodes_written: usize,
     pub prune_stats: PruneNeighborStats,
     pub num_neighbors: usize,
 }
@@ -166,6 +213,7 @@ impl WriteStats {
             num_neighbors: 0,
             nodes_read: 0,
             nodes_modified: 0,
+            nodes_written: 0,
         }
     }
 }
@@ -179,5 +227,11 @@ impl StatsNodeRead for WriteStats {
 impl StatsNodeModify for WriteStats {
     fn record_modify(&mut self) {
         self.nodes_modified += 1;
+    }
+}
+
+impl StatsNodeWrite for WriteStats {
+    fn record_write(&mut self) {
+        self.nodes_written += 1;
     }
 }
