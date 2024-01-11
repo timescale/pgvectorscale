@@ -43,7 +43,6 @@ pub trait Storage {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        _index_relation: &PgRelation,
         full_vector: &[f32],
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
@@ -53,7 +52,16 @@ pub trait Storage {
 
     fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, index: &PgRelation, graph: &Graph, stats: &mut WriteStats);
+    fn finish_training(&mut self, index: &PgRelation, stats: &mut WriteStats);
+
+    fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
+        &mut self,
+        index: &PgRelation,
+        meta: &MetaPage,
+        index_pointer: IndexPointer,
+        neighbors: &Vec<NeighborWithDistance>,
+        stats: &mut S,
+    );
 
     unsafe fn get_full_vector_distance_state<'a, S: StatsNodeRead>(
         &'a self,
@@ -118,10 +126,16 @@ pub trait Storage {
 }
 
 pub trait StorageFullDistanceFromHeap {
-    unsafe fn get_heap_table_slot<T: StatsNodeRead + StatsDistanceComparison>(
+    unsafe fn get_heap_table_slot_from_index_pointer<T: StatsNodeRead>(
         &self,
         index: &PgRelation,
         index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> TableSlot;
+
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsNodeRead>(
+        &self,
+        heap_pointer: HeapPointer,
         stats: &mut T,
     ) -> TableSlot;
 }

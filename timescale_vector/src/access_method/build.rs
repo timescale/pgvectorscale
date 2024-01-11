@@ -158,7 +158,6 @@ unsafe fn insert_storage<S: Storage>(
 ) {
     let mut tape = Tape::new(&index_relation, storage.page_type());
     let index_pointer = storage.create_node(
-        &&index_relation,
         vector.to_slice(),
         heap_pointer,
         &meta_page,
@@ -230,7 +229,41 @@ fn do_heap_scan_with_state<'a, S: Storage>(
 ) -> usize {
     // we train the quantizer and add prepare to write quantized values to the nodes.\
     let mut write_stats = WriteStats::new();
-    storage.finish_training(index_relation, &state.graph, &mut write_stats);
+    storage.finish_training(index_relation, &mut write_stats);
+
+    match state.graph.get_neighbor_store() {
+        GraphNeighborStore::Builder(builder) => {
+            for (&index_pointer, neighbors) in builder.iter() {
+                write_stats.num_nodes += 1;
+                let prune_neighbors;
+                let neighbors =
+                    if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
+                        //OPT: get rid of this clone
+                        prune_neighbors = state.graph.prune_neighbors(
+                            index_relation,
+                            neighbors.clone(),
+                            storage,
+                            &mut write_stats.prune_stats,
+                        );
+                        &prune_neighbors
+                    } else {
+                        neighbors
+                    };
+                write_stats.num_neighbors += neighbors.len();
+
+                storage.finalize_node_at_end_of_build(
+                    index_relation,
+                    &state.meta_page,
+                    index_pointer,
+                    neighbors,
+                    &mut write_stats,
+                );
+            }
+        }
+        GraphNeighborStore::Disk => {
+            panic!("Should not be using the disk neighbor store during build");
+        }
+    }
 
     info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
@@ -328,7 +361,6 @@ fn build_callback_internal<S: Storage>(
     storage.add_sample(vector.to_slice());
 
     let index_pointer = storage.create_node(
-        &index,
         vector.to_slice(),
         heap_pointer,
         &state.meta_page,
