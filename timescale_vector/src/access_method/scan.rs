@@ -247,11 +247,11 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 
 fn end_scan<S: Storage>(iter: &mut TSVResponseIterator<S>) {
     debug1!(
-        "Query stats - node reads:{}, calls: {}, distance comparisons: {}, pq distance comparisons: {}",
-        iter.lsr.stats.node_reads,
-        iter.lsr.stats.calls,
-        iter.lsr.stats.distance_comparisons,
-        iter.lsr.stats.pq_distance_comparisons,
+        "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}",
+        iter.lsr.stats.get_node_reads(),
+        iter.lsr.stats.get_calls(),
+        iter.lsr.stats.get_total_distance_comparisons(),
+        iter.lsr.stats.get_quantized_distance_comparisons(),
     );
 }
 

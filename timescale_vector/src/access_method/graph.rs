@@ -10,6 +10,7 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 use super::graph_neighbor_store::GraphNeighborStore;
 
 use super::pg_vector::PgVector;
+use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats};
 use super::storage::Storage;
 use super::{meta_page::MetaPage, model::NeighborWithDistance};
 
@@ -90,7 +91,7 @@ impl<S: Storage> ListSearchResult<S> {
             stats: GreedySearchStats::new(),
             sdm: Some(sdm),
         };
-        res.stats.calls += 1;
+        res.stats.record_call();
         for index_pointer in init_ids {
             let lsn = storage.create_lsn_for_init_id(&mut res, index, index_pointer);
             res.insert_neighbor(lsn);
@@ -186,7 +187,7 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         neighbors_of: ItemPointer,
         additional_neighbors: Vec<NeighborWithDistance>,
-        prune_stats: &mut PruneNeighborStats,
+        stats: &mut PruneNeighborStats,
     ) -> (bool, Vec<NeighborWithDistance>) {
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
             (self.neighbor_store.max_neighbors(self.get_meta_page()) as usize)
@@ -198,6 +199,7 @@ impl<'a> Graph<'a> {
                 neighbors_of,
                 storage,
                 &mut candidates,
+                stats,
             );
 
         let mut hash: HashSet<ItemPointer> = candidates
@@ -221,8 +223,7 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let (new_list, stats) = self.prune_neighbors(index, candidates, storage);
-                prune_stats.combine(stats);
+                let new_list = self.prune_neighbors(index, candidates, storage, stats);
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -235,6 +236,7 @@ impl<'a> Graph<'a> {
             self.meta_page,
             neighbors_of,
             new_neighbors.clone(),
+            stats,
         );
         (pruned, new_neighbors)
     }
@@ -353,8 +355,8 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
-    ) -> (Vec<NeighborWithDistance>, PruneNeighborStats) {
-        let mut stats = PruneNeighborStats::new();
+        stats: &mut PruneNeighborStats,
+    ) -> Vec<NeighborWithDistance> {
         stats.calls += 1;
         //TODO make configurable?
         let max_alpha = self.get_meta_page().get_max_alpha();
@@ -379,7 +381,7 @@ impl<'a> Graph<'a> {
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
                 if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
-                    return (results, stats);
+                    return results;
                 }
                 if max_factors[i] > alpha {
                     continue;
@@ -397,6 +399,7 @@ impl<'a> Graph<'a> {
                     storage.get_full_vector_distance_state(
                         index,
                         existing_neighbor.get_index_pointer_to_neighbor(),
+                        stats,
                     )
                 };
 
@@ -409,11 +412,12 @@ impl<'a> Graph<'a> {
 
                     //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {
-                        dist_state
-                            .get_distance(index, candidate_neighbor.get_index_pointer_to_neighbor())
+                        dist_state.get_distance(
+                            index,
+                            candidate_neighbor.get_index_pointer_to_neighbor(),
+                            stats,
+                        )
                     };
-                    stats.node_reads += 2;
-                    stats.distance_comparisons += 1;
                     let mut distance_between_candidate_and_point =
                         candidate_neighbor.get_distance();
 
@@ -459,7 +463,7 @@ impl<'a> Graph<'a> {
             alpha = alpha * 1.2
         }
         stats.num_neighbors_after_prune += results.len();
-        (results, stats)
+        results
     }
 
     pub fn insert<S: Storage>(
@@ -468,10 +472,8 @@ impl<'a> Graph<'a> {
         index_pointer: IndexPointer,
         vec: PgVector,
         storage: &S,
-    ) -> InsertStats {
-        let mut prune_neighbor_stats: PruneNeighborStats = PruneNeighborStats::new();
-        let mut greedy_search_stats = GreedySearchStats::new();
-
+        stats: &mut InsertStats,
+    ) {
         if self.meta_page.get_init_ids().is_none() {
             //TODO probably better set off of centeroids
             MetaPage::update_init_ids(index, vec![index_pointer]);
@@ -485,25 +487,21 @@ impl<'a> Graph<'a> {
                 Vec::<NeighborWithDistance>::with_capacity(
                     self.neighbor_store.max_neighbors(self.meta_page) as _,
                 ),
+                stats,
             );
-            return InsertStats {
-                prune_neighbor_stats: prune_neighbor_stats,
-                greedy_search_stats: greedy_search_stats,
-            };
         }
 
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
         let (l, v) = self.greedy_search_for_build(index, vec, meta_page, storage);
-        greedy_search_stats.combine(l.stats);
 
         let (_, neighbor_list) = self.add_neighbors(
             storage,
             index,
             index_pointer,
             v.into_iter().collect(),
-            &mut prune_neighbor_stats,
+            &mut stats.prune_neighbor_stats,
         );
 
         //update back pointers
@@ -515,17 +513,12 @@ impl<'a> Graph<'a> {
                 index_pointer,
                 neighbor.get_distance(),
                 storage,
-                &mut prune_neighbor_stats,
+                &mut stats.prune_neighbor_stats,
             );
             if needed_prune {
                 cnt = cnt + 1;
             }
         }
-        //info!("pruned {} neighbors", cnt);
-        return InsertStats {
-            prune_neighbor_stats,
-            greedy_search_stats,
-        };
     }
 
     fn update_back_pointer<S: Storage>(
@@ -540,81 +533,5 @@ impl<'a> Graph<'a> {
         let new = vec![NeighborWithDistance::new(to, distance)];
         let (pruned, _) = self.add_neighbors(storage, index, from, new, prune_stats);
         pruned
-    }
-}
-
-#[derive(Debug)]
-pub struct PruneNeighborStats {
-    pub calls: usize,
-    pub distance_comparisons: usize,
-    pub node_reads: usize,
-    pub num_neighbors_before_prune: usize,
-    pub num_neighbors_after_prune: usize,
-}
-
-impl PruneNeighborStats {
-    pub fn new() -> Self {
-        PruneNeighborStats {
-            calls: 0,
-            distance_comparisons: 0,
-            node_reads: 0,
-            num_neighbors_before_prune: 0,
-            num_neighbors_after_prune: 0,
-        }
-    }
-
-    pub fn combine(&mut self, other: Self) {
-        self.calls += other.calls;
-        self.distance_comparisons += other.distance_comparisons;
-        self.node_reads += other.node_reads;
-        self.num_neighbors_before_prune += other.num_neighbors_before_prune;
-        self.num_neighbors_after_prune += other.num_neighbors_after_prune;
-    }
-}
-
-#[derive(Debug)]
-pub struct GreedySearchStats {
-    pub calls: usize,
-    pub distance_comparisons: usize,
-    pub node_reads: usize,
-    pub pq_distance_comparisons: usize,
-}
-
-impl GreedySearchStats {
-    pub fn new() -> Self {
-        GreedySearchStats {
-            calls: 0,
-            distance_comparisons: 0,
-            node_reads: 0,
-            pq_distance_comparisons: 0,
-        }
-    }
-
-    pub fn combine(&mut self, other: Self) {
-        self.calls += other.calls;
-        self.distance_comparisons += other.distance_comparisons;
-        self.node_reads += other.node_reads;
-        self.pq_distance_comparisons += other.pq_distance_comparisons;
-    }
-}
-
-#[derive(Debug)]
-pub struct InsertStats {
-    pub prune_neighbor_stats: PruneNeighborStats,
-    pub greedy_search_stats: GreedySearchStats,
-}
-
-impl InsertStats {
-    pub fn new() -> Self {
-        return InsertStats {
-            prune_neighbor_stats: PruneNeighborStats::new(),
-            greedy_search_stats: GreedySearchStats::new(),
-        };
-    }
-
-    pub fn combine(&mut self, other: InsertStats) {
-        self.prune_neighbor_stats
-            .combine(other.prune_neighbor_stats);
-        self.greedy_search_stats.combine(other.greedy_search_stats);
     }
 }

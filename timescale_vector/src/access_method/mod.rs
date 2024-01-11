@@ -10,6 +10,7 @@ mod model;
 pub mod options;
 pub mod pg_vector;
 mod scan;
+pub mod stats;
 mod storage;
 mod vacuum;
 

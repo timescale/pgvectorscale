@@ -36,8 +36,9 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl #name {
-            pub unsafe fn read<'a>(index: &'a PgRelation, index_pointer: ItemPointer) -> #readable_name<'a> {
+            pub unsafe fn read<'a, 'b, S: StatsNodeRead>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #readable_name<'a> {
                 let rb = index_pointer.read_bytes(index);
+                stats.record_read();
                 #readable_name { _rb: rb }
             }
         }
@@ -72,8 +73,9 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl #name {
-            pub unsafe fn modify(index: &PgRelation, index_pointer: ItemPointer) -> #writeable_name {
+            pub unsafe fn modify<'a, 'b, S: StatsNodeModify>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #writeable_name<'a> {
                 let wb = index_pointer.modify_bytes(index);
+                stats.record_modify();
                 #writeable_name { wb: wb }
             }
 

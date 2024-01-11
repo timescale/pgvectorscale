@@ -5,7 +5,7 @@ use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::graph::PruneNeighborStats;
+use super::stats::{PruneNeighborStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
 
 use super::meta_page::MetaPage;
 use super::model::*;
@@ -74,36 +74,22 @@ impl BuilderNeighborCache {
     }
 }
 
-pub struct WriteStats {
-    pub started: Instant,
-    pub num_nodes: usize,
-    pub prune_stats: PruneNeighborStats,
-    pub num_neighbors: usize,
-}
-
-impl WriteStats {
-    pub fn new() -> Self {
-        Self {
-            started: Instant::now(),
-            num_nodes: 0,
-            prune_stats: PruneNeighborStats::new(),
-            num_neighbors: 0,
-        }
-    }
-}
-
 pub enum GraphNeighborStore {
     Builder(BuilderNeighborCache),
     Disk,
 }
 
 impl GraphNeighborStore {
-    pub fn get_neighbors_with_full_vector_distances<S: Storage>(
+    pub fn get_neighbors_with_full_vector_distances<
+        S: Storage,
+        T: StatsNodeRead + StatsDistanceComparison,
+    >(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
         storage: &S,
         result: &mut Vec<NeighborWithDistance>,
+        stats: &mut T,
     ) -> bool {
         match self {
             GraphNeighborStore::Builder(b) => {
@@ -114,18 +100,20 @@ impl GraphNeighborStore {
                     index,
                     neighbors_of,
                     result,
+                    stats,
                 )
             },
         }
     }
 
-    pub fn set_neighbors<S: Storage>(
+    pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(
         &mut self,
         storage: &S,
         index: &PgRelation,
         meta_page: &MetaPage,
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
+        stats: &mut T,
     ) {
         match self {
             GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, new_neighbors),
@@ -134,6 +122,7 @@ impl GraphNeighborStore {
                 meta_page,
                 neighbors_of,
                 new_neighbors.as_slice(),
+                stats,
             ),
         }
     }

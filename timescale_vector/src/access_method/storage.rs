@@ -6,14 +6,20 @@ use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPoi
 
 use super::{
     graph::{Graph, ListSearchNeighbor, ListSearchResult},
-    graph_neighbor_store::{GraphNeighborStore, WriteStats},
+    graph_neighbor_store::GraphNeighborStore,
     meta_page::MetaPage,
     model::NeighborWithDistance,
     pg_vector::PgVector,
+    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, WriteStats},
 };
 
 pub trait NodeDistanceMeasure {
-    unsafe fn get_distance(&self, index: &PgRelation, index_pointer: IndexPointer) -> f32;
+    unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> f32;
 }
 
 pub trait ArchivedData {
@@ -44,12 +50,13 @@ pub trait Storage {
 
     fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, index: &PgRelation, graph: &Graph) -> WriteStats;
+    fn finish_training(&mut self, index: &PgRelation, graph: &Graph, stats: &mut WriteStats);
 
-    unsafe fn get_full_vector_distance_state<'a>(
+    unsafe fn get_full_vector_distance_state<'a, S: StatsNodeRead>(
         &'a self,
         index: &PgRelation,
         index_pointer: IndexPointer,
+        stats: &mut S,
     ) -> Self::NodeDistanceMeasure<'a>;
 
     fn get_search_distance_measure(
@@ -85,19 +92,23 @@ pub trait Storage {
     where
         Self: Sized;
 
-    fn get_neighbors_with_full_vector_distances_from_disk(
+    fn get_neighbors_with_full_vector_distances_from_disk<
+        S: StatsNodeRead + StatsDistanceComparison,
+    >(
         &self,
         index: &PgRelation,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
+        stats: &mut S,
     ) -> bool;
 
-    fn set_neighbors_on_disk(
+    fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
         index: &PgRelation,
         meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
+        stats: &mut S,
     );
 }
 

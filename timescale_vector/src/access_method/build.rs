@@ -3,10 +3,10 @@ use std::time::Instant;
 use pgrx::*;
 
 use crate::access_method::graph::Graph;
-use crate::access_method::graph::InsertStats;
 use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
+use crate::access_method::stats::{InsertStats, WriteStats};
 
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
@@ -119,6 +119,7 @@ pub unsafe extern "C" fn aminsert(
     let mut meta_page = MetaPage::read(&index_relation);
 
     let mut storage = meta_page.get_storage_type();
+    let mut stats = InsertStats::new();
     match &mut storage {
         StorageType::None => {}
         StorageType::PQ => {
@@ -133,7 +134,14 @@ pub unsafe extern "C" fn aminsert(
                 &index_relation,
                 &meta_page,
             );
-            let _stats = insert_storage(&bq, &index_relation, vec, heap_pointer, &mut meta_page);
+            insert_storage(
+                &bq,
+                &index_relation,
+                vec,
+                heap_pointer,
+                &mut meta_page,
+                &mut stats,
+            );
         }
     }
     false
@@ -145,7 +153,8 @@ unsafe fn insert_storage<S: Storage>(
     vector: PgVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
-) -> InsertStats {
+    stats: &mut InsertStats,
+) {
     let mut tape = Tape::new(&index_relation, storage.page_type());
     let index_pointer = storage.create_node(
         &&index_relation,
@@ -156,7 +165,7 @@ unsafe fn insert_storage<S: Storage>(
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(&index_relation, index_pointer, vector, storage)
+    graph.insert(&index_relation, index_pointer, vector, storage, stats)
 }
 
 #[pg_guard]
@@ -217,8 +226,9 @@ fn do_heap_scan_with_state<'a, S: Storage>(
     storage: &mut S,
     state: &mut BuildState,
 ) -> usize {
-    // we train the quantizer and add prepare to write quantized values to the nodes.
-    let write_stats = storage.finish_training(index_relation, &state.graph);
+    // we train the quantizer and add prepare to write quantized values to the nodes.\
+    let mut write_stats = WriteStats::new();
+    storage.finish_training(index_relation, &state.graph, &mut write_stats);
 
     info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
@@ -308,7 +318,7 @@ fn build_callback_internal<S: Storage>(
             Instant::now().duration_since(state.started).as_secs_f64(),
             (Instant::now().duration_since(state.started) / state.ntuples as u32).as_secs_f64(),
             state.stats.prune_neighbor_stats.distance_comparisons / state.ntuples,
-            state.stats.greedy_search_stats.distance_comparisons / state.ntuples,
+            state.stats.greedy_search_stats.get_total_distance_comparisons() / state.ntuples,
             state.stats,
         );
     }
@@ -323,8 +333,9 @@ fn build_callback_internal<S: Storage>(
         &mut state.tape,
     );
 
-    let new_stats = state.graph.insert(&index, index_pointer, vector, storage);
-    state.stats.combine(new_stats);
+    state
+        .graph
+        .insert(&index, index_pointer, vector, storage, &mut state.stats);
 }
 
 #[cfg(any(test, feature = "pg_test"))]
