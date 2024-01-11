@@ -2,7 +2,9 @@ use std::pin::Pin;
 
 use pgrx::PgRelation;
 
-use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
+use crate::util::{
+    page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
+};
 
 use super::{
     graph::{Graph, ListSearchNeighbor, ListSearchResult},
@@ -111,6 +113,17 @@ pub trait Storage {
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     );
+
+    fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32;
+}
+
+pub trait StorageFullDistanceFromHeap {
+    unsafe fn get_heap_table_slot<T: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> TableSlot;
 }
 
 pub enum StorageType {

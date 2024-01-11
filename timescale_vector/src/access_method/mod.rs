@@ -2,6 +2,7 @@ use pgrx::*;
 mod build;
 mod cost_estimate;
 mod debugging;
+mod full_distance_measure;
 mod graph;
 mod graph_neighbor_store;
 pub mod guc;

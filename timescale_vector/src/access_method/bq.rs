@@ -1,10 +1,11 @@
 use super::{
     distance::distance_cosine as default_distance,
+    full_distance_measure::HeapFullDistanceMeasure,
     graph::{Graph, ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats},
-    storage::{ArchivedData, NodeFullDistanceMeasure, Storage},
+    storage::{ArchivedData, NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
 use std::{collections::HashMap, iter::once, pin::Pin};
 
@@ -230,40 +231,6 @@ impl SearchDistanceMeasure {
     }
 }
 
-pub struct HeapFullDistanceMeasure<'a> {
-    table_slot: Option<TableSlot>,
-    storage: &'a BqStorage<'a>,
-}
-
-impl<'a> HeapFullDistanceMeasure<'a> {
-    pub fn with_table_slot(slot: TableSlot, storage: &'a BqStorage<'a>) -> Self {
-        Self {
-            table_slot: Some(slot),
-            storage: storage,
-        }
-    }
-}
-
-impl<'a> NodeFullDistanceMeasure for HeapFullDistanceMeasure<'a> {
-    unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
-        &self,
-        index: &PgRelation,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> f32 {
-        let heap_pointer = self.storage.get_heap_pointer(index, index_pointer, stats);
-        let slot = TableSlot::new(
-            self.storage.heap_rel.unwrap(),
-            heap_pointer,
-            self.storage.heap_attr.unwrap(),
-        );
-        stats.record_full_distance_comparison();
-        let slice1 = slot.get_pg_vector();
-        let slice2 = self.table_slot.as_ref().unwrap().get_pg_vector();
-        (self.storage.distance_fn)(slice1.to_slice(), slice2.to_slice())
-    }
-}
-
 struct QuantizedVectorCache {
     quantized_vector_map: HashMap<ItemPointer, Vec<BqVectorElement>>,
 }
@@ -455,7 +422,7 @@ impl<'a> BqStorage<'a> {
 
 impl<'a> Storage for BqStorage<'a> {
     type QueryDistanceMeasure = SearchDistanceMeasure;
-    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b> where Self: 'b;
+    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqStorage<'b>> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
 
     fn page_type(&self) -> PageType {
@@ -536,7 +503,7 @@ impl<'a> Storage for BqStorage<'a> {
         index: &PgRelation,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> HeapFullDistanceMeasure<'b> {
+    ) -> HeapFullDistanceMeasure<'b, BqStorage<'b>> {
         let heap_pointer = self.get_heap_pointer(index, index_pointer, stats);
         let slot = TableSlot::new(
             self.heap_rel.unwrap(),
@@ -713,6 +680,26 @@ impl<'a> Storage for BqStorage<'a> {
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
         node.commit();
+    }
+
+    fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
+        self.distance_fn
+    }
+}
+
+impl<'a> StorageFullDistanceFromHeap for BqStorage<'a> {
+    unsafe fn get_heap_table_slot<S: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> TableSlot {
+        let heap_pointer = self.get_heap_pointer(index, index_pointer, stats);
+        TableSlot::new(
+            self.heap_rel.unwrap(),
+            heap_pointer,
+            self.heap_attr.unwrap(),
+        )
     }
 }
 
