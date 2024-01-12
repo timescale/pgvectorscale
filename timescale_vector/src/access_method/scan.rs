@@ -2,14 +2,14 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        bq::BqStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
+        bq::BqSpeedupStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
         pg_vector::PgVector,
     },
     util::{buffer::PinnedBufferShare, HeapPointer},
 };
 
 use super::{
-    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure, BqStorageLsnPrivateData},
+    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData},
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     stats::QuantizerStats,
@@ -19,9 +19,9 @@ use super::{
 /* Be very careful not to transfer PgRelations in the state, as they can change between calls. That means we shouldn't be
 using lifetimes here. Everything should be owned */
 enum StorageState {
-    BQ(
+    BqSpeedup(
         BqQuantizer,
-        TSVResponseIterator<BqSearchDistanceMeasure, BqStorageLsnPrivateData>,
+        TSVResponseIterator<BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData>,
     ),
     Plain(TSVResponseIterator<PlainDistanceMeasure, PlainStorageLsnPrivateData>),
 }
@@ -54,13 +54,13 @@ impl TSVScanState {
                 //pq.load(index, &meta_page);
                 pgrx::error!("not implemented");
             }
-            StorageType::BQ => {
+            StorageType::BqSpeedup => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
-                let bq = BqStorage::load_for_search(index, &quantizer);
+                let bq = BqSpeedupStorage::load_for_search(index, &quantizer);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
-                StorageState::BQ(quantizer, it)
+                StorageState::BqSpeedup(quantizer, it)
             }
         };
 
@@ -228,8 +228,8 @@ pub extern "C" fn amgettuple(
 
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
-        StorageState::BQ(quantizer, iter) => {
-            let bq = BqStorage::load_for_search(&indexrel, quantizer);
+        StorageState::BqSpeedup(quantizer, iter) => {
+            let bq = BqSpeedupStorage::load_for_search(&indexrel, quantizer);
             get_tuple(&bq, &indexrel, iter, scan)
         }
         StorageState::Plain(iter) => {
@@ -270,7 +270,7 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
-            StorageState::BQ(_bq, iter) => end_scan::<BqStorage>(iter),
+            StorageState::BqSpeedup(_bq, iter) => end_scan::<BqSpeedupStorage>(iter),
             StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
         }
     }

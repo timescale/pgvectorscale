@@ -5,7 +5,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::bq::BqStorage;
+use super::bq::BqSpeedupStorage;
 use super::pq::PqQuantizer;
 use super::storage::StorageType;
 
@@ -68,7 +68,7 @@ impl MetaPage {
         if self.get_use_pq() {
             StorageType::PQ
         } else if self.use_bq {
-            StorageType::BQ
+            StorageType::BqSpeedup
         } else {
             StorageType::Plain
         }

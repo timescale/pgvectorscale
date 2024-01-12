@@ -243,7 +243,7 @@ impl QuantizedVectorCache {
     fn get<S: StatsNodeRead>(
         &mut self,
         index_pointer: IndexPointer,
-        storage: &BqStorage,
+        storage: &BqSpeedupStorage,
         stats: &mut S,
     ) -> &[BqVectorElement] {
         self.quantized_vector_map
@@ -263,7 +263,7 @@ impl QuantizedVectorCache {
     fn preload<I: Iterator<Item = IndexPointer>, S: StatsNodeRead>(
         &mut self,
         index_pointers: I,
-        storage: &BqStorage,
+        storage: &BqSpeedupStorage,
         stats: &mut S,
     ) {
         for index_pointer in index_pointers {
@@ -272,7 +272,7 @@ impl QuantizedVectorCache {
     }
 }
 
-pub struct BqStorage<'a> {
+pub struct BqSpeedupStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
     quantizer: BqQuantizer,
@@ -281,12 +281,12 @@ pub struct BqStorage<'a> {
     qv_cache: Option<QuantizedVectorCache>,
 }
 
-impl<'a> BqStorage<'a> {
+impl<'a> BqSpeedupStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
-    ) -> BqStorage<'a> {
+    ) -> BqSpeedupStorage<'a> {
         Self {
             index: index,
             distance_fn: default_distance,
@@ -311,7 +311,7 @@ impl<'a> BqStorage<'a> {
         index_relation: &'a PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
-    ) -> BqStorage<'a> {
+    ) -> BqSpeedupStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: default_distance,
@@ -325,7 +325,7 @@ impl<'a> BqStorage<'a> {
     pub fn load_for_search(
         index_relation: &'a PgRelation,
         quantizer: &BqQuantizer,
-    ) -> BqStorage<'a> {
+    ) -> BqSpeedupStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: default_distance,
@@ -355,13 +355,13 @@ impl<'a> BqStorage<'a> {
     }
 }
 
-pub type BqStorageLsnPrivateData = PhantomData<bool>; //no data stored
+pub type BqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
-impl<'a> Storage for BqStorage<'a> {
+impl<'a> Storage for BqSpeedupStorage<'a> {
     type QueryDistanceMeasure = BqSearchDistanceMeasure;
-    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqStorage<'b>> where Self: 'b;
+    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqSpeedupStorage<'b>> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
-    type LSNPrivateData = BqStorageLsnPrivateData; //no data stored
+    type LSNPrivateData = BqSpeedupStorageLsnPrivateData; //no data stored
 
     fn page_type(&self) -> PageType {
         PageType::BqNode
@@ -430,7 +430,7 @@ impl<'a> Storage for BqStorage<'a> {
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> HeapFullDistanceMeasure<'b, BqStorage<'b>> {
+    ) -> HeapFullDistanceMeasure<'b, BqSpeedupStorage<'b>> {
         HeapFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
@@ -499,9 +499,7 @@ impl<'a> Storage for BqStorage<'a> {
             ),
         };
 
-        let lsn = ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>);
-
-        lsn
+        ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>)
     }
 
     fn visit_lsn(
@@ -601,7 +599,7 @@ impl<'a> Storage for BqStorage<'a> {
     }
 }
 
-impl<'a> StorageFullDistanceFromHeap for BqStorage<'a> {
+impl<'a> StorageFullDistanceFromHeap for BqSpeedupStorage<'a> {
     unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,

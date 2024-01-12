@@ -246,13 +246,11 @@ impl<'a> Storage for PlainStorage<'a> {
             ),
         };
 
-        let lsn = ListSearchNeighbor::new(
+        ListSearchNeighbor::new(
             index_pointer,
             distance,
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
-        );
-
-        lsn
+        )
     }
 
     fn visit_lsn(
