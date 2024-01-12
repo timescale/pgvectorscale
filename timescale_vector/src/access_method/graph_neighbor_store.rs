@@ -46,16 +46,15 @@ impl BuilderNeighborCache {
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
-    ) -> bool {
+    ) {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
             Some(n) => {
                 for nwd in n {
                     result.push(nwd.clone());
                 }
-                true
             }
-            None => false,
+            None => (),
         }
     }
 
@@ -87,7 +86,7 @@ impl GraphNeighborStore {
         storage: &S,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut T,
-    ) -> bool {
+    ) {
         match self {
             GraphNeighborStore::Builder(b) => {
                 b.get_neighbors_with_full_vector_distances(neighbors_of, result)
@@ -99,7 +98,7 @@ impl GraphNeighborStore {
                     stats,
                 )
             },
-        }
+        };
     }
 
     pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(

@@ -456,7 +456,7 @@ impl<'a> Storage for BqStorage<'a> {
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
-    ) -> bool {
+    ) {
         let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
         let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
         rn.get_archived_node().apply_to_neighbors(|n| {
@@ -464,7 +464,6 @@ impl<'a> Storage for BqStorage<'a> {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
         });
-        true
     }
 
     /* get_lsn and visit_lsn are different because the distance
@@ -475,6 +474,10 @@ impl<'a> Storage for BqStorage<'a> {
         index_pointer: ItemPointer,
         _gns: &GraphNeighborStore,
     ) -> ListSearchNeighbor<Self::LSNPrivateData> {
+        if !lsr.prepare_insert(index_pointer) {
+            panic!("should not have had an init id already inserted");
+        }
+
         let rn = unsafe { BqNode::read(self.index, index_pointer, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
@@ -492,9 +495,6 @@ impl<'a> Storage for BqStorage<'a> {
             ),
         };
 
-        if !lsr.prepare_insert(index_pointer) {
-            panic!("should not have had an init id already inserted");
-        }
         let lsn = ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>);
 
         lsn
@@ -538,6 +538,8 @@ impl<'a> Storage for BqStorage<'a> {
                     }
                 }
                 BqSearchDistanceMeasure::Bq(table) => {
+                    /* Note: there is no additional node reads here. We get all of our info from node_visiting
+                     * This is what gives us a speedup in BQ Speedup */
                     if let GraphNeighborStore::Builder(_) = gns {
                         assert!(
                             false,

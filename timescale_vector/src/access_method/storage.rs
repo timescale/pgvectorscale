@@ -107,7 +107,7 @@ pub trait Storage {
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
-    ) -> bool;
+    );
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
