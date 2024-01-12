@@ -194,7 +194,6 @@ impl<'a> Storage for PlainStorage<'a> {
         return PlainDistanceMeasure::Full(query);
     }
 
-    //TODO: this is a copy of the same function in BqStorage. Refactor.
     fn get_neighbors_with_full_vector_distances_from_disk<
         S: StatsNodeRead + StatsDistanceComparison,
     >(
@@ -205,11 +204,10 @@ impl<'a> Storage for PlainStorage<'a> {
     ) {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
         let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
-        rn.get_archived_node().apply_to_neighbors(|n| {
-            let n = n.deserialize_item_pointer();
+        for n in rn.get_archived_node().iter_neighbors() {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
-        });
+        }
     }
 
     /* get_lsn and visit_lsn are different because the distance

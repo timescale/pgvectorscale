@@ -459,11 +459,10 @@ impl<'a> Storage for BqStorage<'a> {
     ) {
         let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
         let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
-        rn.get_archived_node().apply_to_neighbors(|n| {
-            let n = n.deserialize_item_pointer();
+        for n in rn.get_archived_node().iter_neighbors() {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
-        });
+        }
     }
 
     /* get_lsn and visit_lsn are different because the distance
@@ -720,14 +719,11 @@ impl ArchivedBqNode {
             .unwrap_or(self.neighbor_index_pointers.len())
     }
 
-    pub fn apply_to_neighbors<F>(&self, mut f: F)
-    where
-        F: FnMut(&ArchivedItemPointer),
-    {
-        for i in 0..self.num_neighbors() {
-            let neighbor = &self.neighbor_index_pointers[i];
-            f(neighbor);
-        }
+    pub fn iter_neighbors(&self) -> impl Iterator<Item = ItemPointer> + '_ {
+        self.neighbor_index_pointers
+            .iter()
+            .take(self.num_neighbors())
+            .map(|ip| ip.deserialize_item_pointer())
     }
 }
 
@@ -737,9 +733,7 @@ impl ArchivedData for ArchivedBqNode {
     }
 
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
-        let mut result = vec![];
-        self.apply_to_neighbors(|n| result.push(n.deserialize_item_pointer()));
-        result
+        self.iter_neighbors().collect()
     }
 
     fn is_deleted(&self) -> bool {

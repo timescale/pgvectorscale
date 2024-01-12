@@ -92,14 +92,11 @@ impl ArchivedNode {
             .unwrap_or(self.neighbor_index_pointers.len())
     }
 
-    pub fn apply_to_neighbors<F>(&self, mut f: F)
-    where
-        F: FnMut(&ArchivedItemPointer),
-    {
-        for i in 0..self.num_neighbors() {
-            let neighbor = &self.neighbor_index_pointers[i];
-            f(neighbor);
-        }
+    pub fn iter_neighbors(&self) -> impl Iterator<Item = ItemPointer> + '_ {
+        self.neighbor_index_pointers
+            .iter()
+            .take(self.num_neighbors())
+            .map(|ip| ip.deserialize_item_pointer())
     }
 
     pub fn set_neighbors(
@@ -130,9 +127,7 @@ impl ArchivedData for ArchivedNode {
     }
 
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
-        let mut result = vec![];
-        self.apply_to_neighbors(|n| result.push(n.deserialize_item_pointer()));
-        result
+        self.iter_neighbors().collect()
     }
 
     fn is_deleted(&self) -> bool {
