@@ -14,33 +14,27 @@ use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats};
 use super::storage::Storage;
 use super::{meta_page::MetaPage, model::NeighborWithDistance};
 
-pub enum LsrPrivateData {
-    None,
-    /* neighbors, heap_pointer */
-    Node(Vec<IndexPointer>, HeapPointer),
-}
-
-pub struct ListSearchNeighbor {
+pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
     distance: f32,
     visited: bool,
-    private_data: LsrPrivateData,
+    private_data: PD,
 }
 
-impl PartialOrd for ListSearchNeighbor {
+impl<PD> PartialOrd for ListSearchNeighbor<PD> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         self.distance.partial_cmp(&other.distance)
     }
 }
 
-impl PartialEq for ListSearchNeighbor {
+impl<PD> PartialEq for ListSearchNeighbor<PD> {
     fn eq(&self, other: &Self) -> bool {
         self.index_pointer == other.index_pointer
     }
 }
 
-impl ListSearchNeighbor {
-    pub fn new(index_pointer: IndexPointer, distance: f32, private_data: LsrPrivateData) -> Self {
+impl<PD> ListSearchNeighbor<PD> {
+    pub fn new(index_pointer: IndexPointer, distance: f32, private_data: PD) -> Self {
         assert!(!distance.is_nan());
         Self {
             index_pointer,
@@ -49,18 +43,22 @@ impl ListSearchNeighbor {
             visited: false,
         }
     }
+
+    pub fn get_private_data(&self) -> &PD {
+        &self.private_data
+    }
 }
 
-pub struct ListSearchResult<QDM> {
-    candidate_storage: Vec<ListSearchNeighbor>, //plain storage
-    best_candidate: Vec<usize>,                 //pos in candidate storage, sorted by distance
+pub struct ListSearchResult<QDM, PD> {
+    candidate_storage: Vec<ListSearchNeighbor<PD>>, //plain storage
+    best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
     pub sdm: Option<QDM>,
     pub stats: GreedySearchStats,
 }
 
-impl<QDM> ListSearchResult<QDM> {
+impl<QDM, PD> ListSearchResult<QDM, PD> {
     fn empty() -> Self {
         Self {
             candidate_storage: vec![],
@@ -72,12 +70,13 @@ impl<QDM> ListSearchResult<QDM> {
         }
     }
 
-    fn new<S: Storage<QueryDistanceMeasure = QDM>>(
+    fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         max_history_size: Option<usize>,
         init_ids: Vec<ItemPointer>,
         sdm: S::QueryDistanceMeasure,
         search_list_size: usize,
         meta_page: &MetaPage,
+        gns: &GraphNeighborStore,
         storage: &S,
     ) -> Self {
         let neigbors = meta_page.get_num_neighbors() as usize;
@@ -91,7 +90,7 @@ impl<QDM> ListSearchResult<QDM> {
         };
         res.stats.record_call();
         for index_pointer in init_ids {
-            let lsn = storage.create_lsn_for_init_id(&mut res, index_pointer);
+            let lsn = storage.create_lsn_for_init_id(&mut res, index_pointer, gns);
             res.insert_neighbor(lsn);
         }
         res
@@ -102,7 +101,7 @@ impl<QDM> ListSearchResult<QDM> {
     }
 
     /// Internal function
-    pub fn insert_neighbor(&mut self, n: ListSearchNeighbor) {
+    pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
         if let Some(max_size) = self.max_history_size {
             if self.best_candidate.len() >= max_size {
                 let last = self.best_candidate.last().unwrap();
@@ -122,7 +121,7 @@ impl<QDM> ListSearchResult<QDM> {
         self.best_candidate.insert(idx, pos)
     }
 
-    pub fn get_lsn_by_idx(&self, idx: usize) -> &ListSearchNeighbor {
+    pub fn get_lsn_by_idx(&self, idx: usize) -> &ListSearchNeighbor<PD> {
         &self.candidate_storage[idx]
     }
 
@@ -147,7 +146,7 @@ impl<QDM> ListSearchResult<QDM> {
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
     //into the best_candidate list, so it will never again be returned.
-    pub fn consume<S: Storage<QueryDistanceMeasure = QDM>>(
+    pub fn consume<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
@@ -261,7 +260,7 @@ impl<'a> Graph<'a> {
         meta_page: &MetaPage,
         storage: &S,
     ) -> (
-        ListSearchResult<S::QueryDistanceMeasure>,
+        ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
         HashSet<NeighborWithDistance>,
     ) {
         let init_ids = self.get_init_ids();
@@ -278,6 +277,7 @@ impl<'a> Graph<'a> {
             dm,
             search_list_size,
             meta_page,
+            self.get_neighbor_store(),
             storage,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
@@ -292,7 +292,7 @@ impl<'a> Graph<'a> {
         query: PgVector,
         search_list_size: usize,
         storage: &S,
-    ) -> ListSearchResult<S::QueryDistanceMeasure> {
+    ) -> ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData> {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
@@ -306,6 +306,7 @@ impl<'a> Graph<'a> {
             dm,
             search_list_size,
             &self.meta_page,
+            self.get_neighbor_store(),
             storage,
         )
     }
@@ -313,7 +314,7 @@ impl<'a> Graph<'a> {
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     pub fn greedy_search_iterate<S: Storage>(
         &self,
-        lsr: &mut ListSearchResult<S::QueryDistanceMeasure>,
+        lsr: &mut ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
         visit_n_closest: usize,
         mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
         storage: &S,

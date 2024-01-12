@@ -10,7 +10,7 @@ use super::{
     storage::{ArchivedData, NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
     storage_common::{calculate_full_distance, HeapFullDistanceMeasure},
 };
-use std::{collections::HashMap, iter::once, pin::Pin};
+use std::{collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
     info,
@@ -355,10 +355,13 @@ impl<'a> BqStorage<'a> {
     }
 }
 
+pub type BqStorageLsnPrivateData = PhantomData<bool>; //no data stored
+
 impl<'a> Storage for BqStorage<'a> {
     type QueryDistanceMeasure = BqSearchDistanceMeasure;
     type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqStorage<'b>> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
+    type LSNPrivateData = BqStorageLsnPrivateData; //no data stored
 
     fn page_type(&self) -> PageType {
         PageType::BqNode
@@ -468,9 +471,10 @@ impl<'a> Storage for BqStorage<'a> {
     comparisons for BQ get the vector from different places */
     fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-    ) -> ListSearchNeighbor {
+        _gns: &GraphNeighborStore,
+    ) -> ListSearchNeighbor<Self::LSNPrivateData> {
         let rn = unsafe { BqNode::read(self.index, index_pointer, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
@@ -491,15 +495,14 @@ impl<'a> Storage for BqStorage<'a> {
         if !lsr.prepare_insert(index_pointer) {
             panic!("should not have had an init id already inserted");
         }
-        let lsn =
-            ListSearchNeighbor::new(index_pointer, distance, super::graph::LsrPrivateData::None);
+        let lsn = ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>);
 
         lsn
     }
 
     fn visit_lsn(
         &self,
-        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
     ) {
@@ -545,17 +548,18 @@ impl<'a> Storage for BqStorage<'a> {
                     BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
                 }
             };
-            let lsn = ListSearchNeighbor::new(
-                neighbor_index_pointer,
-                distance,
-                super::graph::LsrPrivateData::None,
-            );
+            let lsn =
+                ListSearchNeighbor::new(neighbor_index_pointer, distance, PhantomData::<bool>);
 
             lsr.insert_neighbor(lsn);
         }
     }
 
-    fn return_lsn(&self, lsn: &ListSearchNeighbor, stats: &mut GreedySearchStats) -> HeapPointer {
+    fn return_lsn(
+        &self,
+        lsn: &ListSearchNeighbor<Self::LSNPrivateData>,
+        stats: &mut GreedySearchStats,
+    ) -> HeapPointer {
         let lsn_index_pointer = lsn.index_pointer;
         let rn = unsafe { BqNode::read(self.index, lsn_index_pointer, stats) };
         let node = rn.get_archived_node();

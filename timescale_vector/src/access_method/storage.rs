@@ -38,6 +38,7 @@ pub trait Storage {
     where
         Self: 'a;
     type ArchivedType: ArchivedData;
+    type LSNPrivateData;
 
     fn page_type(&self) -> PageType;
 
@@ -76,7 +77,7 @@ pub trait Storage {
 
     fn visit_lsn(
         &self,
-        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
     ) where
@@ -84,13 +85,18 @@ pub trait Storage {
 
     fn create_lsn_for_init_id(
         &self,
-        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure>,
+        lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-    ) -> ListSearchNeighbor
+        gns: &GraphNeighborStore,
+    ) -> ListSearchNeighbor<Self::LSNPrivateData>
     where
         Self: Sized;
 
-    fn return_lsn(&self, lsn: &ListSearchNeighbor, stats: &mut GreedySearchStats) -> HeapPointer
+    fn return_lsn(
+        &self,
+        lsn: &ListSearchNeighbor<Self::LSNPrivateData>,
+        stats: &mut GreedySearchStats,
+    ) -> HeapPointer
     where
         Self: Sized;
 

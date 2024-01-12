@@ -9,9 +9,9 @@ use crate::{
 };
 
 use super::{
-    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure},
+    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure, BqStorageLsnPrivateData},
     graph::{Graph, ListSearchResult},
-    plain_storage::{PlainDistanceMeasure, PlainStorage},
+    plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -19,8 +19,11 @@ use super::{
 /* Be very careful not to transfer PgRelations in the state, as they can change between calls. That means we shouldn't be
 using lifetimes here. Everything should be owned */
 enum StorageState {
-    BQ(BqQuantizer, TSVResponseIterator<BqSearchDistanceMeasure>),
-    Plain(TSVResponseIterator<PlainDistanceMeasure>),
+    BQ(
+        BqQuantizer,
+        TSVResponseIterator<BqSearchDistanceMeasure, BqStorageLsnPrivateData>,
+    ),
+    Plain(TSVResponseIterator<PlainDistanceMeasure, PlainStorageLsnPrivateData>),
 }
 
 /* no lifetime usage here. */
@@ -65,16 +68,16 @@ impl TSVScanState {
     }
 }
 
-struct TSVResponseIterator<QDM> {
-    lsr: ListSearchResult<QDM>,
+struct TSVResponseIterator<QDM, PD> {
+    lsr: ListSearchResult<QDM, PD>,
     search_list_size: usize,
     current: usize,
     last_buffer: Option<PinnedBufferShare>,
     meta_page: MetaPage,
 }
 
-impl<QDM> TSVResponseIterator<QDM> {
-    fn new<S: Storage<QueryDistanceMeasure = QDM>>(
+impl<QDM, PD> TSVResponseIterator<QDM, PD> {
+    fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         storage: &S,
         index: &PgRelation,
         query: PgVector,
@@ -98,8 +101,8 @@ impl<QDM> TSVResponseIterator<QDM> {
     }
 }
 
-impl<QDM> TSVResponseIterator<QDM> {
-    fn next<S: Storage<QueryDistanceMeasure = QDM>>(
+impl<QDM, PD> TSVResponseIterator<QDM, PD> {
+    fn next<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
         index: &PgRelation,
         storage: &S,
@@ -239,7 +242,7 @@ pub extern "C" fn amgettuple(
 fn get_tuple<'a, S: Storage>(
     storage: &S,
     index: &'a PgRelation,
-    iter: &'a mut TSVResponseIterator<S::QueryDistanceMeasure>,
+    iter: &'a mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
     mut scan: PgBox<pg_sys::IndexScanDescData>,
 ) -> bool {
     scan.xs_recheckorderby = false;
@@ -273,7 +276,9 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
     }
 }
 
-fn end_scan<S: Storage>(iter: &mut TSVResponseIterator<S::QueryDistanceMeasure>) {
+fn end_scan<S: Storage>(
+    iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
+) {
     debug1!(
         "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}",
         iter.lsr.stats.get_node_reads(),
