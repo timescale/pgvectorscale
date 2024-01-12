@@ -431,7 +431,7 @@ impl<'a> Storage for BqStorage<'a> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> HeapFullDistanceMeasure<'b, BqStorage<'b>> {
-        HeapFullDistanceMeasure::new(self, index_pointer, stats)
+        HeapFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
     fn get_search_distance_measure(
@@ -458,7 +458,12 @@ impl<'a> Storage for BqStorage<'a> {
         stats: &mut S,
     ) {
         let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
-        let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
+        let heap_pointer = rn
+            .get_archived_node()
+            .heap_item_pointer
+            .deserialize_item_pointer();
+        let dist_state =
+            unsafe { HeapFullDistanceMeasure::with_heap_pointer(self, heap_pointer, stats) };
         for n in rn.get_archived_node().iter_neighbors() {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))

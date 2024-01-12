@@ -81,7 +81,7 @@ pub struct IndexFullDistanceMeasure<'a> {
 }
 
 impl<'a> IndexFullDistanceMeasure<'a> {
-    pub unsafe fn new<T: StatsNodeRead>(
+    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
         storage: &'a PlainStorage<'a>,
         index_pointer: IndexPointer,
         stats: &mut T,
@@ -89,6 +89,16 @@ impl<'a> IndexFullDistanceMeasure<'a> {
         let rn = unsafe { Node::read(storage.index, index_pointer, stats) };
         Self {
             readable_node: rn,
+            storage: storage,
+        }
+    }
+
+    pub unsafe fn with_readable_node(
+        storage: &'a PlainStorage<'a>,
+        readable_node: ReadableNode<'a>,
+    ) -> Self {
+        Self {
+            readable_node: readable_node,
             storage: storage,
         }
     }
@@ -183,7 +193,7 @@ impl<'a> Storage for PlainStorage<'a> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Self::NodeFullDistanceMeasure<'b> {
-        IndexFullDistanceMeasure::new(self, index_pointer, stats)
+        IndexFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
     fn get_search_distance_measure(
@@ -203,8 +213,10 @@ impl<'a> Storage for PlainStorage<'a> {
         stats: &mut S,
     ) {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
-        let dist_state = unsafe { self.get_full_vector_distance_state(neighbors_of, stats) };
-        for n in rn.get_archived_node().iter_neighbors() {
+        //get neighbors copy before givining ownership of rn to the distance state
+        let neighbors: Vec<_> = rn.get_archived_node().iter_neighbors().collect();
+        let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
+        for n in neighbors {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
         }

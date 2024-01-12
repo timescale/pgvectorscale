@@ -8,19 +8,31 @@ use super::{
 };
 
 pub struct HeapFullDistanceMeasure<'a, S: Storage + StorageFullDistanceFromHeap> {
-    table_slot: Option<TableSlot>,
+    table_slot: TableSlot,
     storage: &'a S,
 }
 
 impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S> {
-    pub unsafe fn new<T: StatsNodeRead>(
+    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
         storage: &'a S,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
         let slot = storage.get_heap_table_slot_from_index_pointer(index_pointer, stats);
         Self {
-            table_slot: Some(slot),
+            table_slot: slot,
+            storage: storage,
+        }
+    }
+
+    pub unsafe fn with_heap_pointer<T: StatsNodeRead>(
+        storage: &'a S,
+        heap_pointer: HeapPointer,
+        stats: &mut T,
+    ) -> Self {
+        let slot = storage.get_heap_table_slot_from_heap_pointer(heap_pointer, stats);
+        Self {
+            table_slot: slot,
             storage: storage,
         }
     }
@@ -39,7 +51,7 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeFullDistanceMeasure
             .get_heap_table_slot_from_index_pointer(index_pointer, stats);
         stats.record_full_distance_comparison();
         let slice1 = slot.get_pg_vector();
-        let slice2 = self.table_slot.as_ref().unwrap().get_pg_vector();
+        let slice2 = self.table_slot.get_pg_vector();
         (self.storage.get_distance_function())(slice1.to_slice(), slice2.to_slice())
     }
 }
