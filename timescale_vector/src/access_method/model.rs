@@ -16,6 +16,7 @@ use crate::util::{
 };
 
 use super::meta_page::MetaPage;
+use super::stats::StatsNodeRead;
 use super::storage::StorageType;
 
 #[derive(Archive, Deserialize, Serialize)]
@@ -195,6 +196,7 @@ pub struct NeighborWithDistance {
 impl NeighborWithDistance {
     pub fn new(neighbor_index_pointer: ItemPointer, distance: Distance) -> Self {
         assert!(!distance.is_nan());
+        assert!(distance >= 0.0);
         Self {
             index_pointer: neighbor_index_pointer,
             distance,
@@ -325,8 +327,14 @@ impl<'a> ReadablePqVectorNode<'a> {
     }
 }
 
-pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f32> {
+pub unsafe fn read_pq<S: StatsNodeRead>(
+    index: &PgRelation,
+    index_pointer: &IndexPointer,
+    stats: &mut S,
+) -> Pq<f32> {
+    //TODO: handle stats better
     let rpq = PqQuantizerDef::read(index, &index_pointer);
+    stats.record_read();
     let rpn = rpq.get_archived_node();
     let size = rpn.dim_0 * rpn.dim_1 * rpn.dim_2;
     let mut result: Vec<f32> = Vec::with_capacity(size as usize);
@@ -336,6 +344,7 @@ pub unsafe fn read_pq(index: &PgRelation, index_pointer: &IndexPointer) -> Pq<f3
             break;
         }
         let qvn = PqQuantizerVector::read(index, &next);
+        stats.record_read();
         let vn = qvn.get_archived_node();
         result.extend(vn.vec.iter());
         next = vn.next_vector_pointer.deserialize_item_pointer();

@@ -18,10 +18,12 @@ use super::graph_neighbor_store::BuilderNeighborCache;
 use super::meta_page::MetaPage;
 
 use super::plain_storage::PlainStorage;
+use super::pq_storage::PqCompressionStorage;
 use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
     BqSpeedup(&'a mut BqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
+    PqCompression(&'a mut PqCompressionStorage<'b>, &'c mut BuildState<'d, 'e>),
     Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
 }
 
@@ -134,10 +136,22 @@ pub unsafe extern "C" fn aminsert(
                 &mut stats,
             );
         }
-        StorageType::PQ => {
-            //pq.load(&index_relation, &meta_page);
-            //let _stats = insert_storage(&pq, &index_relation, vector, heap_pointer, &mut meta_page);
-            pgrx::error!("not implemented");
+        StorageType::PqCompression => {
+            let pq = PqCompressionStorage::load_for_insert(
+                &heap_relation,
+                get_attribute_number(index_info),
+                &index_relation,
+                &meta_page,
+                &mut stats.quantizer_stats,
+            );
+            insert_storage(
+                &pq,
+                &index_relation,
+                vec,
+                heap_pointer,
+                &mut meta_page,
+                &mut stats,
+            );
         }
         StorageType::BqSpeedup => {
             let bq = BqSpeedupStorage::load_for_insert(
@@ -168,7 +182,7 @@ unsafe fn insert_storage<S: Storage>(
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
-    let mut tape = Tape::new(&index_relation, storage.page_type());
+    let mut tape = Tape::new(&index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vector.to_slice(),
         heap_pointer,
@@ -208,7 +222,7 @@ fn do_heap_scan<'a>(
         StorageType::Plain => {
             let mut plain = PlainStorage::new_for_build(index_relation);
             plain.start_training(&meta_page);
-            let page_type = plain.page_type();
+            let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
 
@@ -224,9 +238,28 @@ fn do_heap_scan<'a>(
 
             do_heap_scan_with_state(&mut plain, &mut bs)
         }
-        StorageType::PQ => {
-            //pq.start_training(&meta_page);
-            pgrx::error!("not implemented");
+        StorageType::PqCompression => {
+            let mut pq = PqCompressionStorage::new_for_build(
+                index_relation,
+                heap_relation,
+                get_attribute_number(index_info),
+            );
+            pq.start_training(&meta_page);
+            let page_type = PqCompressionStorage::page_type();
+            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut state = StorageBuildState::PqCompression(&mut pq, &mut bs);
+
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback),
+                    &mut state,
+                );
+            }
+
+            do_heap_scan_with_state(&mut pq, &mut bs)
         }
         StorageType::BqSpeedup => {
             let mut bq = BqSpeedupStorage::new_for_build(
@@ -235,7 +268,7 @@ fn do_heap_scan<'a>(
                 get_attribute_number(index_info),
             );
             bq.start_training(&meta_page);
-            let page_type = bq.page_type();
+            let page_type = BqSpeedupStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
 
@@ -338,6 +371,9 @@ unsafe extern "C" fn build_callback(
         match state {
             StorageBuildState::BqSpeedup(bq, state) => {
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
+            }
+            StorageBuildState::PqCompression(pq, state) => {
+                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *pq);
             }
             StorageBuildState::Plain(plain, state) => {
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);

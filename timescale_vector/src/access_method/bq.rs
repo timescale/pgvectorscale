@@ -353,6 +353,69 @@ impl<'a> BqSpeedupStorage<'a> {
             super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
         }
     }
+
+    fn visit_lsn_internal(
+        &self,
+        lsr: &mut ListSearchResult<
+            <BqSpeedupStorage<'a> as Storage>::QueryDistanceMeasure,
+            <BqSpeedupStorage<'a> as Storage>::LSNPrivateData,
+        >,
+        lsn_index_pointer: IndexPointer,
+        gns: &GraphNeighborStore,
+    ) {
+        //Opt shouldn't need to read the node in the builder graph case.
+        let rn_visiting = unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
+        let node_visiting = rn_visiting.get_archived_node();
+
+        let neighbors = match gns {
+            GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
+            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn_index_pointer),
+        };
+
+        for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
+            if !lsr.prepare_insert(neighbor_index_pointer) {
+                continue;
+            }
+
+            let distance = match lsr.sdm.as_ref().unwrap() {
+                BqSearchDistanceMeasure::Full(query) => {
+                    let rn_neighbor =
+                        unsafe { BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
+                    let node_neighbor = rn_neighbor.get_archived_node();
+                    if node_neighbor.is_deleted() {
+                        self.visit_lsn_internal(lsr, neighbor_index_pointer, gns);
+                        continue;
+                    }
+                    let heap_pointer_neighbor =
+                        node_neighbor.heap_item_pointer.deserialize_item_pointer();
+                    unsafe {
+                        calculate_full_distance(
+                            self,
+                            heap_pointer_neighbor,
+                            query.to_slice(),
+                            &mut lsr.stats,
+                        )
+                    }
+                }
+                BqSearchDistanceMeasure::Bq(table) => {
+                    /* Note: there is no additional node reads here. We get all of our info from node_visiting
+                     * This is what gives us a speedup in BQ Speedup */
+                    if let GraphNeighborStore::Builder(_) = gns {
+                        assert!(
+                            false,
+                            "BQ distance should not be used with the builder graph store"
+                        )
+                    }
+                    let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                    BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
+                }
+            };
+            let lsn =
+                ListSearchNeighbor::new(neighbor_index_pointer, distance, PhantomData::<bool>);
+
+            lsr.insert_neighbor(lsn);
+        }
+    }
 }
 
 pub type BqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
@@ -363,7 +426,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     type ArchivedType = ArchivedBqNode;
     type LSNPrivateData = BqSpeedupStorageLsnPrivateData; //no data stored
 
-    fn page_type(&self) -> PageType {
+    fn page_type() -> PageType {
         PageType::BqNode
     }
 
@@ -487,6 +550,10 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
 
         let distance = match lsr.sdm.as_ref().unwrap() {
             BqSearchDistanceMeasure::Full(query) => {
+                if node.is_deleted() {
+                    //FIXME: handle deleted init ids
+                    panic!("don't handle deleted init ids yet");
+                }
                 let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
                 unsafe {
                     calculate_full_distance(self, heap_pointer, query.to_slice(), &mut lsr.stats)
@@ -509,54 +576,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         gns: &GraphNeighborStore,
     ) {
         let lsn_index_pointer = lsr.get_lsn_by_idx(lsn_idx).index_pointer;
-        //Opt shouldn't need to read the node in the builder graph case.
-        let rn_visiting = unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
-        let node_visiting = rn_visiting.get_archived_node();
-
-        let neighbors = match gns {
-            GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
-            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn_index_pointer),
-        };
-
-        for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
-            if !lsr.prepare_insert(neighbor_index_pointer) {
-                continue;
-            }
-
-            let distance = match lsr.sdm.as_ref().unwrap() {
-                BqSearchDistanceMeasure::Full(query) => {
-                    let rn_neighbor =
-                        unsafe { BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
-                    let node_neighbor = rn_neighbor.get_archived_node();
-                    let heap_pointer_neighbor =
-                        node_neighbor.heap_item_pointer.deserialize_item_pointer();
-                    unsafe {
-                        calculate_full_distance(
-                            self,
-                            heap_pointer_neighbor,
-                            query.to_slice(),
-                            &mut lsr.stats,
-                        )
-                    }
-                }
-                BqSearchDistanceMeasure::Bq(table) => {
-                    /* Note: there is no additional node reads here. We get all of our info from node_visiting
-                     * This is what gives us a speedup in BQ Speedup */
-                    if let GraphNeighborStore::Builder(_) = gns {
-                        assert!(
-                            false,
-                            "BQ distance should not be used with the builder graph store"
-                        )
-                    }
-                    let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                    BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
-                }
-            };
-            let lsn =
-                ListSearchNeighbor::new(neighbor_index_pointer, distance, PhantomData::<bool>);
-
-            lsr.insert_neighbor(lsn);
-        }
+        self.visit_lsn_internal(lsr, lsn_index_pointer, gns);
     }
 
     fn return_lsn(

@@ -119,6 +119,13 @@ impl ArchivedNode {
             past_last_index_pointers.offset = InvalidOffsetNumber;
         }
     }
+
+    pub fn set_pq_vector(mut self: Pin<&mut Self>, pq_vector: &[u8]) {
+        for i in 0..=pq_vector.len() - 1 {
+            let mut pgv = self.as_mut().pq_vectors().index_pin(i);
+            *pgv = pq_vector[i];
+        }
+    }
 }
 
 impl ArchivedData for ArchivedNode {

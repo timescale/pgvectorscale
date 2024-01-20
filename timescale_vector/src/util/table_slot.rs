@@ -49,8 +49,6 @@ impl TableSlot {
 
     pub unsafe fn get_pg_vector(&self) -> PgVector {
         let vector = PgVector::from_datum(self.get_attribute(self.attribute_number).unwrap());
-
-        //note pgvector slice is only valid as long as the slot is valid that's why the lifetime is tied to it.
         vector
     }
 }

@@ -6,7 +6,6 @@ use crate::util::page;
 use crate::util::*;
 
 use super::bq::BqSpeedupStorage;
-use super::pq::PqQuantizer;
 use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
@@ -66,7 +65,7 @@ impl MetaPage {
 
     pub fn get_storage_type(&self) -> StorageType {
         if self.get_use_pq() {
-            StorageType::PQ
+            StorageType::PqCompression
         } else if self.use_bq {
             StorageType::BqSpeedup
         } else {

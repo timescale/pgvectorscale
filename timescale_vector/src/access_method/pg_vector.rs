@@ -50,7 +50,10 @@ impl PgVector {
     }
 
     pub unsafe fn from_datum(datum: pg_sys::Datum) -> PgVector {
-        let detoasted = pg_sys::pg_detoast_datum(datum.cast_mut_ptr());
+        //FIXME: we are using a copy here to avoid lifetime issues and because in some cases we have to
+        //modify the datum in preprocess_cosine. We should find a way to avoid the copy if the vector is
+        //normalized and preprocess_cosine is a noop;
+        let detoasted = pg_sys::pg_detoast_datum_copy(datum.cast_mut_ptr());
         let is_copy = !std::ptr::eq(
             detoasted.cast::<PgVectorInternal>(),
             datum.cast_mut_ptr::<PgVectorInternal>(),

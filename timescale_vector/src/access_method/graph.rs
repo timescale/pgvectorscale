@@ -36,6 +36,7 @@ impl<PD> PartialEq for ListSearchNeighbor<PD> {
 impl<PD> ListSearchNeighbor<PD> {
     pub fn new(index_pointer: IndexPointer, distance: f32, private_data: PD) -> Self {
         assert!(!distance.is_nan());
+        debug_assert!(distance >= 0.0);
         Self {
             index_pointer,
             private_data,

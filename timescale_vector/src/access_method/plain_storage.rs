@@ -122,13 +122,14 @@ impl<'a> NodeFullDistanceMeasure for IndexFullDistanceMeasure<'a> {
     }
 }
 
+//todo move to storage_common
 pub struct PlainStorageLsnPrivateData {
-    heap_pointer: HeapPointer,
-    neighbors: Vec<ItemPointer>,
+    pub heap_pointer: HeapPointer,
+    pub neighbors: Vec<ItemPointer>,
 }
 
 impl PlainStorageLsnPrivateData {
-    fn new(
+    pub fn new(
         index_pointer_to_node: IndexPointer,
         node: &ArchivedNode,
         gns: &GraphNeighborStore,
@@ -151,8 +152,8 @@ impl<'a> Storage for PlainStorage<'a> {
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 
-    fn page_type(&self) -> PageType {
-        PageType::BqNode
+    fn page_type() -> PageType {
+        PageType::Node
     }
 
     fn create_node<S: StatsNodeWrite>(
@@ -262,7 +263,6 @@ impl<'a> Storage for PlainStorage<'a> {
         let lsn = lsr.get_lsn_by_idx(lsn_idx);
         //clone needed so we don't continue to borrow lsr
         let neighbors = lsn.get_private_data().neighbors.clone();
-        let index_pointer_visiting = lsn.index_pointer;
 
         for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
             if !lsr.prepare_insert(neighbor_index_pointer) {
@@ -284,7 +284,7 @@ impl<'a> Storage for PlainStorage<'a> {
             let lsn = ListSearchNeighbor::new(
                 neighbor_index_pointer,
                 distance,
-                PlainStorageLsnPrivateData::new(index_pointer_visiting, node_neighbor, gns),
+                PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
             );
 
             lsr.insert_neighbor(lsn);

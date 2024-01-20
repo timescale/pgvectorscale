@@ -40,7 +40,7 @@ pub trait Storage {
     type ArchivedType: ArchivedData;
     type LSNPrivateData;
 
-    fn page_type(&self) -> PageType;
+    fn page_type() -> PageType;
 
     fn create_node<S: StatsNodeWrite>(
         &self,
@@ -136,6 +136,6 @@ pub trait StorageFullDistanceFromHeap {
 
 pub enum StorageType {
     BqSpeedup,
-    PQ,
+    PqCompression,
     Plain,
 }

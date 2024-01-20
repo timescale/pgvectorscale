@@ -1,10 +1,15 @@
+use core::panic;
+
 use pgrx::{
     pg_sys::{FirstOffsetNumber, IndexBulkDeleteResult},
     *,
 };
 
 use crate::{
-    access_method::{bq::BqSpeedupStorage, meta_page::MetaPage, plain_storage::PlainStorage},
+    access_method::{
+        bq::BqSpeedupStorage, meta_page::MetaPage, plain_storage::PlainStorage,
+        pq_storage::PqCompressionStorage,
+    },
     util::{
         page::{PageType, WritablePage},
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
@@ -49,8 +54,14 @@ pub extern "C" fn ambulkdelete(
                 callback_state,
             );
         }
-        StorageType::PQ => {
-            unimplemented!();
+        StorageType::PqCompression => {
+            bulk_delete_for_storage::<PqCompressionStorage>(
+                &index_relation,
+                nblocks,
+                results,
+                callback,
+                callback_state,
+            );
         }
         StorageType::Plain => {
             bulk_delete_for_storage::<PlainStorage>(
@@ -74,7 +85,7 @@ fn bulk_delete_for_storage<S: Storage>(
 ) {
     for block_number in 0..nblocks {
         let page = unsafe { WritablePage::cleanup(&index, block_number) };
-        if page.get_type() != PageType::Node {
+        if page.get_type() != S::page_type() {
             continue;
         }
         let mut modified = false;
@@ -156,13 +167,24 @@ pub mod tests {
         )
         .unwrap();
 
+        let suffix = (1..=253)
+            .map(|i| format!("{}", i))
+            .collect::<Vec<String>>()
+            .join(", ");
+
         let (mut client, _) = pgrx_tests::client().unwrap();
 
         client
             .batch_execute(&format!(
-                "CREATE TABLE test_vac(embedding vector(3));
+                "CREATE TABLE test_vac(embedding vector(256));
 
-        INSERT INTO test_vac(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+        INSERT INTO test_vac (embedding)
+        SELECT
+            ('[' || i || ',1,1,{suffix}]')::vector
+        FROM generate_series(1, 300) i;
+
+
+        INSERT INTO test_vac(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
         CREATE INDEX idxtest_vac
               ON test_vac
@@ -173,12 +195,15 @@ pub mod tests {
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
 
-        assert_eq!(cnt, 3);
+        assert_eq!(cnt, 303);
 
         client
-            .execute("DELETE FROM test_vac WHERE embedding = '[1,2,3]';", &[])
+            .execute(
+                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
+                &[],
+            )
             .unwrap();
 
         client.close().unwrap();
@@ -190,15 +215,15 @@ pub mod tests {
         //inserts into the previous 1,2,3 spot that was deleted
         client
             .execute(
-                "INSERT INTO test_vac(embedding) VALUES ('[10,12,13]');",
+                &format!("INSERT INTO test_vac(embedding) VALUES ('[10,12,13,{suffix}]');"),
                 &[],
             )
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-        //if the old index is still used the count is 4
-        assert_eq!(cnt, 3);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        //if the old index is still used the count is 304
+        assert_eq!(cnt, 303);
 
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
@@ -225,11 +250,22 @@ pub mod tests {
 
         let (mut client, _) = pgrx_tests::client().unwrap();
 
+        let suffix = (1..=253)
+            .map(|i| format!("{}", i))
+            .collect::<Vec<String>>()
+            .join(", ");
+
         client
             .batch_execute(&format!(
-                "CREATE TABLE test_vac_full(embedding vector(3));
+                "CREATE TABLE test_vac_full(embedding vector(256));
 
-        INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
+        -- generate 300 vectors
+        INSERT INTO test_vac_full (embedding)
+        SELECT
+            ('[' || i || ',2,3,{suffix}]')::vector
+        FROM generate_series(1, 300) i;
+
+        INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
         CREATE INDEX idxtest_vac_full
               ON test_vac_full
@@ -240,11 +276,23 @@ pub mod tests {
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-
-        assert_eq!(cnt, 3);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        std::thread::sleep(std::time::Duration::from_millis(10000));
+        assert_eq!(cnt, 303);
 
         client.execute("DELETE FROM test_vac_full", &[]).unwrap();
+
+        client
+            .execute(
+                &format!(
+                    "INSERT INTO test_vac_full (embedding)
+        SELECT
+            ('[' || i || ',2,3,{suffix}]')::vector
+        FROM generate_series(1, 300) i;"
+                ),
+                &[],
+            )
+            .unwrap();
 
         client.close().unwrap();
 
@@ -253,14 +301,14 @@ pub mod tests {
 
         client
             .execute(
-                "INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3]');",
+                &format!("INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3,{suffix}]');"),
                 &[],
             )
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1]') SELECT count(*) from cte;", &[]).unwrap().get(0);
-        assert_eq!(cnt, 1);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        assert_eq!(cnt, 301);
 
         client.execute("DROP INDEX idxtest_vac_full", &[]).unwrap();
         client.execute("DROP TABLE test_vac_full", &[]).unwrap();

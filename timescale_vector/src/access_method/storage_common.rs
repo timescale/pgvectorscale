@@ -3,13 +3,14 @@ use pgrx::pg_sys::Item;
 use crate::util::{table_slot::TableSlot, HeapPointer, IndexPointer};
 
 use super::{
+    pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeRead},
     storage::{NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
 
 pub struct HeapFullDistanceMeasure<'a, S: Storage + StorageFullDistanceFromHeap> {
-    table_slot: TableSlot,
     storage: &'a S,
+    vector: PgVector,
 }
 
 impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S> {
@@ -20,8 +21,8 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S
     ) -> Self {
         let slot = storage.get_heap_table_slot_from_index_pointer(index_pointer, stats);
         Self {
-            table_slot: slot,
             storage: storage,
+            vector: slot.get_pg_vector(),
         }
     }
 
@@ -32,8 +33,8 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S
     ) -> Self {
         let slot = storage.get_heap_table_slot_from_heap_pointer(heap_pointer, stats);
         Self {
-            table_slot: slot,
             storage: storage,
+            vector: slot.get_pg_vector(),
         }
     }
 }
@@ -51,7 +52,7 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeFullDistanceMeasure
             .get_heap_table_slot_from_index_pointer(index_pointer, stats);
         stats.record_full_distance_comparison();
         let slice1 = slot.get_pg_vector();
-        let slice2 = self.table_slot.get_pg_vector();
+        let slice2 = &self.vector;
         (self.storage.get_distance_function())(slice1.to_slice(), slice2.to_slice())
     }
 }
