@@ -232,13 +232,21 @@ pub mod tests {
         //if the old index is still used the count is 304
         assert_eq!(cnt, 303);
 
+        //do another delete for same items (noop)
+        client
+            .execute(
+                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
+                &[],
+            )
+            .unwrap();
+
+        client.execute("set enable_seqscan = 0;", &[]).unwrap();
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        //if the old index is still used the count is 304
+        assert_eq!(cnt, 303);
+
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
-    }
-
-    #[test]
-    fn test_delete_vacuum_plain() {
-        test_delete_vacuum_plain_scaffold("num_neighbors=30");
     }
 
     static VAC_FULL_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
@@ -326,49 +334,9 @@ pub mod tests {
         client.execute("DROP TABLE test_vac_full", &[]).unwrap();
     }
 
-    #[test]
-    fn test_delete_vacuum_full() {
-        test_delete_vacuum_full_scaffold("num_neighbors=30")
-    }
-
     #[pg_test]
     ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
     fn test_delete_mock_fn() -> spi::Result<()> {
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_delete() -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test(embedding vector(3));
-
-            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
-
-            CREATE INDEX idxtest
-                  ON test
-               USING tsv(embedding)
-                WITH (num_neighbors=30);
-
-            DELETE FROM test WHERE embedding = '[1,2,3]';
-            ",
-        ))?;
-
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(2, res.unwrap());
-
-        //delete same thing again -- should be a no-op;
-        Spi::run(&format!("DELETE FROM test WHERE embedding = '[1,2,3]';",))?;
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[1,1,1]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(2, res.unwrap());
-
-        Spi::run(&format!("drop index idxtest;",))?;
-
         Ok(())
     }
 }

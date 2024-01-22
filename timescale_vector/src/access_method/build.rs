@@ -551,7 +551,8 @@ FROM generate_series(1, 1536)"
             )],
         )?;
 
-        /*let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
+        /* Test that the explain plan is generated ok */
+        let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
             &format!(
                 "
         SET enable_seqscan = 0;
@@ -572,8 +573,8 @@ FROM generate_series(1, 1536)"
                 test_vec.clone().into_datum(),
             )],
         )?;
-        warning!("explain: {}", explain.unwrap().0);
-        assert!(false);*/
+        assert!(explain.is_some());
+        //warning!("explain: {}", explain.unwrap().0);
 
         let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
             &format!(
@@ -593,7 +594,7 @@ FROM generate_series(1, 1536)"
             ),
             vec![(
                 pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.into_datum(),
+                test_vec.clone().into_datum(),
             )],
         )?;
 
@@ -611,114 +612,26 @@ FROM generate_series(1, 1536)"
         }
         assert!(matches > 9, "Low number of matches: {}", matches);
 
-        Ok(())
-    }
+        //FIXME: should work in all cases
+        if !index_options.contains("num_neighbors=10") {
+            //make sure you can scan entire table with index
+            let cnt: Option<i64> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET tsv.query_search_list_size = 2;
+        WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+        ",
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.into_datum(),
+            )],
+        )?;
 
-    #[pg_test]
-    unsafe fn test_index_creation() -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test(embedding vector(3));
-
-            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
-
-            CREATE INDEX idxtest
-                  ON test
-               USING tsv(embedding)
-                WITH (num_neighbors=30);
-
-            set enable_seqscan =0;
-            select * from test order by embedding <=> '[0,0,0]';
-            explain analyze select * from test order by embedding <=> '[0,0,0]';
-            drop index idxtest;
-            ",
-        ))?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_pq_index_creation() -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test_pq (
-                embedding vector (1536)
-            );
-
-           -- generate 300 vectors
-            INSERT INTO test_pq (embedding)
-            SELECT
-                *
-            FROM (
-                SELECT
-                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                FROM
-                    generate_series(1, 1536 * 300) i
-                GROUP BY
-                    i % 300) g;
-
-            CREATE INDEX idx_tsv_pq ON test_pq USING tsv (embedding) WITH (num_neighbors = 64, search_list_size = 125, max_alpha = 1.0, use_pq = TRUE, pq_vector_length = 64);
-
-            ;
-
-            SET enable_seqscan = 0;
-            -- perform index scans on the vectors
-            SELECT
-                *
-            FROM
-                test_pq
-            ORDER BY
-                embedding <=> (
-                    SELECT
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
-
-            EXPLAIN ANALYZE
-            SELECT
-                *
-            FROM
-                test_pq
-            ORDER BY
-                embedding <=> (
-                    SELECT
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
-
-            DROP INDEX idx_tsv_pq;
-            ",
-        ))?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_insert() -> spi::Result<()> {
-        Spi::run(&format!(
-            "CREATE TABLE test(embedding vector(3));
-
-            INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
-
-            CREATE INDEX idxtest
-                  ON test
-               USING tsv(embedding)
-                WITH (num_neighbors=30);
-
-            INSERT INTO test(embedding) VALUES ('[11,12,13]');
-            ",
-        ))?;
-
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(4, res.unwrap());
-
-        Spi::run(&format!(
-            "INSERT INTO test(embedding) VALUES ('[11,12,13]'),  ('[14,15,16]');",
-        ))?;
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
-        assert_eq!(6, res.unwrap());
-
-        Spi::run(&format!("drop index idxtest;",))?;
+            assert_eq!(cnt.unwrap(), 312);
+        }
 
         Ok(())
     }
@@ -742,6 +655,13 @@ FROM generate_series(1, 1536)"
                 WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
         ))?;
         assert_eq!(3, res.unwrap());
+
+        Spi::run(&format!(
+            "
+        set enable_seqscan = 0;
+        explain analyze select * from test order by embedding <=> '[0,0,0]';
+        ",
+        ))?;
 
         Spi::run(&format!("drop index idxtest;",))?;
 
