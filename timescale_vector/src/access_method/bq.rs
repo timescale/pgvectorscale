@@ -13,8 +13,7 @@ use super::{
 use std::{collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    info,
-    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber},
+    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};

@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use pgrx::PgRelation;
-use rkyv::Deserialize;
 
 use crate::util::ItemPointer;
 

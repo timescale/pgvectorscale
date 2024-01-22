@@ -5,7 +5,6 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::bq::BqSpeedupStorage;
 use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random

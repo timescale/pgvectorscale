@@ -3,11 +3,8 @@ use pgrx::{error, notice, PgRelation};
 use rand::Rng;
 use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
-use crate::{
-    access_method::{
-        distance::distance_l2_optimized_for_few_dimensions, pq_quantizer_storage::read_pq,
-    },
-    util::IndexPointer,
+use crate::access_method::{
+    distance::distance_l2_optimized_for_few_dimensions, pq_quantizer_storage::read_pq,
 };
 
 use super::{

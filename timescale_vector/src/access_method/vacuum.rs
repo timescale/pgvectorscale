@@ -1,5 +1,3 @@
-use core::panic;
-
 use pgrx::{
     pg_sys::{FirstOffsetNumber, IndexBulkDeleteResult},
     *,
@@ -11,7 +9,7 @@ use crate::{
         pq_storage::PqCompressionStorage,
     },
     util::{
-        page::{PageType, WritablePage},
+        page::WritablePage,
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
         ItemPointer,
     },

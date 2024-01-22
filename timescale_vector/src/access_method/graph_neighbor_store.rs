@@ -1,11 +1,8 @@
 use std::collections::HashMap;
-use std::time::Instant;
-
-use pgrx::*;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::stats::{PruneNeighborStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
+use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
 
 use super::meta_page::MetaPage;
 use super::model::*;

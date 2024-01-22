@@ -8,25 +8,14 @@ use super::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
         WriteStats,
     },
-    storage::{ArchivedData, NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
-    storage_common::{calculate_full_distance, HeapFullDistanceMeasure},
+    storage::{ArchivedData, NodeFullDistanceMeasure, Storage},
 };
-use std::{collections::HashMap, iter::once, pin::Pin};
 
-use pgrx::{
-    info,
-    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber},
-    PgRelation,
-};
-use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
+use pgrx::PgRelation;
 
-use crate::util::{
-    page::PageType, table_slot::TableSlot, tape::Tape, ArchivedItemPointer, HeapPointer,
-    IndexPointer, ItemPointer, ReadableBuffer,
-};
+use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{meta_page::MetaPage, model::NeighborWithDistance};
-use crate::util::WritableBuffer;
 
 pub struct PlainStorage<'a> {
     pub index: &'a PgRelation,

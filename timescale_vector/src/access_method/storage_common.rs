@@ -1,6 +1,4 @@
-use pgrx::pg_sys::Item;
-
-use crate::util::{table_slot::TableSlot, HeapPointer, IndexPointer};
+use crate::util::{HeapPointer, IndexPointer};
 
 use super::{
     pg_vector::PgVector,

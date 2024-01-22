@@ -1,23 +1,6 @@
 use std::cmp::Ordering;
-use std::mem::size_of;
-use std::pin::Pin;
 
-use ndarray::Array3;
-use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ};
-use pgrx::*;
-use reductive::pq::Pq;
-use rkyv::vec::ArchivedVec;
-use rkyv::{Archive, Archived, Deserialize, Serialize};
-
-use crate::util::page::PageType;
-use crate::util::tape::Tape;
-use crate::util::{
-    ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
-};
-
-use super::meta_page::MetaPage;
-use super::stats::StatsNodeRead;
-use super::storage::StorageType;
+use crate::util::{IndexPointer, ItemPointer};
 
 //TODO is this right?
 pub type Distance = f32;
