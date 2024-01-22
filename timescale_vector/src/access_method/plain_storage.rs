@@ -170,11 +170,11 @@ impl<'a> Storage for PlainStorage<'a> {
         index_pointer
     }
 
-    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {}
+    fn start_training(&mut self, _meta_page: &super::meta_page::MetaPage) {}
 
-    fn add_sample(&mut self, sample: &[f32]) {}
+    fn add_sample(&mut self, _sample: &[f32]) {}
 
-    fn finish_training(&mut self, stats: &mut WriteStats) {}
+    fn finish_training(&mut self, _stats: &mut WriteStats) {}
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
@@ -264,7 +264,7 @@ impl<'a> Storage for PlainStorage<'a> {
         //clone needed so we don't continue to borrow lsr
         let neighbors = lsn.get_private_data().neighbors.clone();
 
-        for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
+        for &neighbor_index_pointer in neighbors.iter() {
             if !lsr.prepare_insert(neighbor_index_pointer) {
                 continue;
             }

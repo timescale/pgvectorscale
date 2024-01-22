@@ -6,6 +6,7 @@ use super::{
     plain_node::{ArchivedNode, Node},
     plain_storage::PlainStorageLsnPrivateData,
     pq_quantizer::{PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
+    pq_quantizer_storage::write_pq,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
         WriteStats,
@@ -114,7 +115,7 @@ impl<'a> PqCompressionStorage<'a> {
 
     fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
         let pq = self.quantizer.must_get_pq();
-        let index_pointer: IndexPointer = unsafe { super::model::write_pq(pq, &self.index) };
+        let index_pointer: IndexPointer = unsafe { write_pq(pq, &self.index) };
         super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
     }
 

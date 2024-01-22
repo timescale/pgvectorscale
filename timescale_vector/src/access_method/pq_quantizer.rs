@@ -5,8 +5,7 @@ use reductive::pq::{Pq, QuantizeVector, TrainPq};
 
 use crate::{
     access_method::{
-        distance::distance_l2_optimized_for_few_dimensions,
-        model::{self, read_pq},
+        distance::distance_l2_optimized_for_few_dimensions, pq_quantizer_storage::read_pq,
     },
     util::IndexPointer,
 };
@@ -171,39 +170,6 @@ impl PqQuantizer {
     pub fn must_get_pq(&self) -> &Pq<f32> {
         self.pq.as_ref().unwrap()
     }
-
-    /*pub fn load2(&mut self, index_relation: &PgRelation, meta_page: &super::meta_page::MetaPage) {
-        assert!(self.pq_trainer.is_none());
-        let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-        self.pq = unsafe { Some(read_pq(&index_relation, &pq_item_pointer)) };
-    }*/
-
-    /*pub fn update_node_after_traing(
-        &self,
-        index: &PgRelation,
-        meta: &MetaPage,
-        index_pointer: IndexPointer,
-        neighbors: &Vec<NeighborWithDistance>,
-    ) {
-        let node = unsafe { Node::modify(index, index_pointer) };
-        let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, &meta);
-
-        let heap_pointer = node
-            .get_archived_node()
-            .heap_item_pointer
-            .deserialize_item_pointer();
-
-        let full_vector = unsafe { self.get_full_vector_copy_from_heap_pointer(heap_pointer) };
-        let pq_vector = self.quantize(full_vector);
-
-        assert!(pq_vector.len() == archived.pq_vector.len());
-        for i in 0..=pq_vector.len() - 1 {
-            let mut pgv = archived.as_mut().pq_vectors().index_pin(i);
-            *pgv = pq_vector[i];
-        }
-        node.commit();
-    }*/
 
     pub fn quantize(&self, full_vector: &[f32]) -> Vec<PqVectorElement> {
         assert!(self.pq.is_some());

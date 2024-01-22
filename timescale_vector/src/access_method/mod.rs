@@ -24,6 +24,7 @@ pub mod distance;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
 mod pq_quantizer;
+mod pq_quantizer_storage;
 mod pq_storage;
 
 #[pg_extern(sql = "
