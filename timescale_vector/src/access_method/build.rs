@@ -211,7 +211,7 @@ fn do_heap_scan<'a>(
     index_relation: &'a PgRelation,
     meta_page: MetaPage,
 ) -> usize {
-    let mut storage = meta_page.get_storage_type();
+    let storage = meta_page.get_storage_type();
 
     let mut mp2 = meta_page.clone();
     let graph = Graph::new(
@@ -446,6 +446,8 @@ pub mod tests {
     use pgrx::*;
 
     use crate::util::ItemPointer;
+
+    //TODO: add test where inserting and querying with vectors that are all the same.
 
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_creation_and_accuracy_scaffold(

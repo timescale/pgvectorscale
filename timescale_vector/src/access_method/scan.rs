@@ -302,11 +302,3 @@ fn end_scan<S: Storage>(
         iter.lsr.stats.get_quantized_distance_comparisons(),
     );
 }
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pgrx::pg_schema]
-mod tests {
-    use pgrx::*;
-
-    //TODO: add test where inserting and querying with vectors that are all the same.
-}

@@ -91,13 +91,11 @@ impl GraphNeighborStore {
             GraphNeighborStore::Builder(b) => {
                 b.get_neighbors_with_full_vector_distances(neighbors_of, result)
             }
-            GraphNeighborStore::Disk => unsafe {
-                storage.get_neighbors_with_full_vector_distances_from_disk(
-                    neighbors_of,
-                    result,
-                    stats,
-                )
-            },
+            GraphNeighborStore::Disk => storage.get_neighbors_with_full_vector_distances_from_disk(
+                neighbors_of,
+                result,
+                stats,
+            ),
         };
     }
 
