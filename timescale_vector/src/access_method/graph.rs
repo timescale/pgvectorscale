@@ -260,14 +260,12 @@ impl<'a> Graph<'a> {
         query: PgVector,
         meta_page: &MetaPage,
         storage: &S,
-    ) -> (
-        ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
-        HashSet<NeighborWithDistance>,
-    ) {
+        stats: &mut GreedySearchStats,
+    ) -> HashSet<NeighborWithDistance> {
         let init_ids = self.get_init_ids();
         if let None = init_ids {
             //no nodes in the graph
-            return (ListSearchResult::empty(), HashSet::with_capacity(0));
+            return HashSet::with_capacity(0);
         }
         let dm = storage.get_search_distance_measure(query, false);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
@@ -283,7 +281,8 @@ impl<'a> Graph<'a> {
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
         self.greedy_search_iterate(&mut l, search_list_size, Some(&mut visited_nodes), storage);
-        return (l, visited_nodes);
+        stats.combine(&l.stats);
+        return visited_nodes;
     }
 
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
@@ -478,7 +477,8 @@ impl<'a> Graph<'a> {
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
-        let (l, v) = self.greedy_search_for_build(vec, meta_page, storage);
+        let v =
+            self.greedy_search_for_build(vec, meta_page, storage, &mut stats.greedy_search_stats);
 
         let (_, neighbor_list) = self.add_neighbors(
             storage,

@@ -68,7 +68,6 @@ pub struct GreedySearchStats {
     full_distance_comparisons: usize,
     node_reads: usize,
     quantized_distance_comparisons: usize,
-    quantizer_stats: Option<QuantizerStats>,
 }
 
 impl GreedySearchStats {
@@ -78,12 +77,14 @@ impl GreedySearchStats {
             full_distance_comparisons: 0,
             node_reads: 0,
             quantized_distance_comparisons: 0,
-            quantizer_stats: None,
         }
     }
 
-    pub fn set_quantizer_stats(&mut self, quantizer_stats: QuantizerStats) {
-        self.quantizer_stats = Some(quantizer_stats);
+    pub fn combine(&mut self, other: &Self) {
+        self.calls += other.calls;
+        self.full_distance_comparisons += other.full_distance_comparisons;
+        self.node_reads += other.node_reads;
+        self.quantized_distance_comparisons += other.quantized_distance_comparisons;
     }
 
     pub fn get_calls(&self) -> usize {

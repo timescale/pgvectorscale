@@ -84,6 +84,7 @@ struct TSVResponseIterator<QDM, PD> {
     current: usize,
     last_buffer: Option<PinnedBufferShare>,
     meta_page: MetaPage,
+    quantizer_stats: QuantizerStats,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -93,13 +94,12 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         query: PgVector,
         search_list_size: usize,
         _meta_page: MetaPage,
-        stats: QuantizerStats,
+        quantizer_stats: QuantizerStats,
     ) -> Self {
         let mut meta_page = MetaPage::read(&index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
-        let mut lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
-        lsr.stats.set_quantizer_stats(stats);
+        let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
 
         Self {
             search_list_size,
@@ -107,6 +107,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             current: 0,
             last_buffer: None,
             meta_page,
+            quantizer_stats,
         }
     }
 }
@@ -295,10 +296,12 @@ fn end_scan<S: Storage>(
     iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
 ) {
     debug1!(
-        "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}",
+        "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}",
         iter.lsr.stats.get_node_reads(),
         iter.lsr.stats.get_calls(),
         iter.lsr.stats.get_total_distance_comparisons(),
         iter.lsr.stats.get_quantized_distance_comparisons(),
+        iter.quantizer_stats.node_reads,
+        iter.quantizer_stats.node_writes,
     );
 }
