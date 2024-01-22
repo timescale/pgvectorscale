@@ -151,10 +151,17 @@ pub extern "C" fn amvacuumcleanup(
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 pub mod tests {
+    use once_cell::sync::Lazy;
     use pgrx::*;
+    use std::sync::Mutex;
+
+    static VAC_PLAIN_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
 
     #[cfg(test)]
     pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
+        //do not run this test in parallel. (pgrx tests run in a txn rolled back after each test, but we do not have that luxury here).
+        let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
+
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.
@@ -234,8 +241,13 @@ pub mod tests {
         test_delete_vacuum_plain_scaffold("num_neighbors=30");
     }
 
+    static VAC_FULL_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+
     #[cfg(test)]
     pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
+        //do not run this test in parallel
+        let _lock = VAC_FULL_MUTEX.lock().unwrap();
+
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
         //hackery to bring up the test db and then use a client to run queries against it.

@@ -774,14 +774,4 @@ FROM generate_series(1, 1536)"
 
         Ok(())
     }
-
-    #[pg_test]
-    unsafe fn test_empty_table_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_empty_table_insert_scaffold("num_neighbors=30")
-    }
-
-    #[pg_test]
-    unsafe fn test_insert_empty_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_insert_empty_insert_scaffold("num_neighbors=30")
-    }
 }
