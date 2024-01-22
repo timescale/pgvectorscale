@@ -59,7 +59,7 @@ impl<'a> PqCompressionStorage<'a> {
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
     ) -> PqQuantizer {
-        unsafe { PqQuantizer::load(&index_relation, meta_page, stats) }
+        PqQuantizer::load(&index_relation, meta_page, stats)
     }
 
     pub fn load_for_insert<S: StatsNodeRead>(
@@ -92,17 +92,6 @@ impl<'a> PqCompressionStorage<'a> {
         }
     }
 
-    //todo can we delete?
-    fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> Vec<PqVectorElement> {
-        let slot = unsafe { self.get_heap_table_slot_from_index_pointer(index_pointer, stats) };
-        let slice = unsafe { slot.get_pg_vector() };
-        self.quantizer.quantize(slice.to_slice())
-    }
-
     fn get_quantized_vector_from_heap_pointer<S: StatsNodeRead>(
         &self,
         heap_pointer: HeapPointer,
@@ -115,7 +104,7 @@ impl<'a> PqCompressionStorage<'a> {
 
     fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
         let pq = self.quantizer.must_get_pq();
-        let index_pointer: IndexPointer = unsafe { write_pq(pq, &self.index) };
+        let index_pointer: IndexPointer = unsafe { write_pq(pq, &self.index, stats) };
         super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
     }
 
@@ -128,7 +117,7 @@ impl<'a> PqCompressionStorage<'a> {
         neighbors: &[ItemPointer],
         gns: &GraphNeighborStore,
     ) {
-        for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
+        for &neighbor_index_pointer in neighbors.iter() {
             if !lsr.prepare_insert(neighbor_index_pointer) {
                 continue;
             }
@@ -338,7 +327,7 @@ impl<'a> Storage for PqCompressionStorage<'a> {
     fn return_lsn(
         &self,
         lsn: &ListSearchNeighbor<Self::LSNPrivateData>,
-        stats: &mut GreedySearchStats,
+        _stats: &mut GreedySearchStats,
     ) -> HeapPointer {
         lsn.get_private_data().heap_pointer
     }

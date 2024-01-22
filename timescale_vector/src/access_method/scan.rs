@@ -50,7 +50,7 @@ impl TSVScanState {
 
         let store_type = match storage {
             StorageType::Plain => {
-                let mut stats = QuantizerStats::new();
+                let stats = QuantizerStats::new();
                 let bq = PlainStorage::load_for_search(index);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
@@ -58,7 +58,7 @@ impl TSVScanState {
             }
             StorageType::PqCompression => {
                 let mut stats = QuantizerStats::new();
-                let quantizer = unsafe { PqQuantizer::load(index, &meta_page, &mut stats) };
+                let quantizer = PqQuantizer::load(index, &meta_page, &mut stats);
                 let pq = PqCompressionStorage::load_for_search(index, &quantizer);
                 let it =
                     TSVResponseIterator::new(&pq, index, query, search_list_size, meta_page, stats);

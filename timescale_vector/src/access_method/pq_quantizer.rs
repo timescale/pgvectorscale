@@ -159,7 +159,7 @@ impl PqQuantizer {
         stats: &mut S,
     ) -> Self {
         let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-        let pq = unsafe { Some(read_pq(&index_relation, &pq_item_pointer, stats)) };
+        let pq = unsafe { Some(read_pq(&index_relation, pq_item_pointer, stats)) };
 
         Self {
             pq_trainer: None,

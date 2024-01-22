@@ -8,6 +8,7 @@ use pgrx::*;
 use reductive::pq::Pq;
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Archived, Deserialize, Serialize};
+use timescale_vector_derive::{Readable, Writeable};
 
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
@@ -16,10 +17,10 @@ use crate::util::{
 };
 
 use super::meta_page::MetaPage;
-use super::stats::StatsNodeRead;
+use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
 use super::storage::StorageType;
 
-#[derive(Archive, Deserialize, Serialize)]
+#[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 #[repr(C)]
 pub struct PqQuantizerDef {
@@ -45,34 +46,9 @@ impl PqQuantizerDef {
             }
         }
     }
-
-    pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
-        let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
-        tape.write(&bytes)
-    }
-    pub unsafe fn read<'a>(
-        index: &'a PgRelation,
-        index_pointer: &ItemPointer,
-    ) -> ReadablePqQuantizerDef<'a> {
-        let rb = index_pointer.read_bytes(index);
-        ReadablePqQuantizerDef { _rb: rb }
-    }
 }
 
-pub struct ReadablePqQuantizerDef<'a> {
-    _rb: ReadableBuffer<'a>,
-}
-
-impl<'a> ReadablePqQuantizerDef<'a> {
-    pub fn get_archived_node(&self) -> &ArchivedPqQuantizerDef {
-        // checking the code here is expensive during build, so skip it.
-        // TODO: should we check the data during queries?
-        //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
-        unsafe { rkyv::archived_root::<PqQuantizerDef>(self._rb.get_data_slice()) }
-    }
-}
-
-#[derive(Archive, Deserialize, Serialize)]
+#[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 #[repr(C)]
 pub struct PqQuantizerVector {
@@ -80,41 +56,13 @@ pub struct PqQuantizerVector {
     next_vector_pointer: ItemPointer,
 }
 
-impl PqQuantizerVector {
-    pub unsafe fn write(&self, tape: &mut Tape) -> ItemPointer {
-        let bytes = rkyv::to_bytes::<_, 8192>(self).unwrap();
-        tape.write(&bytes)
-    }
-    pub unsafe fn read<'a>(
-        index: &'a PgRelation,
-        index_pointer: &ItemPointer,
-    ) -> ReadablePqVectorNode<'a> {
-        let rb = index_pointer.read_bytes(index);
-        ReadablePqVectorNode { _rb: rb }
-    }
-}
-
-//ReadablePqNode ties an archive node to it's underlying buffer
-pub struct ReadablePqVectorNode<'a> {
-    _rb: ReadableBuffer<'a>,
-}
-
-impl<'a> ReadablePqVectorNode<'a> {
-    pub fn get_archived_node(&self) -> &ArchivedPqQuantizerVector {
-        // checking the code here is expensive during build, so skip it.
-        // TODO: should we check the data during queries?
-        //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
-        unsafe { rkyv::archived_root::<PqQuantizerVector>(self._rb.get_data_slice()) }
-    }
-}
-
 pub unsafe fn read_pq<S: StatsNodeRead>(
     index: &PgRelation,
-    index_pointer: &IndexPointer,
+    index_pointer: IndexPointer,
     stats: &mut S,
 ) -> Pq<f32> {
     //TODO: handle stats better
-    let rpq = PqQuantizerDef::read(index, &index_pointer);
+    let rpq = PqQuantizerDef::read(index, index_pointer, stats);
     stats.record_read();
     let rpn = rpq.get_archived_node();
     let size = rpn.dim_0 * rpn.dim_1 * rpn.dim_2;
@@ -124,8 +72,7 @@ pub unsafe fn read_pq<S: StatsNodeRead>(
         if next.offset == 0 && next.block_number == 0 {
             break;
         }
-        let qvn = PqQuantizerVector::read(index, &next);
-        stats.record_read();
+        let qvn = PqQuantizerVector::read(index, next, stats);
         let vn = qvn.get_archived_node();
         result.extend(vn.vec.iter());
         next = vn.next_vector_pointer.deserialize_item_pointer();
@@ -138,7 +85,11 @@ pub unsafe fn read_pq<S: StatsNodeRead>(
     Pq::new(None, sq)
 }
 
-pub unsafe fn write_pq(pq: &Pq<f32>, index: &PgRelation) -> ItemPointer {
+pub unsafe fn write_pq<S: StatsNodeWrite>(
+    pq: &Pq<f32>,
+    index: &PgRelation,
+    stats: &mut S,
+) -> ItemPointer {
     let vec = pq.subquantizers().to_slice_memory_order().unwrap().to_vec();
     let shape = pq.subquantizers().dim();
     let mut pq_node = PqQuantizerDef::new(shape.0, shape.1, shape.2, vec.len());
@@ -160,7 +111,7 @@ pub unsafe fn write_pq(pq: &Pq<f32>, index: &PgRelation) -> ItemPointer {
         let l = prev_vec.len();
         if l == 0 {
             pq_node.next_vector_pointer = prev;
-            return pq_node.write(&mut pqt);
+            return pq_node.write(&mut pqt, stats);
         }
         let lv = prev_vec;
         let ni = if l > block_fit { l - block_fit } else { 0 };
@@ -170,8 +121,8 @@ pub unsafe fn write_pq(pq: &Pq<f32>, index: &PgRelation) -> ItemPointer {
             vec: a.to_vec(),
             next_vector_pointer: prev,
         };
-        let index_pointer: IndexPointer = pqv_node.write(&mut tape);
+        let index_pointer: IndexPointer = pqv_node.write(&mut tape, stats);
         prev = index_pointer;
-        prev_vec = b.clone().to_vec();
+        prev_vec = b.to_vec();
     }
 }
