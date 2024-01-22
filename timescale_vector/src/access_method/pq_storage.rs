@@ -198,7 +198,8 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
-        let node = Node::new_for_pq(heap_pointer, meta_page);
+        let pq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
+        let node = Node::new_for_pq(heap_pointer, pq_vector, meta_page);
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
@@ -422,17 +423,42 @@ mod tests {
         );
     }
 
-    #[pg_test]
-    unsafe fn test_pq_storage_empty_table_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_empty_table_insert_scaffold(
-            "num_neighbors=38, use_pq = TRUE",
-        )
-    }
+    /* can't run test_pq_storage_empty_table_insert because can't create pq index on pq table  */
 
     #[pg_test]
     unsafe fn test_pq_storage_insert_empty_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
-            "num_neighbors=38, use_pq = TRUE",
-        )
+        let suffix = (1..=253)
+            .map(|i| format!("{}", i))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(256));
+
+            INSERT INTO test (embedding)
+            SELECT
+                ('[' || i || ',2,3,{suffix}]')::vector
+            FROM generate_series(1, 300) i;
+
+            CREATE INDEX idxtest
+                  ON test
+               USING tsv(embedding)
+                WITH (num_neighbors = 10, use_pq = TRUE);
+
+            DELETE FROM test;
+
+            INSERT INTO test(embedding) VALUES ('[1,2,3,{suffix}]'), ('[14,15,16,{suffix}]');
+            ",
+        ))?;
+
+        let res: Option<i64> = Spi::get_one(&format!(
+            "   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0,{suffix}]') SELECT count(*) from cte;",
+        ))?;
+        assert_eq!(2, res.unwrap());
+
+        Spi::run(&format!("drop index idxtest;",))?;
+
+        Ok(())
     }
 }

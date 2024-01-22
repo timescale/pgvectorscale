@@ -7,6 +7,7 @@ use rkyv::{Archive, Archived, Deserialize, Serialize};
 use timescale_vector_derive::{Readable, Writeable};
 
 use super::model::NeighborWithDistance;
+use super::pq_quantizer::PqVectorElement;
 use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
 use super::storage::ArchivedData;
 use crate::util::tape::Tape;
@@ -52,11 +53,12 @@ impl Node {
         Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
     }
 
-    pub fn new_for_pq(heap_item_pointer: ItemPointer, meta_page: &MetaPage) -> Self {
+    pub fn new_for_pq(
+        heap_item_pointer: ItemPointer,
+        pq_vector: Vec<PqVectorElement>,
+        meta_page: &MetaPage,
+    ) -> Self {
         let vector = Vec::with_capacity(0);
-
-        let pq_vec_len = meta_page.get_pq_vector_length();
-        let pq_vector = (0..pq_vec_len).map(|_| 0u8).collect();
 
         Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
     }
