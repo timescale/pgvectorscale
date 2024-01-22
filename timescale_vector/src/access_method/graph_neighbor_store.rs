@@ -5,7 +5,7 @@ use crate::util::{IndexPointer, ItemPointer};
 use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
 
 use super::meta_page::MetaPage;
-use super::model::*;
+use super::neighbor_with_distance::*;
 use super::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below

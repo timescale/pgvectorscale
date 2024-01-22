@@ -23,7 +23,7 @@ use crate::util::{
     IndexPointer, ItemPointer, ReadableBuffer,
 };
 
-use super::{meta_page::MetaPage, model::NeighborWithDistance};
+use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
 type BqVectorElement = u8;

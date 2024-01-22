@@ -15,7 +15,7 @@ use pgrx::PgRelation;
 
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
-use super::{meta_page::MetaPage, model::NeighborWithDistance};
+use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct PlainStorage<'a> {
     pub index: &'a PgRelation,

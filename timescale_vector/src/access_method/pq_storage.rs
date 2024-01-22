@@ -21,7 +21,7 @@ use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
 };
 
-use super::{meta_page::MetaPage, model::NeighborWithDistance};
+use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct PqCompressionStorage<'a> {
     pub index: &'a PgRelation,

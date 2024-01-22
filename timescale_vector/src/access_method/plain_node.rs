@@ -6,7 +6,7 @@ use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Archived, Deserialize, Serialize};
 use timescale_vector_derive::{Readable, Writeable};
 
-use super::model::NeighborWithDistance;
+use super::neighbor_with_distance::NeighborWithDistance;
 use super::pq_quantizer::PqVectorElement;
 use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
 use super::storage::ArchivedData;

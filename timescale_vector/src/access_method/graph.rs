@@ -11,7 +11,7 @@ use super::graph_neighbor_store::GraphNeighborStore;
 use super::pg_vector::PgVector;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats};
 use super::storage::Storage;
-use super::{meta_page::MetaPage, model::NeighborWithDistance};
+use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,

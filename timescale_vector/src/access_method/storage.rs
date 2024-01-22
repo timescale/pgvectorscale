@@ -8,7 +8,7 @@ use super::{
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     meta_page::MetaPage,
-    model::NeighborWithDistance,
+    neighbor_with_distance::NeighborWithDistance,
     pg_vector::PgVector,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
