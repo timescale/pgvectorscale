@@ -299,7 +299,7 @@ fn benchmark_distance_xor(c: &mut Criterion) {
         b.iter(|| xor_unoptimized_u64_fixed_size(black_box(&r_u64), black_box(&l_u64)))
     });
     assert!(r_u8.len() == 192);
-    group.bench_function("xor unoptimized u8", |b| {
+    group.bench_function("xor unoptimized u8 fixed size", |b| {
         b.iter(|| xor_unoptimized_u8_fixed_size(black_box(&r_u8), black_box(&l_u8)))
     });
 }
