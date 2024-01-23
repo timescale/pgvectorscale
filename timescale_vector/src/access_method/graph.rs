@@ -1,3 +1,5 @@
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
@@ -32,6 +34,14 @@ impl<PD> PartialEq for ListSearchNeighbor<PD> {
     }
 }
 
+impl<PD> Eq for ListSearchNeighbor<PD> {}
+
+impl<PD> Ord for ListSearchNeighbor<PD> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.distance.partial_cmp(&other.distance).unwrap()
+    }
+}
+
 impl<PD> ListSearchNeighbor<PD> {
     pub fn new(index_pointer: IndexPointer, distance: f32, private_data: PD) -> Self {
         assert!(!distance.is_nan());
@@ -50,8 +60,10 @@ impl<PD> ListSearchNeighbor<PD> {
 }
 
 pub struct ListSearchResult<QDM, PD> {
-    candidate_storage: Vec<ListSearchNeighbor<PD>>, //plain storage
-    best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
+    candidates: BinaryHeap<Reverse<ListSearchNeighbor<PD>>>,
+    visited: Vec<ListSearchNeighbor<PD>>,
+    //candidate_storage: Vec<ListSearchNeighbor<PD>>, //plain storage
+    //best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     max_history_size: Option<usize>,
     pub sdm: Option<QDM>,
@@ -61,8 +73,8 @@ pub struct ListSearchResult<QDM, PD> {
 impl<QDM, PD> ListSearchResult<QDM, PD> {
     fn empty() -> Self {
         Self {
-            candidate_storage: vec![],
-            best_candidate: vec![],
+            candidates: BinaryHeap::new(),
+            visited: vec![],
             inserted: HashSet::new(),
             max_history_size: None,
             sdm: None,
@@ -81,8 +93,10 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
     ) -> Self {
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
-            candidate_storage: Vec::with_capacity(search_list_size * neigbors),
-            best_candidate: Vec::with_capacity(search_list_size * neigbors),
+            candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
+            visited: Vec::with_capacity(search_list_size * 2),
+            //candidate_storage: Vec::with_capacity(search_list_size * neigbors),
+            //best_candidate: Vec::with_capacity(search_list_size * neigbors),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
             max_history_size,
             stats: GreedySearchStats::new(),
@@ -102,7 +116,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
 
     /// Internal function
     pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
-        if let Some(max_size) = self.max_history_size {
+        /*if let Some(max_size) = self.max_history_size {
             if self.best_candidate.len() >= max_size {
                 let last = self.best_candidate.last().unwrap();
                 if n >= self.candidate_storage[*last] {
@@ -111,23 +125,37 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
                 }
                 self.best_candidate.pop();
             }
-        }
-        //insert while preserving sort order.
-        let idx = self
-            .best_candidate
-            .partition_point(|x| self.candidate_storage[*x] < n);
-        self.candidate_storage.push(n);
-        let pos = self.candidate_storage.len() - 1;
-        self.best_candidate.insert(idx, pos)
+        }*/
+
+        self.candidates.push(Reverse(n));
     }
 
     pub fn get_lsn_by_idx(&self, idx: usize) -> &ListSearchNeighbor<PD> {
-        &self.candidate_storage[idx]
+        &self.visited[idx]
     }
 
     fn visit_closest(&mut self, pos_limit: usize) -> Option<usize> {
+        if self.candidates.len() == 0 {
+            return None;
+        }
+
+        if self.visited.len() > pos_limit {
+            let node_at_pos = &self.visited[pos_limit - 1];
+            let head = self.candidates.peek().unwrap();
+            if head.0.distance >= node_at_pos.distance {
+                return None;
+            }
+        }
+
+        let head = self.candidates.pop().unwrap();
+        let idx = self
+            .visited
+            .partition_point(|x| x.distance < head.0.distance);
+        self.visited.insert(idx, head.0);
+        Some(idx)
+
         //OPT: should we optimize this not to do a linear search each time?
-        let neighbor_position = self
+        /*let neighbor_position = self
             .best_candidate
             .iter()
             .position(|n| !self.candidate_storage[*n].visited);
@@ -141,7 +169,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
                 Some(self.best_candidate[pos])
             }
             None => None,
-        }
+        }*/
     }
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
@@ -150,12 +178,13 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         &mut self,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
-        if self.best_candidate.is_empty() {
+        if self.visited.len() == 0 {
             return None;
         }
-        let idx = self.best_candidate.remove(0);
-        let lsn = &self.candidate_storage[idx];
-        let heap_pointer = storage.return_lsn(lsn, &mut self.stats);
+        let lsn = self.visited.remove(0);
+        //let idx = self.best_candidate.remove(0);
+        //let lsn = &self.candidate_storage[idx];
+        let heap_pointer = storage.return_lsn(&lsn, &mut self.stats);
         return Some((heap_pointer, lsn.index_pointer));
     }
 }
@@ -322,7 +351,7 @@ impl<'a> Graph<'a> {
             match visited_nodes {
                 None => {}
                 Some(ref mut visited_nodes) => {
-                    let list_search_entry = &lsr.candidate_storage[list_search_entry_idx];
+                    let list_search_entry = &lsr.visited[list_search_entry_idx];
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
                         list_search_entry.distance,
