@@ -45,3 +45,7 @@ codegen-units = 1
 [[bench]]
 name = "distance"
 harness = false
+
+[[bench]]
+name = "lsr"
+harness = false
