@@ -241,6 +241,14 @@ fn xor_unoptimized_u8(v1: &[u8], v2: &[u8]) -> usize {
     result
 }
 
+fn xor_unoptimized_u8_fixed_size(v1: &[u8], v2: &[u8]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1[..192].iter().zip(v2[..192].iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
 fn xor_unoptimized_u64(v1: &[u64], v2: &[u64]) -> usize {
     let mut result = 0;
     for (b1, b2) in v1.iter().zip(v2.iter()) {
@@ -289,6 +297,10 @@ fn benchmark_distance_xor(c: &mut Criterion) {
     assert!(r_u64.len() == 24);
     group.bench_function("xor unoptimized u64 fixed size", |b| {
         b.iter(|| xor_unoptimized_u64_fixed_size(black_box(&r_u64), black_box(&l_u64)))
+    });
+    assert!(r_u8.len() == 192);
+    group.bench_function("xor unoptimized u8", |b| {
+        b.iter(|| xor_unoptimized_u8_fixed_size(black_box(&r_u8), black_box(&l_u8)))
     });
 }
 
