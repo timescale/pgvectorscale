@@ -188,19 +188,125 @@ fn benchmark_distance_few_dimensions(c: &mut Criterion) {
     );
 }
 
+fn pack_bools_to_u8(bools: Vec<bool>) -> Vec<u8> {
+    let mut bytes = vec![0u8; (bools.len() + 7) / 8];
+
+    for (i, &b) in bools.iter().enumerate() {
+        let byte_index = i / 8;
+        let bit_index = i % 8;
+
+        if b {
+            bytes[byte_index] |= 1 << bit_index;
+        }
+    }
+
+    bytes
+}
+
+fn pack_bools_to_u64(bools: Vec<bool>) -> Vec<u64> {
+    let mut u64s = vec![0u64; (bools.len() + 63) / 64];
+
+    for (i, &b) in bools.iter().enumerate() {
+        let u64_index = i / 64;
+        let bit_index = i % 64;
+
+        if b {
+            u64s[u64_index] |= 1 << bit_index;
+        }
+    }
+
+    u64s
+}
+
+fn pack_bools_to_u128(bools: Vec<bool>) -> Vec<u128> {
+    let mut u128s = vec![0u128; (bools.len() + 127) / 128];
+
+    for (i, &b) in bools.iter().enumerate() {
+        let u128_index = i / 128;
+        let bit_index = i % 128;
+
+        if b {
+            u128s[u128_index] |= 1 << bit_index;
+        }
+    }
+
+    u128s
+}
+
+fn xor_unoptimized_u8(v1: &[u8], v2: &[u8]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1.iter().zip(v2.iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
+fn xor_unoptimized_u64(v1: &[u64], v2: &[u64]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1.iter().zip(v2.iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
+fn xor_unoptimized_u64_fixed_size(v1: &[u64], v2: &[u64]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1[..24].iter().zip(v2[..24].iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
+fn xor_unoptimized_u128(v1: &[u128], v2: &[u128]) -> usize {
+    let mut result = 0;
+    for (b1, b2) in v1.iter().zip(v2.iter()) {
+        result += (b1 ^ b2).count_ones() as usize;
+    }
+    result
+}
+
+fn benchmark_distance_xor(c: &mut Criterion) {
+    let r: Vec<bool> = (0..1536).map(|v| v as u64 % 2 == 0).collect();
+    let l: Vec<bool> = (0..1536).map(|v| v as u64 % 3 == 0).collect();
+    let r_u8 = pack_bools_to_u8(r.clone());
+    let l_u8 = pack_bools_to_u8(l.clone());
+    let r_u64 = pack_bools_to_u64(r.clone());
+    let l_u64 = pack_bools_to_u64(l.clone());
+    let r_u128 = pack_bools_to_u128(r.clone());
+    let l_u128 = pack_bools_to_u128(l.clone());
+
+    let mut group = c.benchmark_group("Distance xor");
+    group.bench_function("xor unoptimized u8", |b| {
+        b.iter(|| xor_unoptimized_u8(black_box(&r_u8), black_box(&l_u8)))
+    });
+    group.bench_function("xor unoptimized u64", |b| {
+        b.iter(|| xor_unoptimized_u64(black_box(&r_u64), black_box(&l_u64)))
+    });
+    group.bench_function("xor unoptimized u128", |b| {
+        b.iter(|| xor_unoptimized_u128(black_box(&r_u128), black_box(&l_u128)))
+    });
+
+    assert!(r_u64.len() == 24);
+    group.bench_function("xor unoptimized u64 fixed size", |b| {
+        b.iter(|| xor_unoptimized_u64_fixed_size(black_box(&r_u64), black_box(&l_u64)))
+    });
+}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 criterion_group!(
     benches,
     benchmark_distance,
     benchmark_distance_few_dimensions,
     benchmark_distance_x86_unaligned_vectors,
-    benchmark_distance_x86_aligned_vectors
+    benchmark_distance_x86_aligned_vectors,
+    benchmark_distance_xor,
 );
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 criterion_group!(
     benches,
     benchmark_distance,
-    benchmark_distance_few_dimensions
+    benchmark_distance_few_dimensions,
+    benchmark_distance_xor,
 );
 
 criterion_main!(benches);
