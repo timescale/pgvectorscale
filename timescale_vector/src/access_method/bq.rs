@@ -1,5 +1,5 @@
 use super::{
-    distance::distance_cosine as default_distance,
+    distance::{distance_cosine as default_distance, distance_xor_optimized},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -26,8 +26,8 @@ use crate::util::{
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
-type BqVectorElement = u8;
-const BITS_STORE_TYPE_SIZE: usize = 8;
+type BqVectorElement = u64;
+const BITS_STORE_TYPE_SIZE: usize = 64;
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
@@ -199,7 +199,7 @@ impl BqDistanceTable {
 
     /// distance emits the sum of distances between each centroid in the quantized vector.
     pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
-        let count_ones = xor_unoptimized(&self.quantized_vector, bq_vector);
+        let count_ones = distance_xor_optimized(&self.quantized_vector, bq_vector);
         //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
         //but the distance is 1 - dot product, so the more count_ones the higher the distance.
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
@@ -651,9 +651,9 @@ use timescale_vector_derive::{Readable, Writeable};
 #[archive(check_bytes)]
 pub struct BqNode {
     pub heap_item_pointer: HeapPointer,
-    pub bq_vector: Vec<BqVectorElement>,
+    pub bq_vector: Vec<u64>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_vectors: Vec<Vec<BqVectorElement>>,
+    neighbor_vectors: Vec<Vec<u64>>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
 }
 
 impl BqNode {
@@ -688,7 +688,7 @@ impl ArchivedBqNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    pub fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u8>>> {
+    pub fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u64>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_vectors) }
     }
 
