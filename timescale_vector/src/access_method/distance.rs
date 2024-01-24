@@ -149,7 +149,7 @@ macro_rules! xor_arm {
     };
 }
 
-#[inline]
+#[inline(always)]
 pub fn distance_xor_optimized(a: &[u64], b: &[u64]) -> usize {
     match a.len() {
         1 => xor_arm!(a, b, 1),
