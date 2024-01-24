@@ -1,6 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use timescale_vector::access_method::distance::{
-    distance_cosine, distance_l2, distance_l2_optimized_for_few_dimensions, distance_l2_unoptimized,
+    distance_cosine, distance_l2, distance_l2_optimized_for_few_dimensions,
+    distance_l2_unoptimized, distance_xor_optimized,
 };
 
 //copy and use qdrants simd code, purely for benchmarking purposes
@@ -320,6 +321,9 @@ fn benchmark_distance_xor(c: &mut Criterion) {
     });
     group.bench_function("xor unoptimized u64 fixed size_map", |b| {
         b.iter(|| xor_unoptimized_u64_fixed_size_map(black_box(&r_u64), black_box(&l_u64)))
+    });
+    group.bench_function("xor optimized version we use in code", |b| {
+        b.iter(|| distance_xor_optimized(black_box(&r_u64), black_box(&l_u64)))
     });
     assert!(r_u128.len() == 12);
     group.bench_function("xor unoptimized u128 fixed size", |b| {
