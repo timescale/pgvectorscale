@@ -182,14 +182,6 @@ pub struct BqDistanceTable {
     quantized_vector: Vec<BqVectorElement>,
 }
 
-fn xor_unoptimized(v1: &[BqVectorElement], v2: &[BqVectorElement]) -> usize {
-    let mut result = 0;
-    for (b1, b2) in v1.iter().zip(v2.iter()) {
-        result += (b1 ^ b2).count_ones() as usize;
-    }
-    result
-}
-
 impl BqDistanceTable {
     pub fn new(query: Vec<BqVectorElement>) -> BqDistanceTable {
         BqDistanceTable {
