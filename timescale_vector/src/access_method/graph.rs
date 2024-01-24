@@ -18,7 +18,6 @@ use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
     distance: f32,
-    visited: bool,
     private_data: PD,
 }
 
@@ -50,7 +49,6 @@ impl<PD> ListSearchNeighbor<PD> {
             index_pointer,
             private_data,
             distance,
-            visited: false,
         }
     }
 
@@ -65,7 +63,6 @@ pub struct ListSearchResult<QDM, PD> {
     //candidate_storage: Vec<ListSearchNeighbor<PD>>, //plain storage
     //best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
-    max_history_size: Option<usize>,
     pub sdm: Option<QDM>,
     pub stats: GreedySearchStats,
 }
@@ -76,14 +73,12 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             candidates: BinaryHeap::new(),
             visited: vec![],
             inserted: HashSet::new(),
-            max_history_size: None,
             sdm: None,
             stats: GreedySearchStats::new(),
         }
     }
 
     fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
-        max_history_size: Option<usize>,
         init_ids: Vec<ItemPointer>,
         sdm: S::QueryDistanceMeasure,
         search_list_size: usize,
@@ -98,7 +93,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             //candidate_storage: Vec::with_capacity(search_list_size * neigbors),
             //best_candidate: Vec::with_capacity(search_list_size * neigbors),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
-            max_history_size,
             stats: GreedySearchStats::new(),
             sdm: Some(sdm),
         };
@@ -299,7 +293,6 @@ impl<'a> Graph<'a> {
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
-            Some(search_list_size),
             init_ids.unwrap(),
             dm,
             search_list_size,
@@ -329,7 +322,6 @@ impl<'a> Graph<'a> {
         let dm = storage.get_search_distance_measure(query, true);
 
         ListSearchResult::new(
-            None,
             init_ids.unwrap(),
             dm,
             search_list_size,
