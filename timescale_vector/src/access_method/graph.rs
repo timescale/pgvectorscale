@@ -110,17 +110,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
 
     /// Internal function
     pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
-        /*if let Some(max_size) = self.max_history_size {
-            if self.best_candidate.len() >= max_size {
-                let last = self.best_candidate.last().unwrap();
-                if n >= self.candidate_storage[*last] {
-                    //n is too far in the list to be the best candidate.
-                    return;
-                }
-                self.best_candidate.pop();
-            }
-        }*/
-
         self.candidates.push(Reverse(n));
     }
 
