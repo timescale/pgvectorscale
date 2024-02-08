@@ -60,8 +60,6 @@ impl<PD> ListSearchNeighbor<PD> {
 pub struct ListSearchResult<QDM, PD> {
     candidates: BinaryHeap<Reverse<ListSearchNeighbor<PD>>>,
     visited: Vec<ListSearchNeighbor<PD>>,
-    //candidate_storage: Vec<ListSearchNeighbor<PD>>, //plain storage
-    //best_candidate: Vec<usize>,                     //pos in candidate storage, sorted by distance
     inserted: HashSet<ItemPointer>,
     pub sdm: Option<QDM>,
     pub stats: GreedySearchStats,
@@ -136,23 +134,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             .partition_point(|x| x.distance < head.0.distance);
         self.visited.insert(idx, head.0);
         Some(idx)
-
-        //OPT: should we optimize this not to do a linear search each time?
-        /*let neighbor_position = self
-            .best_candidate
-            .iter()
-            .position(|n| !self.candidate_storage[*n].visited);
-        match neighbor_position {
-            Some(pos) => {
-                if pos > pos_limit {
-                    return None;
-                }
-                let n = &mut self.candidate_storage[self.best_candidate[pos]];
-                n.visited = true;
-                Some(self.best_candidate[pos])
-            }
-            None => None,
-        }*/
     }
 
     //removes and returns the first element. Given that the element remains in self.inserted, that means the element will never again be insereted
@@ -165,8 +146,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             return None;
         }
         let lsn = self.visited.remove(0);
-        //let idx = self.best_candidate.remove(0);
-        //let lsn = &self.candidate_storage[idx];
         let heap_pointer = storage.return_lsn(&lsn, &mut self.stats);
         return Some((heap_pointer, lsn.index_pointer));
     }
