@@ -53,17 +53,18 @@ impl PgVector {
         //FIXME: we are using a copy here to avoid lifetime issues and because in some cases we have to
         //modify the datum in preprocess_cosine. We should find a way to avoid the copy if the vector is
         //normalized and preprocess_cosine is a noop;
-        let detoasted = pg_sys::pg_detoast_datum_copy(datum.cast_mut_ptr());
-        let is_copy = !std::ptr::eq(
+        let detoasted = pg_sys::pg_detoast_datum(datum.cast_mut_ptr());
+        let is_copy = false;
+        /*let is_copy = !std::ptr::eq(
             detoasted.cast::<PgVectorInternal>(),
             datum.cast_mut_ptr::<PgVectorInternal>(),
-        );
+        );*/
         let casted = detoasted.cast::<PgVectorInternal>();
 
-        let dim = (*casted).dim;
-        let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
-        preprocess_cosine(raw_slice);
-
+        /*let dim = (*casted).dim;
+                let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
+                preprocess_cosine(raw_slice);
+        */
         PgVector {
             inner: casted,
             need_pfree: is_copy,
