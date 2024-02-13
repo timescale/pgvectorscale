@@ -179,7 +179,6 @@ impl BqQuantizer {
     ) -> BqDistanceTable {
         //  assert!(!self.use_mean || !self.training);
         let quantized_vector = self.quantize(query);
-        pgrx::warning!("quantized vector: {:?} {:?}", query, quantized_vector);
         BqDistanceTable::new(quantized_vector)
     }
 }
@@ -199,12 +198,6 @@ impl BqDistanceTable {
     /// distance emits the sum of distances between each centroid in the quantized vector.
     pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
         let count_ones = distance_xor_optimized(&self.quantized_vector, bq_vector);
-        pgrx::warning!(
-            "Count ones: {} = quantized {:?} bq {:?}",
-            count_ones,
-            self.quantized_vector,
-            bq_vector
-        );
         //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
         //but the distance is 1 - dot product, so the more count_ones the higher the distance.
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
@@ -480,7 +473,6 @@ impl<'a> BqSpeedupStorage<'a> {
                                 bq_vector,
                                 &mut lsr.stats,
                             );
-                            pgrx::warning!("Distance: {} {:?}", dist, bq_vector);
                             dist
                         }
                     }
