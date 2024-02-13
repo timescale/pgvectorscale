@@ -212,7 +212,7 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(candidates, storage, stats);
+                let new_list = self.prune_neighbors(neighbors_of, candidates, storage, stats);
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -329,6 +329,7 @@ impl<'a> Graph<'a> {
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
         &self,
+        _neighbors_of: ItemPointer,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -342,18 +343,33 @@ impl<'a> Graph<'a> {
 
         //TODO diskann has something called max_occlusion_size/max_candidate_size(default:750). Do we need to implement?
 
+        let max_len = self.get_meta_page().get_num_neighbors() as usize;
+        let mut results = Vec::<NeighborWithDistance>::with_capacity(max_len);
+
+        match self.get_neighbor_store() {
+            GraphNeighborStore::Builder(b) => {
+                let mut must = vec![];
+                (must, candidates) = candidates
+                    .into_iter()
+                    .partition(|n| b.check_ref_count(n.get_index_pointer_to_neighbor()) < 2);
+                for n in must {
+                    if results.len() < max_len {
+                        results.push(n);
+                    }
+                }
+            }
+            GraphNeighborStore::Disk => {}
+        }
+
         //sort by distance
         candidates.sort();
-        let mut results = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page().get_num_neighbors() as _,
-        );
-
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
         let dimension_epsilon = self.get_meta_page().get_num_dimensions() as f32 * f32::EPSILON;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
+
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
                 if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
@@ -378,12 +394,32 @@ impl<'a> Graph<'a> {
                     )
                 };
 
+                /*let mut n_existing = vec![];
+                self.get_neighbor_store()
+                    .get_neighbors_with_full_vector_distances(
+                        existing_neighbor.get_index_pointer_to_neighbor(),
+                        storage,
+                        &mut n_existing,
+                        stats,
+                    );*/
+
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
                     //has it been completely excluded?
                     if max_factors[j] > max_alpha {
                         continue;
                     }
+
+                    /*let r = n_existing
+                        .iter()
+                        .find(|&n| {
+                            n.get_index_pointer_to_neighbor()
+                                == candidate_neighbor.get_index_pointer_to_neighbor()
+                        })
+                        .is_some();
+                    if !r {
+                        continue;
+                    }*/
 
                     //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {

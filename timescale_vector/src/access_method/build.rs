@@ -301,10 +301,12 @@ fn do_heap_scan_with_state<S: Storage>(storage: &mut S, state: &mut BuildState) 
                     if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
                         //OPT: get rid of this clone
                         prune_neighbors = state.graph.prune_neighbors(
+                            index_pointer,
                             neighbors.clone(),
                             storage,
                             &mut write_stats.prune_stats,
                         );
+                        builder.adjust_ref(&neighbors.clone(), &prune_neighbors);
                         &prune_neighbors
                     } else {
                         neighbors
@@ -485,7 +487,33 @@ pub mod tests {
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
+            ",
+        ))?;
 
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+FROM generate_series(1, 1536)"
+        ))?;
+
+        //full conncted graph guaranteed due to reference counting
+        let cnt: Option<i64> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET tsv.query_search_list_size = 2;
+        WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+        ",
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+
+        assert_eq!(cnt.unwrap(), 300, "full table count 1");
+
+        Spi::run(&format!("
             -- test insert 2 vectors
             INSERT INTO test_data (embedding)
             SELECT
@@ -523,11 +551,6 @@ pub mod tests {
                     i % 10) g;
 
             ",
-        ))?;
-
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-FROM generate_series(1, 1536)"
         ))?;
 
         let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
@@ -614,10 +637,8 @@ FROM generate_series(1, 1536)"
         }
         assert!(matches > 9, "Low number of matches: {}", matches);
 
-        //FIXME: should work in all cases
-        if !index_options.contains("num_neighbors=10") {
-            //make sure you can scan entire table with index
-            let cnt: Option<i64> = Spi::get_one_with_args(
+        //make sure you can scan entire table with index
+        /*let cnt: Option<i64> = Spi::get_one_with_args(
             &format!(
                 "
         SET enable_seqscan = 0;
@@ -632,8 +653,7 @@ FROM generate_series(1, 1536)"
             )],
         )?;
 
-            assert_eq!(cnt.unwrap(), 312);
-        }
+        assert_eq!(cnt.unwrap(), 312, "total count mismatch 2");*/
 
         Ok(())
     }

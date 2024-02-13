@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 
 use crate::util::{IndexPointer, ItemPointer};
 
@@ -16,16 +17,81 @@ use super::storage::Storage;
 pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk
     neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
+    rc: RefCell<ReferenceCounter>,
+}
+
+struct ReferenceCounter {
+    reference_count: HashMap<ItemPointer, usize>,
+}
+
+impl ReferenceCounter {
+    pub fn inc_ref_count(&mut self, ip: ItemPointer) {
+        let old = self.reference_count.get_mut(&ip);
+        match old {
+            Some(c) => {
+                *c += 1;
+            }
+            None => {
+                self.reference_count.insert(ip, 1);
+            }
+        }
+    }
+
+    pub fn dec_ref_count(&mut self, ip: ItemPointer) {
+        let old = self.reference_count.get_mut(&ip);
+        match old {
+            Some(c) => {
+                *c -= 1;
+                if *c < 1 {
+                    pgrx::warning!("Created orphaned neighbor {:?}", ip);
+                }
+            }
+            None => {
+                panic!("Decrementing ref count of non-existing neighbor {:?}", ip);
+            }
+        }
+    }
+
+    pub fn check_ref_count(&self, ip: ItemPointer) -> usize {
+        let old = self.reference_count.get(&ip);
+        match old {
+            Some(c) => {
+                return *c;
+            }
+            None => 0,
+        }
+    }
+    pub fn adjust_ref(&mut self, old: &Vec<NeighborWithDistance>, new: &Vec<NeighborWithDistance>) {
+        let old_set = old.iter().collect::<HashSet<_>>();
+        let new_set = new.iter().collect::<HashSet<_>>();
+        for &n in old_set.difference(&new_set) {
+            self.dec_ref_count(n.get_index_pointer_to_neighbor());
+        }
+        for n in new_set.difference(&old_set) {
+            self.inc_ref_count(n.get_index_pointer_to_neighbor());
+        }
+    }
 }
 
 impl BuilderNeighborCache {
     pub fn new() -> Self {
         Self {
             neighbor_map: HashMap::with_capacity(200),
+            rc: RefCell::new(ReferenceCounter {
+                reference_count: HashMap::with_capacity(200),
+            }),
         }
     }
     pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
         self.neighbor_map.iter()
+    }
+
+    pub fn check_ref_count(&self, ip: ItemPointer) -> usize {
+        self.rc.borrow().check_ref_count(ip)
+    }
+
+    pub fn adjust_ref(&self, old: &Vec<NeighborWithDistance>, new: &Vec<NeighborWithDistance>) {
+        self.rc.borrow_mut().adjust_ref(old, new);
     }
 
     pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
@@ -60,7 +126,20 @@ impl BuilderNeighborCache {
         neighbors_of: ItemPointer,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        self.neighbor_map.insert(neighbors_of, new_neighbors);
+        let old_neighbors = self
+            .neighbor_map
+            .insert(neighbors_of, new_neighbors.clone());
+        if old_neighbors.is_some() {
+            self.rc
+                .borrow_mut()
+                .adjust_ref(&old_neighbors.unwrap(), &new_neighbors);
+        } else {
+            for n in new_neighbors {
+                self.rc
+                    .borrow_mut()
+                    .inc_ref_count(n.get_index_pointer_to_neighbor())
+            }
+        }
     }
 
     pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
