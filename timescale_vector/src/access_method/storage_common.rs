@@ -3,7 +3,7 @@ use crate::util::{HeapPointer, IndexPointer};
 use super::{
     pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeRead},
-    storage::{NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage::{NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
 
 pub struct HeapFullDistanceMeasure<'a, S: Storage + StorageFullDistanceFromHeap> {
@@ -37,7 +37,7 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S
     }
 }
 
-impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeFullDistanceMeasure
+impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeDistanceMeasure
     for HeapFullDistanceMeasure<'a, S>
 {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
@@ -53,22 +53,4 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeFullDistanceMeasure
         let slice2 = &self.vector;
         (self.storage.get_distance_function())(slice1.to_slice(), slice2.to_slice())
     }
-}
-
-pub unsafe fn calculate_full_distance<
-    S: Storage + StorageFullDistanceFromHeap,
-    T: StatsNodeRead + StatsDistanceComparison,
->(
-    storage: &S,
-    heap_pointer: HeapPointer,
-    query: &[f32],
-    stats: &mut T,
-) -> f32 {
-    let slot = storage.get_heap_table_slot_from_heap_pointer(heap_pointer, stats);
-    let slice = unsafe { slot.get_pg_vector() };
-
-    stats.record_full_distance_comparison();
-    let dist = (storage.get_distance_function())(slice.to_slice(), query);
-    debug_assert!(!dist.is_nan());
-    dist
 }

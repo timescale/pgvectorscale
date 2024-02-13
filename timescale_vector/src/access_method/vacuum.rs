@@ -183,10 +183,18 @@ pub mod tests {
             .batch_execute(&format!(
                 "CREATE TABLE test_vac(embedding vector(256));
 
+        select setseed(0.5);
+        -- generate 300 vectors
         INSERT INTO test_vac (embedding)
         SELECT
-            ('[' || i || ',1,1,{suffix}]')::vector
-        FROM generate_series(1, 300) i;
+         *
+        FROM (
+            SELECT
+        ('[ 0 , ' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+        FROM
+         generate_series(1, 255 * 300) i
+        GROUP BY
+        i % 300) g;
 
 
         INSERT INTO test_vac(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
@@ -202,7 +210,7 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
 
-        assert_eq!(cnt, 303);
+        assert_eq!(cnt, 303, "initial count");
 
         client
             .execute(
@@ -228,7 +236,7 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         //if the old index is still used the count is 304
-        assert_eq!(cnt, 303);
+        assert_eq!(cnt, 303, "count after vacuum");
 
         //do another delete for same items (noop)
         client
@@ -241,7 +249,7 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         //if the old index is still used the count is 304
-        assert_eq!(cnt, 303);
+        assert_eq!(cnt, 303, "count after delete");
 
         client.execute("DROP INDEX idxtest_vac", &[]).unwrap();
         client.execute("DROP TABLE test_vac", &[]).unwrap();
@@ -277,11 +285,18 @@ pub mod tests {
             .batch_execute(&format!(
                 "CREATE TABLE test_vac_full(embedding vector(256));
 
+        select setseed(0.5);
         -- generate 300 vectors
         INSERT INTO test_vac_full (embedding)
         SELECT
-            ('[' || i || ',2,3,{suffix}]')::vector
-        FROM generate_series(1, 300) i;
+         *
+        FROM (
+            SELECT
+        ('[ 0 , ' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+        FROM
+         generate_series(1, 255 * 300) i
+        GROUP BY
+        i % 300) g;
 
         INSERT INTO test_vac_full(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
@@ -296,17 +311,25 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         std::thread::sleep(std::time::Duration::from_millis(10000));
-        assert_eq!(cnt, 303);
+        assert_eq!(cnt, 303, "initial count");
 
         client.execute("DELETE FROM test_vac_full", &[]).unwrap();
 
         client
             .execute(
                 &format!(
-                    "INSERT INTO test_vac_full (embedding)
-        SELECT
-            ('[' || i || ',2,3,{suffix}]')::vector
-        FROM generate_series(1, 300) i;"
+                    "
+                    INSERT INTO test_vac_full (embedding)
+                    SELECT
+                     *
+                    FROM (
+                        SELECT
+                    ('[ 0 , ' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                    FROM
+                     generate_series(1, 255 * 300) i
+                    GROUP BY
+                    i % 300) g;
+                    "
                 ),
                 &[],
             )
@@ -326,7 +349,7 @@ pub mod tests {
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac_full order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
-        assert_eq!(cnt, 301);
+        assert_eq!(cnt, 301, "count after full vacuum");
 
         client.execute("DROP INDEX idxtest_vac_full", &[]).unwrap();
         client.execute("DROP TABLE test_vac_full", &[]).unwrap();

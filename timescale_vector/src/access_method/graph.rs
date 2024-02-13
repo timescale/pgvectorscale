@@ -4,7 +4,7 @@ use std::{cmp::Ordering, collections::HashSet};
 
 use pgrx::PgRelation;
 
-use crate::access_method::storage::NodeFullDistanceMeasure;
+use crate::access_method::storage::NodeDistanceMeasure;
 
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
@@ -257,7 +257,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
-        let dm = storage.get_search_distance_measure(query, false);
+        let dm = storage.get_query_distance_measure(query);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
@@ -287,7 +287,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = storage.get_search_distance_measure(query, true);
+        let dm = storage.get_query_distance_measure(query);
 
         ListSearchResult::new(
             init_ids.unwrap(),
@@ -372,7 +372,7 @@ impl<'a> Graph<'a> {
                 let existing_neighbor = neighbor;
 
                 let dist_state = unsafe {
-                    storage.get_full_vector_distance_state(
+                    storage.get_node_distance_measure(
                         existing_neighbor.get_index_pointer_to_neighbor(),
                         stats,
                     )
