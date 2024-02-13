@@ -218,6 +218,7 @@ fn do_heap_scan<'a>(
         GraphNeighborStore::Builder(BuilderNeighborCache::new()),
         &mut mp2,
     );
+    let mut write_stats = WriteStats::new();
     match storage {
         StorageType::Plain => {
             let mut plain = PlainStorage::new_for_build(index_relation);
@@ -236,7 +237,7 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut plain, &mut bs)
+            finalize_index_build(&mut plain, &mut bs, write_stats)
         }
         StorageType::PqCompression => {
             let mut pq = PqCompressionStorage::new_for_build(
@@ -245,6 +246,17 @@ fn do_heap_scan<'a>(
                 get_attribute_number(index_info),
             );
             pq.start_training(&meta_page);
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback_pq_train),
+                    &mut pq,
+                );
+            }
+            pq.finish_training(&mut write_stats);
+
             let page_type = PqCompressionStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::PqCompression(&mut pq, &mut bs);
@@ -259,7 +271,7 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut pq, &mut bs)
+            finalize_index_build(&mut pq, &mut bs, write_stats)
         }
         StorageType::BqSpeedup => {
             let mut bq = BqSpeedupStorage::new_for_build(
@@ -268,6 +280,17 @@ fn do_heap_scan<'a>(
                 get_attribute_number(index_info),
             );
             bq.start_training(&meta_page);
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback_bq_train),
+                    &mut bq,
+                );
+            }
+            bq.finish_training(&mut write_stats);
+
             let page_type = BqSpeedupStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
@@ -282,16 +305,16 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut bq, &mut bs)
+            finalize_index_build(&mut bq, &mut bs, write_stats)
         }
     }
 }
 
-fn do_heap_scan_with_state<S: Storage>(storage: &mut S, state: &mut BuildState) -> usize {
-    // we train the quantizer and add prepare to write quantized values to the nodes.\
-    let mut write_stats = WriteStats::new();
-    storage.finish_training(&mut write_stats);
-
+fn finalize_index_build<S: Storage>(
+    storage: &mut S,
+    state: &mut BuildState,
+    mut write_stats: WriteStats,
+) -> usize {
     match state.graph.get_neighbor_store() {
         GraphNeighborStore::Builder(builder) => {
             for (&index_pointer, neighbors) in builder.iter() {
@@ -354,6 +377,38 @@ fn do_heap_scan_with_state<S: Storage>(storage: &mut S, state: &mut BuildState) 
 }
 
 #[pg_guard]
+unsafe extern "C" fn build_callback_bq_train(
+    _index: pg_sys::Relation,
+    _ctid: pg_sys::ItemPointer,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    _tuple_is_alive: bool,
+    state: *mut std::os::raw::c_void,
+) {
+    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    if let Some(vec) = vec {
+        let bq = (state as *mut BqSpeedupStorage).as_mut().unwrap();
+        bq.add_sample(vec.to_slice());
+    }
+}
+
+#[pg_guard]
+unsafe extern "C" fn build_callback_pq_train(
+    _index: pg_sys::Relation,
+    _ctid: pg_sys::ItemPointer,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    _tuple_is_alive: bool,
+    state: *mut std::os::raw::c_void,
+) {
+    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    if let Some(vec) = vec {
+        let pq = (state as *mut PqCompressionStorage).as_mut().unwrap();
+        pq.add_sample(vec.to_slice());
+    }
+}
+
+#[pg_guard]
 unsafe extern "C" fn build_callback(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
@@ -380,7 +435,6 @@ unsafe extern "C" fn build_callback(
             }
         }
     }
-    //todo: what do we do with nulls?
 }
 
 #[inline(always)]
@@ -422,8 +476,6 @@ fn build_callback_internal<S: Storage>(
             state.stats,
         );
     }
-
-    storage.add_sample(vector.to_slice());
 
     let index_pointer = storage.create_node(
         vector.to_slice(),
@@ -484,8 +536,34 @@ pub mod tests {
                 embedding <=> (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
+            FROM generate_series(1, 1536));"))?;
 
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, 1536)"
+        ))?;
+
+        let cnt: Option<i64> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET tsv.query_search_list_size = 2;
+            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+        //FIXME: should work in all cases
+        if !index_options.contains("num_neighbors=10") {
+            assert_eq!(cnt.unwrap(), 300, "initial count");
+        }
+
+        Spi::run(&format!("
             -- test insert 2 vectors
             INSERT INTO test_data (embedding)
             SELECT
@@ -523,11 +601,6 @@ pub mod tests {
                     i % 10) g;
 
             ",
-        ))?;
-
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-FROM generate_series(1, 1536)"
         ))?;
 
         let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(

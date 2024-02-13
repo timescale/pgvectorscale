@@ -46,7 +46,7 @@ impl StatsDistanceComparison for PruneNeighborStats {
     }
 
     fn record_quantized_distance_comparison(&mut self) {
-        pgrx::error!("Should not use quantized distance comparisons during pruning");
+        self.distance_comparisons += 1;
     }
 }
 
