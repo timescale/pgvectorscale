@@ -8,7 +8,7 @@ use super::{
         WriteStats,
     },
     storage::{ArchivedData, NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
-    storage_common::{calculate_full_distance, HeapFullDistanceMeasure},
+    storage_common::calculate_full_distance,
 };
 use std::{collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
@@ -157,15 +157,19 @@ impl BqQuantizer {
         meta_page: &super::meta_page::MetaPage,
         full_vector: &[f32],
     ) -> Vec<BqVectorElement> {
-        if self.use_mean && self.training {
+        assert!(!self.training);
+        self.quantize(&full_vector)
+
+        /*if self.use_mean && self.training {
             vec![0; BqQuantizer::quantized_size(meta_page.get_num_dimensions() as _)]
         } else {
             self.quantize(&full_vector)
-        }
+        }*/
     }
 
     fn vector_needs_update_after_training(&self) -> bool {
-        self.use_mean
+        //FIXME: Clean code path
+        false
     }
 
     fn get_distance_table(
@@ -173,7 +177,10 @@ impl BqQuantizer {
         query: &[f32],
         _distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> BqDistanceTable {
-        BqDistanceTable::new(self.quantize(query))
+        //  assert!(!self.use_mean || !self.training);
+        let quantized_vector = self.quantize(query);
+        pgrx::warning!("quantized vector: {:?} {:?}", query, quantized_vector);
+        BqDistanceTable::new(quantized_vector)
     }
 }
 
@@ -192,6 +199,12 @@ impl BqDistanceTable {
     /// distance emits the sum of distances between each centroid in the quantized vector.
     pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
         let count_ones = distance_xor_optimized(&self.quantized_vector, bq_vector);
+        pgrx::warning!(
+            "Count ones: {} = quantized {:?} bq {:?}",
+            count_ones,
+            self.quantized_vector,
+            bq_vector
+        );
         //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
         //but the distance is 1 - dot product, so the more count_ones the higher the distance.
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
@@ -214,6 +227,53 @@ impl BqSearchDistanceMeasure {
         let vec = bq_vector;
         stats.record_quantized_distance_comparison();
         table.distance(vec)
+    }
+}
+
+pub struct IndexBqDistanceMeasure<'a> {
+    readable_node: ReadableBqNode<'a>,
+    storage: &'a BqSpeedupStorage<'a>,
+}
+
+impl<'a> IndexBqDistanceMeasure<'a> {
+    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
+        storage: &'a BqSpeedupStorage<'a>,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> Self {
+        let rn = unsafe { BqNode::read(storage.index, index_pointer, stats) };
+        Self {
+            readable_node: rn,
+            storage: storage,
+        }
+    }
+
+    /*pub unsafe fn with_readable_node(
+        storage: &'a BqSpeedupStorage<'a>,
+        readable_node: ReadableBqNode<'a>,
+    ) -> Self {
+        Self {
+            readable_node: readable_node,
+            storage: storage,
+        }
+    }*/
+}
+
+impl<'a> NodeFullDistanceMeasure for IndexBqDistanceMeasure<'a> {
+    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> f32 {
+        let rn1 = BqNode::read(self.storage.index, index_pointer, stats);
+        let rn2 = &self.readable_node;
+        let node1 = rn1.get_archived_node();
+        let node2 = rn2.get_archived_node();
+        assert!(node1.bq_vector.len() > 0);
+        assert!(node1.bq_vector.len() == node2.bq_vector.len());
+        let vec1 = node1.bq_vector.as_slice();
+        let vec2 = node2.bq_vector.as_slice();
+        distance_xor_optimized(vec1, vec2) as f32
     }
 }
 
@@ -240,7 +300,10 @@ impl QuantizedVectorCache {
         self.quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
-                storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
+                let rn = unsafe { BqNode::read(storage.index, index_pointer, stats) };
+                let node = rn.get_archived_node();
+                node.bq_vector.as_slice().to_vec()
+                //storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
             })
     }
 
@@ -391,14 +454,38 @@ impl<'a> BqSpeedupStorage<'a> {
                 BqSearchDistanceMeasure::Bq(table) => {
                     /* Note: there is no additional node reads here. We get all of our info from node_visiting
                      * This is what gives us a speedup in BQ Speedup */
-                    if let GraphNeighborStore::Builder(_) = gns {
+                    /*if let GraphNeighborStore::Builder(_) = gns {
                         assert!(
                             false,
                             "BQ distance should not be used with the builder graph store"
                         )
+                    }*/
+                    match gns {
+                        GraphNeighborStore::Disk => {
+                            let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                            BqSearchDistanceMeasure::calculate_bq_distance(
+                                table,
+                                bq_vector,
+                                &mut lsr.stats,
+                            )
+                        }
+                        GraphNeighborStore::Builder(b) => {
+                            let rn_neighbor = unsafe {
+                                BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
+                            };
+                            let node_neighbor = rn_neighbor.get_archived_node();
+                            let bq_vector = node_neighbor.bq_vector.as_slice();
+                            let dist = BqSearchDistanceMeasure::calculate_bq_distance(
+                                table,
+                                bq_vector,
+                                &mut lsr.stats,
+                            );
+                            pgrx::warning!("Distance: {} {:?}", dist, bq_vector);
+                            dist
+                        }
                     }
-                    let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                    BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
+                    //let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                    //BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
                 }
             };
             let lsn =
@@ -413,7 +500,7 @@ pub type BqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
 impl<'a> Storage for BqSpeedupStorage<'a> {
     type QueryDistanceMeasure = BqSearchDistanceMeasure;
-    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, BqSpeedupStorage<'b>> where Self: 'b;
+    type NodeFullDistanceMeasure<'b> = IndexBqDistanceMeasure<'b> where Self: 'b;
     type ArchivedType = ArchivedBqNode;
     type LSNPrivateData = BqSpeedupStorageLsnPrivateData; //no data stored
 
@@ -484,8 +571,8 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> HeapFullDistanceMeasure<'b, BqSpeedupStorage<'b>> {
-        HeapFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
+    ) -> IndexBqDistanceMeasure<'b> {
+        IndexBqDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
     fn get_search_distance_measure(
@@ -493,14 +580,18 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         query: PgVector,
         calc_distance_with_quantizer: bool,
     ) -> BqSearchDistanceMeasure {
-        if !calc_distance_with_quantizer {
+        return BqSearchDistanceMeasure::Bq(
+            self.quantizer
+                .get_distance_table(query.to_slice(), self.distance_fn),
+        );
+        /*if !calc_distance_with_quantizer {
             return BqSearchDistanceMeasure::Full(query);
         } else {
             return BqSearchDistanceMeasure::Bq(
                 self.quantizer
                     .get_distance_table(query.to_slice(), self.distance_fn),
             );
-        }
+        }*/
     }
 
     fn get_neighbors_with_full_vector_distances_from_disk<
@@ -512,15 +603,23 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         stats: &mut S,
     ) {
         let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
-        let heap_pointer = rn
+        let archived = rn.get_archived_node();
+        let q = archived.bq_vector.as_slice();
+
+        /*let heap_pointer = rn
             .get_archived_node()
             .heap_item_pointer
             .deserialize_item_pointer();
         let dist_state =
             unsafe { HeapFullDistanceMeasure::with_heap_pointer(self, heap_pointer, stats) };
-        for n in rn.get_archived_node().iter_neighbors() {
-            let dist = unsafe { dist_state.get_distance(n, stats) };
-            result.push(NeighborWithDistance::new(n, dist))
+        */
+        for (i, n) in rn.get_archived_node().iter_neighbors().enumerate() {
+            //let dist = unsafe { dist_state.get_distance(n, stats) };
+            assert!(i < archived.neighbor_vectors.len());
+            let neighbor_q = archived.neighbor_vectors[i].as_slice();
+            stats.record_quantized_distance_comparison();
+            let dist = distance_xor_optimized(q, neighbor_q);
+            result.push(NeighborWithDistance::new(n, dist as f32))
         }
     }
 
