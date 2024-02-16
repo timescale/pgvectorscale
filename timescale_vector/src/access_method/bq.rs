@@ -9,7 +9,7 @@ use super::{
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
-use std::{collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
+use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
     pg_sys::{InvalidBlockNumber, InvalidOffsetNumber},
@@ -104,6 +104,7 @@ impl BqQuantizer {
     }
 
     fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
+        assert!(!self.training);
         if self.use_mean {
             let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
 
@@ -156,7 +157,6 @@ impl BqQuantizer {
         _meta_page: &super::meta_page::MetaPage,
         full_vector: &[f32],
     ) -> Vec<BqVectorElement> {
-        assert!(!self.training);
         self.quantize(&full_vector)
     }
 
@@ -270,10 +270,7 @@ impl QuantizedVectorCache {
         self.quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
-                let rn = unsafe { BqNode::read(storage.index, index_pointer, stats) };
-                let node = rn.get_archived_node();
-                node.bq_vector.as_slice().to_vec()
-                //storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
+                storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
             })
     }
 
@@ -302,7 +299,7 @@ pub struct BqSpeedupStorage<'a> {
     quantizer: BqQuantizer,
     heap_rel: Option<&'a PgRelation>,
     heap_attr: Option<pgrx::pg_sys::AttrNumber>,
-    qv_cache: Option<QuantizedVectorCache>,
+    qv_cache: RefCell<QuantizedVectorCache>,
 }
 
 impl<'a> BqSpeedupStorage<'a> {
@@ -317,7 +314,7 @@ impl<'a> BqSpeedupStorage<'a> {
             quantizer: BqQuantizer::new(),
             heap_rel: Some(heap_rel),
             heap_attr: Some(heap_attr),
-            qv_cache: None,
+            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
 
@@ -342,7 +339,7 @@ impl<'a> BqSpeedupStorage<'a> {
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: Some(heap_rel),
             heap_attr: Some(heap_attr),
-            qv_cache: None,
+            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
 
@@ -357,7 +354,7 @@ impl<'a> BqSpeedupStorage<'a> {
             quantizer: quantizer.clone(),
             heap_rel: None,
             heap_attr: None,
-            qv_cache: None,
+            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
 
@@ -366,9 +363,9 @@ impl<'a> BqSpeedupStorage<'a> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Vec<BqVectorElement> {
-        let slot = unsafe { self.get_heap_table_slot_from_index_pointer(index_pointer, stats) };
-        let slice = unsafe { slot.get_pg_vector() };
-        self.quantizer.quantize(slice.to_slice())
+        let rn = unsafe { BqNode::read(self.index, index_pointer, stats) };
+        let node = rn.get_archived_node();
+        node.bq_vector.as_slice().to_vec()
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
@@ -415,11 +412,8 @@ impl<'a> BqSpeedupStorage<'a> {
                             )
                         }
                         GraphNeighborStore::Builder(b) => {
-                            let rn_neighbor = unsafe {
-                                BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
-                            };
-                            let node_neighbor = rn_neighbor.get_archived_node();
-                            let bq_vector = node_neighbor.bq_vector.as_slice();
+                            let mut cache = self.qv_cache.borrow_mut();
+                            let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
                             let dist = BqSearchDistanceMeasure::calculate_bq_distance(
                                 table,
                                 bq_vector,
@@ -479,7 +473,6 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     fn finish_training(&mut self, stats: &mut WriteStats) {
         self.quantizer.finish_training();
         self.write_quantizer_metadata(stats);
-        self.qv_cache = Some(QuantizedVectorCache::new(1000));
     }
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
@@ -489,7 +482,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         neighbors: &Vec<NeighborWithDistance>,
         stats: &mut S,
     ) {
-        let mut cache = self.qv_cache.take().unwrap();
+        let mut cache = self.qv_cache.borrow_mut();
         /* It's important to preload cache with all the items since you can run into deadlocks
         if you try to fetch a quantized vector while holding the BqNode::modify lock */
         let iter = neighbors
@@ -503,7 +496,6 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
 
         node.commit();
-        self.qv_cache = Some(cache);
     }
 
     unsafe fn get_node_distance_measure<'b, S: StatsNodeRead>(
