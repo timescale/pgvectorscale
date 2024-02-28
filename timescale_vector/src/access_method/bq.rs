@@ -381,6 +381,23 @@ impl<'a> BqSpeedupStorage<'a> {
         }
     }
 
+    pub fn load_for_search_with_heap_info(
+        heap_rel: &'a PgRelation,
+        heap_attr: pgrx::pg_sys::AttrNumber,
+        index_relation: &'a PgRelation,
+        quantizer: &BqQuantizer,
+    ) -> BqSpeedupStorage<'a> {
+        Self {
+            index: index_relation,
+            distance_fn: default_distance,
+            //OPT: get rid of clone
+            quantizer: quantizer.clone(),
+            heap_rel: Some(heap_rel),
+            heap_attr: Some(heap_attr),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+        }
+    }
+
     fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,
