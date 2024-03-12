@@ -194,6 +194,10 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         index: &PgRelation,
         storage: &S,
     ) -> Option<HeapPointer> {
+        if self.resort.capacity() == 0 {
+            return self.next(index, storage);
+        }
+
         while self.resort.len() < self.resort.capacity() {
             match self.next(index, storage) {
                 Some(heap_pointer) => {
