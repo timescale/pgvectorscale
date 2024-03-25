@@ -5,7 +5,7 @@ use super::{
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node},
     plain_storage::PlainStorageLsnPrivateData,
-    pq_quantizer::{PqDistanceTable, PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
+    pq_quantizer::{PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
     pq_quantizer_storage::write_pq,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
@@ -269,11 +269,7 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         PqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        calc_distance_with_quantizer: bool,
-    ) -> PqSearchDistanceMeasure {
+    fn get_query_distance_measure(&self, query: PgVector) -> PqSearchDistanceMeasure {
         return PqSearchDistanceMeasure::Pq(
             self.quantizer
                 .get_distance_table_full_query(query.to_slice(), self.distance_fn),

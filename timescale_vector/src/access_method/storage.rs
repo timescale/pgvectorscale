@@ -72,11 +72,7 @@ pub trait Storage {
         stats: &mut S,
     ) -> Self::NodeDistanceMeasure<'a>;
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        calc_distance_with_quantizer: bool,
-    ) -> Self::QueryDistanceMeasure;
+    fn get_query_distance_measure(&self, query: PgVector) -> Self::QueryDistanceMeasure;
 
     fn visit_lsn(
         &self,

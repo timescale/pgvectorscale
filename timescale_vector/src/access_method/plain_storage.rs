@@ -186,11 +186,7 @@ impl<'a> Storage for PlainStorage<'a> {
         IndexFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        _calc_distance_with_quantizer: bool,
-    ) -> PlainDistanceMeasure {
+    fn get_query_distance_measure(&self, query: PgVector) -> PlainDistanceMeasure {
         return PlainDistanceMeasure::Full(query);
     }
 

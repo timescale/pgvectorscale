@@ -135,6 +135,9 @@ fn build_distance_table(
     distance_table
 }
 
+/*
+It seems that the node-node comparisons don't benefit from a table. remove this later if still true.
+The node comparisons are done in the prune step where we do too few comparisons to benefit from a table.
 fn build_distance_table_pq_query(pq: &Pq<f32>, query: &[u8]) -> Vec<f32> {
     let sq = pq.subquantizers();
     let num_centroids = pq.n_quantizer_centroids();
@@ -168,6 +171,7 @@ fn build_distance_table_pq_query(pq: &Pq<f32>, query: &[u8]) -> Vec<f32> {
     assert_eq!(dt_size, elements_for_assert);
     distance_table
 }
+*/
 
 #[derive(Clone)]
 pub struct PqQuantizer {
@@ -241,10 +245,6 @@ impl PqQuantizer {
         PqDistanceTable::new_for_full_query(&self.pq.as_ref().unwrap(), distance_fn, query)
     }
 
-    pub fn get_distance_table_pq_query(&self, pq_vector: &[PqVectorElement]) -> PqDistanceTable {
-        PqDistanceTable::new_for_pq_query(&self.pq.as_ref().unwrap(), pq_vector)
-    }
-
     pub fn get_distance_directly(
         &self,
         left: &[PqVectorElement],
@@ -280,12 +280,6 @@ impl PqDistanceTable {
     ) -> PqDistanceTable {
         PqDistanceTable {
             distance_table: build_distance_table(pq, query, distance_fn),
-        }
-    }
-
-    pub fn new_for_pq_query(pq: &Pq<f32>, pq_vector: &[u8]) -> PqDistanceTable {
-        PqDistanceTable {
-            distance_table: build_distance_table_pq_query(pq, pq_vector),
         }
     }
 
