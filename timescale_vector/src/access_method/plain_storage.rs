@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_plain_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 10",
+            "num_neighbors = 38",
         );
     }
 

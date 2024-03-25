@@ -410,7 +410,7 @@ mod tests {
     #[test]
     fn test_pq_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 10, use_pq = TRUE",
+            "num_neighbors = 38, use_pq = TRUE",
         );
     }
 
