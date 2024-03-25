@@ -22,7 +22,7 @@ use crate::util::{
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
-pub struct PqNodeDistanceMeasure<'a> {
+/*pub struct PqNodeDistanceMeasure<'a> {
     storage: &'a PqCompressionStorage<'a>,
     table: PqDistanceTable,
 }
@@ -56,6 +56,42 @@ impl<'a> NodeDistanceMeasure for PqNodeDistanceMeasure<'a> {
         let rn1 = Node::read(self.storage.index, index_pointer, stats);
         let node1 = rn1.get_archived_node();
         self.table.distance(node1.pq_vector.as_slice())
+    }
+}*/
+
+pub struct PqNodeDistanceMeasure<'a> {
+    storage: &'a PqCompressionStorage<'a>,
+    vector: Vec<PqVectorElement>,
+}
+
+impl<'a> PqNodeDistanceMeasure<'a> {
+    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
+        storage: &'a PqCompressionStorage,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> Self {
+        let rn = unsafe { Node::read(storage.index, index_pointer, stats) };
+        let node = rn.get_archived_node();
+        assert!(node.pq_vector.len() > 0);
+        let vector = node.pq_vector.as_slice().to_vec();
+        Self {
+            storage: storage,
+            vector: vector,
+        }
+    }
+}
+
+impl<'a> NodeDistanceMeasure for PqNodeDistanceMeasure<'a> {
+    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> f32 {
+        let rn1 = Node::read(self.storage.index, index_pointer, stats);
+        let node1 = rn1.get_archived_node();
+        self.storage
+            .quantizer
+            .get_distance_directly(self.vector.as_slice(), node1.pq_vector.as_slice())
     }
 }
 

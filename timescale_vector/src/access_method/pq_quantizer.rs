@@ -241,8 +241,29 @@ impl PqQuantizer {
         PqDistanceTable::new_for_full_query(&self.pq.as_ref().unwrap(), distance_fn, query)
     }
 
-    pub fn get_distance_table_pq_query(&self, pq_vector: &[u8]) -> PqDistanceTable {
+    pub fn get_distance_table_pq_query(&self, pq_vector: &[PqVectorElement]) -> PqDistanceTable {
         PqDistanceTable::new_for_pq_query(&self.pq.as_ref().unwrap(), pq_vector)
+    }
+
+    pub fn get_distance_directly(
+        &self,
+        left: &[PqVectorElement],
+        right: &[PqVectorElement],
+    ) -> f32 {
+        let pq = self.pq.as_ref().unwrap();
+        let sq = pq.subquantizers();
+
+        let mut dist = 0.0;
+        for (subquantizer_index, subquantizer) in sq.outer_iter().enumerate() {
+            let left_slice = subquantizer.index_axis(Axis(0), left[subquantizer_index] as usize);
+            let right_slice = subquantizer.index_axis(Axis(0), right[subquantizer_index] as usize);
+            assert!(left_slice.len() == right_slice.len());
+            dist += distance_l2_optimized_for_few_dimensions(
+                left_slice.as_slice().unwrap(),
+                right_slice.as_slice().unwrap(),
+            );
+        }
+        dist
     }
 }
 
