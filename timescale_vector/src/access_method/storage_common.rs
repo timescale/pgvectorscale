@@ -3,7 +3,7 @@ use crate::util::{HeapPointer, IndexPointer};
 use super::{
     pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeRead},
-    storage::{NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage::{NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
 
 pub struct HeapFullDistanceMeasure<'a, S: Storage + StorageFullDistanceFromHeap> {
@@ -37,7 +37,7 @@ impl<'a, S: Storage + StorageFullDistanceFromHeap> HeapFullDistanceMeasure<'a, S
     }
 }
 
-impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeFullDistanceMeasure
+impl<'a, S: Storage + StorageFullDistanceFromHeap> NodeDistanceMeasure
     for HeapFullDistanceMeasure<'a, S>
 {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(

@@ -8,7 +8,7 @@ use super::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
         WriteStats,
     },
-    storage::{ArchivedData, NodeFullDistanceMeasure, Storage},
+    storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
 
 use pgrx::PgRelation;
@@ -93,7 +93,7 @@ impl<'a> IndexFullDistanceMeasure<'a> {
     }
 }
 
-impl<'a> NodeFullDistanceMeasure for IndexFullDistanceMeasure<'a> {
+impl<'a> NodeDistanceMeasure for IndexFullDistanceMeasure<'a> {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -137,7 +137,7 @@ impl PlainStorageLsnPrivateData {
 
 impl<'a> Storage for PlainStorage<'a> {
     type QueryDistanceMeasure = PlainDistanceMeasure;
-    type NodeFullDistanceMeasure<'b> = IndexFullDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b> = IndexFullDistanceMeasure<'b> where Self: 'b;
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 
@@ -178,15 +178,15 @@ impl<'a> Storage for PlainStorage<'a> {
         node.commit();
     }
 
-    unsafe fn get_full_vector_distance_state<'b, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead>(
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> Self::NodeFullDistanceMeasure<'b> {
+    ) -> Self::NodeDistanceMeasure<'b> {
         IndexFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_search_distance_measure(
+    fn get_query_distance_measure(
         &self,
         query: PgVector,
         _calc_distance_with_quantizer: bool,
@@ -194,9 +194,7 @@ impl<'a> Storage for PlainStorage<'a> {
         return PlainDistanceMeasure::Full(query);
     }
 
-    fn get_neighbors_with_full_vector_distances_from_disk<
-        S: StatsNodeRead + StatsDistanceComparison,
-    >(
+    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,

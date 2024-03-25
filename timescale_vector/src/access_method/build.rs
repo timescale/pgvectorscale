@@ -218,6 +218,7 @@ fn do_heap_scan<'a>(
         GraphNeighborStore::Builder(BuilderNeighborCache::new()),
         &mut mp2,
     );
+    let mut write_stats = WriteStats::new();
     match storage {
         StorageType::Plain => {
             let mut plain = PlainStorage::new_for_build(index_relation);
@@ -236,7 +237,7 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut plain, &mut bs)
+            finalize_index_build(&mut plain, &mut bs, write_stats)
         }
         StorageType::PqCompression => {
             let mut pq = PqCompressionStorage::new_for_build(
@@ -245,6 +246,17 @@ fn do_heap_scan<'a>(
                 get_attribute_number(index_info),
             );
             pq.start_training(&meta_page);
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback_pq_train),
+                    &mut pq,
+                );
+            }
+            pq.finish_training(&mut write_stats);
+
             let page_type = PqCompressionStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::PqCompression(&mut pq, &mut bs);
@@ -259,7 +271,7 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut pq, &mut bs)
+            finalize_index_build(&mut pq, &mut bs, write_stats)
         }
         StorageType::BqSpeedup => {
             let mut bq = BqSpeedupStorage::new_for_build(
@@ -277,7 +289,6 @@ fn do_heap_scan<'a>(
                     &mut bq,
                 );
             }
-            let mut write_stats = WriteStats::new();
             bq.finish_training(&mut write_stats);
 
             let page_type = BqSpeedupStorage::page_type();
@@ -294,17 +305,16 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            do_heap_scan_with_state(&mut bq, &mut bs)
+            finalize_index_build(&mut bq, &mut bs, write_stats)
         }
     }
 }
 
-fn do_heap_scan_with_state<S: Storage>(storage: &mut S, state: &mut BuildState) -> usize {
-    // we train the quantizer and add prepare to write quantized values to the nodes.\
-    //FIXME: finish training in PQ
-    let mut write_stats = WriteStats::new();
-    // storage.finish_training(&mut write_stats);
-
+fn finalize_index_build<S: Storage>(
+    storage: &mut S,
+    state: &mut BuildState,
+    mut write_stats: WriteStats,
+) -> usize {
     match state.graph.get_neighbor_store() {
         GraphNeighborStore::Builder(builder) => {
             for (&index_pointer, neighbors) in builder.iter() {
@@ -383,6 +393,22 @@ unsafe extern "C" fn build_callback_bq_train(
 }
 
 #[pg_guard]
+unsafe extern "C" fn build_callback_pq_train(
+    _index: pg_sys::Relation,
+    _ctid: pg_sys::ItemPointer,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    _tuple_is_alive: bool,
+    state: *mut std::os::raw::c_void,
+) {
+    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    if let Some(vec) = vec {
+        let pq = (state as *mut PqCompressionStorage).as_mut().unwrap();
+        pq.add_sample(vec.to_slice());
+    }
+}
+
+#[pg_guard]
 unsafe extern "C" fn build_callback(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
@@ -409,7 +435,6 @@ unsafe extern "C" fn build_callback(
             }
         }
     }
-    //todo: what do we do with nulls?
 }
 
 #[inline(always)]
@@ -451,9 +476,6 @@ fn build_callback_internal<S: Storage>(
             state.stats,
         );
     }
-
-    //FIXME: need to call add_sample in PQ
-    //storage.add_sample(vector.to_slice());
 
     let index_pointer = storage.create_node(
         vector.to_slice(),

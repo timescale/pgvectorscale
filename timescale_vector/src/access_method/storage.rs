@@ -16,7 +16,8 @@ use super::{
     },
 };
 
-pub trait NodeFullDistanceMeasure {
+/// NodeDistanceMeasure keeps the state to make distance comparison between two nodes.
+pub trait NodeDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -33,8 +34,10 @@ pub trait ArchivedData {
 }
 
 pub trait Storage {
+    /// A QueryDistanceMeasure keeps the state to make distance comparison between a query given at initialization and a node.
     type QueryDistanceMeasure;
-    type NodeFullDistanceMeasure<'a>: NodeFullDistanceMeasure
+    /// A NodeDistanceMeasure keeps the state to make distance comparison between a node given at initialization and another node.
+    type NodeDistanceMeasure<'a>: NodeDistanceMeasure
     where
         Self: 'a;
     type ArchivedType: ArchivedData;
@@ -63,13 +66,13 @@ pub trait Storage {
         stats: &mut S,
     );
 
-    unsafe fn get_full_vector_distance_state<'a, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'a, S: StatsNodeRead>(
         &'a self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> Self::NodeFullDistanceMeasure<'a>;
+    ) -> Self::NodeDistanceMeasure<'a>;
 
-    fn get_search_distance_measure(
+    fn get_query_distance_measure(
         &self,
         query: PgVector,
         calc_distance_with_quantizer: bool,
@@ -100,9 +103,7 @@ pub trait Storage {
     where
         Self: Sized;
 
-    fn get_neighbors_with_full_vector_distances_from_disk<
-        S: StatsNodeRead + StatsDistanceComparison,
-    >(
+    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,

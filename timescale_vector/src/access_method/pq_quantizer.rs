@@ -9,7 +9,6 @@ use crate::access_method::{
 
 use super::{
     meta_page::MetaPage,
-    pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeRead},
 };
 
@@ -136,6 +135,40 @@ fn build_distance_table(
     distance_table
 }
 
+fn build_distance_table_pq_query(pq: &Pq<f32>, query: &[u8]) -> Vec<f32> {
+    let sq = pq.subquantizers();
+    let num_centroids = pq.n_quantizer_centroids();
+    let num_subquantizers = sq.len_of(Axis(0));
+    let dt_size = num_subquantizers * num_centroids;
+    let mut distance_table = vec![0.0; dt_size];
+
+    let mut elements_for_assert = 0;
+    for (subquantizer_index, subquantizer) in sq.outer_iter().enumerate() {
+        let query_centroid_index = query[subquantizer_index] as usize;
+        let query_slice = subquantizer.index_axis(Axis(0), query_centroid_index);
+        for (centroid_index, c) in subquantizer.outer_iter().enumerate() {
+            /* always use l2 for pq measurements since centeroids use k-means (which uses euclidean/l2 distance)
+             * The quantization also uses euclidean distance too. In the future we can experiment with k-mediods
+             * using a different distance measure, but this may make little difference. */
+            let dist = if query_centroid_index == centroid_index {
+                debug_assert!(query_slice.as_slice().unwrap() == c.as_slice().unwrap());
+                0.0
+            } else {
+                distance_l2_optimized_for_few_dimensions(
+                    query_slice.as_slice().unwrap(),
+                    c.as_slice().unwrap(),
+                )
+            };
+            assert!(subquantizer_index < num_subquantizers);
+            assert!(centroid_index * num_subquantizers + subquantizer_index < dt_size);
+            distance_table[centroid_index * num_subquantizers + subquantizer_index] = dist;
+            elements_for_assert += 1;
+        }
+    }
+    assert_eq!(dt_size, elements_for_assert);
+    distance_table
+}
+
 #[derive(Clone)]
 pub struct PqQuantizer {
     pq_trainer: Option<PqTrainer>,
@@ -193,24 +226,23 @@ impl PqQuantizer {
         meta_page: &MetaPage,
         full_vector: &[f32],
     ) -> Vec<PqVectorElement> {
-        if self.pq_trainer.is_some() {
-            let pq_vec_len = meta_page.get_pq_vector_length();
-            vec![0; pq_vec_len]
-        } else {
-            assert!(self.pq.is_some());
-            let pq_vec_len = meta_page.get_pq_vector_length();
-            let res = self.quantize(full_vector);
-            assert!(res.len() == pq_vec_len);
-            res
-        }
+        assert!(self.pq_trainer.is_none() && self.pq.is_some());
+        let pq_vec_len = meta_page.get_pq_vector_length();
+        let res = self.quantize(full_vector);
+        assert!(res.len() == pq_vec_len);
+        res
     }
 
-    pub fn get_distance_table(
+    pub fn get_distance_table_full_query(
         &self,
         query: &[f32],
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PqDistanceTable {
-        PqDistanceTable::new(&self.pq.as_ref().unwrap(), distance_fn, query)
+        PqDistanceTable::new_for_full_query(&self.pq.as_ref().unwrap(), distance_fn, query)
+    }
+
+    pub fn get_distance_table_pq_query(&self, pq_vector: &[u8]) -> PqDistanceTable {
+        PqDistanceTable::new_for_pq_query(&self.pq.as_ref().unwrap(), pq_vector)
     }
 }
 
@@ -220,13 +252,19 @@ pub struct PqDistanceTable {
 }
 
 impl PqDistanceTable {
-    pub fn new(
+    pub fn new_for_full_query(
         pq: &Pq<f32>,
         distance_fn: fn(&[f32], &[f32]) -> f32,
         query: &[f32],
     ) -> PqDistanceTable {
         PqDistanceTable {
             distance_table: build_distance_table(pq, query, distance_fn),
+        }
+    }
+
+    pub fn new_for_pq_query(pq: &Pq<f32>, pq_vector: &[u8]) -> PqDistanceTable {
+        PqDistanceTable {
+            distance_table: build_distance_table_pq_query(pq, pq_vector),
         }
     }
 
@@ -245,7 +283,6 @@ impl PqDistanceTable {
 }
 
 pub enum PqSearchDistanceMeasure {
-    Full(PgVector),
     Pq(PqDistanceTable),
 }
 

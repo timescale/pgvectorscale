@@ -5,14 +5,13 @@ use super::{
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node},
     plain_storage::PlainStorageLsnPrivateData,
-    pq_quantizer::{PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
+    pq_quantizer::{PqDistanceTable, PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
     pq_quantizer_storage::write_pq,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
         WriteStats,
     },
-    storage::{NodeFullDistanceMeasure, Storage, StorageFullDistanceFromHeap},
-    storage_common::{calculate_full_distance, HeapFullDistanceMeasure},
+    storage::{NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
 };
 
 use pgrx::PgRelation;
@@ -22,6 +21,43 @@ use crate::util::{
 };
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
+
+pub struct PqNodeDistanceMeasure<'a> {
+    storage: &'a PqCompressionStorage<'a>,
+    table: PqDistanceTable,
+}
+
+impl<'a> PqNodeDistanceMeasure<'a> {
+    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
+        storage: &'a PqCompressionStorage,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> Self {
+        let rn = unsafe { Node::read(storage.index, index_pointer, stats) };
+        let node = rn.get_archived_node();
+        assert!(node.pq_vector.len() > 0);
+        let table = storage
+            .quantizer
+            .get_distance_table_pq_query(node.pq_vector.as_slice());
+
+        Self {
+            storage: storage,
+            table: table,
+        }
+    }
+}
+
+impl<'a> NodeDistanceMeasure for PqNodeDistanceMeasure<'a> {
+    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut T,
+    ) -> f32 {
+        let rn1 = Node::read(self.storage.index, index_pointer, stats);
+        let node1 = rn1.get_archived_node();
+        self.table.distance(node1.pq_vector.as_slice())
+    }
+}
 
 pub struct PqCompressionStorage<'a> {
     pub index: &'a PgRelation,
@@ -117,32 +153,8 @@ impl<'a> PqCompressionStorage<'a> {
             let rn_neighbor =
                 unsafe { Node::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
             let node_neighbor = rn_neighbor.get_archived_node();
-            let deleted = node_neighbor.is_deleted();
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                PqSearchDistanceMeasure::Full(query) => {
-                    let heap_pointer = node_neighbor.heap_item_pointer.deserialize_item_pointer();
-                    if deleted {
-                        let pvt_data = PlainStorageLsnPrivateData::new(
-                            neighbor_index_pointer,
-                            node_neighbor,
-                            gns,
-                        );
-                        self.visit_lsn_internal(lsr, &pvt_data.neighbors, gns);
-                        continue;
-                        //for deleted nodes, we can't get the distance because we don't know the full vector
-                        //so pretend it's the same distance as the parent
-                    } else {
-                        unsafe {
-                            calculate_full_distance(
-                                self,
-                                heap_pointer,
-                                query.to_slice(),
-                                &mut lsr.stats,
-                            )
-                        }
-                    }
-                }
                 PqSearchDistanceMeasure::Pq(table) => {
                     PqSearchDistanceMeasure::calculate_pq_distance(
                         table,
@@ -164,7 +176,7 @@ impl<'a> PqCompressionStorage<'a> {
 
 impl<'a> Storage for PqCompressionStorage<'a> {
     type QueryDistanceMeasure = PqSearchDistanceMeasure;
-    type NodeFullDistanceMeasure<'b> = HeapFullDistanceMeasure<'b, PqCompressionStorage<'b>> where Self: 'b;
+    type NodeDistanceMeasure<'b> = PqNodeDistanceMeasure<'b> where Self: 'b;
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData; //no data stored
 
@@ -210,55 +222,37 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta);
 
-        let quantized = self.get_quantized_vector_from_heap_pointer(
-            archived.heap_item_pointer.deserialize_item_pointer(),
-            stats,
-        );
-
-        archived.as_mut().set_pq_vector(quantized.as_slice());
-
         node.commit();
     }
 
-    unsafe fn get_full_vector_distance_state<'b, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead>(
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> HeapFullDistanceMeasure<'b, PqCompressionStorage<'b>> {
-        HeapFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
+    ) -> PqNodeDistanceMeasure<'b> {
+        PqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_search_distance_measure(
+    fn get_query_distance_measure(
         &self,
         query: PgVector,
         calc_distance_with_quantizer: bool,
     ) -> PqSearchDistanceMeasure {
-        if !calc_distance_with_quantizer {
-            return PqSearchDistanceMeasure::Full(query);
-        } else {
-            return PqSearchDistanceMeasure::Pq(
-                self.quantizer
-                    .get_distance_table(query.to_slice(), self.distance_fn),
-            );
-        }
+        return PqSearchDistanceMeasure::Pq(
+            self.quantizer
+                .get_distance_table_full_query(query.to_slice(), self.distance_fn),
+        );
     }
 
     //todo: same as Bq code?
-    fn get_neighbors_with_full_vector_distances_from_disk<
-        S: StatsNodeRead + StatsDistanceComparison,
-    >(
+    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
     ) {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
-        let heap_pointer = rn
-            .get_archived_node()
-            .heap_item_pointer
-            .deserialize_item_pointer();
-        let dist_state =
-            unsafe { HeapFullDistanceMeasure::with_heap_pointer(self, heap_pointer, stats) };
+        let dist_state = unsafe { self.get_node_distance_measure(neighbors_of, stats) };
         for n in rn.get_archived_node().iter_neighbors() {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(n, dist))
@@ -281,16 +275,6 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            PqSearchDistanceMeasure::Full(query) => {
-                if node.is_deleted() {
-                    //FIXME: need to handle this case
-                    panic!("can't handle the case where the init_id node is deleted");
-                }
-                let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-                unsafe {
-                    calculate_full_distance(self, heap_pointer, query.to_slice(), &mut lsr.stats)
-                }
-            }
             PqSearchDistanceMeasure::Pq(table) => PqSearchDistanceMeasure::calculate_pq_distance(
                 table,
                 node.pq_vector.as_slice(),
@@ -375,7 +359,7 @@ mod tests {
     use pgrx::*;
 
     #[pg_test]
-    unsafe fn test_pq_storage_index_creation() -> spi::Result<()> {
+    unsafe fn test_pq_storage_index_creation_default() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, USE_PQ = TRUE",
         )?;
