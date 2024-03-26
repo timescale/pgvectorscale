@@ -23,43 +23,6 @@ use crate::util::{
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
-/*pub struct PqNodeDistanceMeasure<'a> {
-    storage: &'a PqCompressionStorage<'a>,
-    table: PqDistanceTable,
-}
-
-impl<'a> PqNodeDistanceMeasure<'a> {
-    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
-        storage: &'a PqCompressionStorage,
-        index_pointer: IndexPointer,
-        stats: &mut T,
-    ) -> Self {
-        let rn = unsafe { Node::read(storage.index, index_pointer, stats) };
-        let node = rn.get_archived_node();
-        assert!(node.pq_vector.len() > 0);
-        let table = storage
-            .quantizer
-            .get_distance_table_pq_query(node.pq_vector.as_slice());
-
-        Self {
-            storage: storage,
-            table: table,
-        }
-    }
-}
-
-impl<'a> NodeDistanceMeasure for PqNodeDistanceMeasure<'a> {
-    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut T,
-    ) -> f32 {
-        let rn1 = Node::read(self.storage.index, index_pointer, stats);
-        let node1 = rn1.get_archived_node();
-        self.table.distance(node1.pq_vector.as_slice())
-    }
-}*/
-
 pub struct PqNodeDistanceMeasure<'a> {
     storage: &'a PqCompressionStorage<'a>,
     vector: Vec<PqVectorElement>,
@@ -100,8 +63,8 @@ pub struct PqCompressionStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
     quantizer: PqQuantizer,
-    heap_rel: Option<&'a PgRelation>,
-    heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+    heap_rel: &'a PgRelation,
+    heap_attr: pgrx::pg_sys::AttrNumber,
 }
 
 impl<'a> PqCompressionStorage<'a> {
@@ -114,8 +77,8 @@ impl<'a> PqCompressionStorage<'a> {
             index: index,
             distance_fn: default_distance,
             quantizer: PqQuantizer::new(),
-            heap_rel: Some(heap_rel),
-            heap_attr: Some(heap_attr),
+            heap_rel: heap_rel,
+            heap_attr: heap_attr,
         }
     }
 
@@ -138,8 +101,8 @@ impl<'a> PqCompressionStorage<'a> {
             index: index_relation,
             distance_fn: default_distance,
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
-            heap_rel: Some(heap_rel),
-            heap_attr: Some(heap_attr),
+            heap_rel: heap_rel,
+            heap_attr: heap_attr,
         }
     }
 
@@ -153,8 +116,8 @@ impl<'a> PqCompressionStorage<'a> {
             distance_fn: default_distance,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
-            heap_rel: Some(heap_relation),
-            heap_attr: Some(get_attribute_number_from_index(heap_relation)),
+            heap_rel: heap_relation,
+            heap_attr: get_attribute_number_from_index(index_relation),
         }
     }
 
@@ -206,12 +169,7 @@ impl<'a> PqCompressionStorage<'a> {
         heap_pointer: HeapPointer,
         stats: &mut T,
     ) -> TableSlot {
-        TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr.unwrap(),
-            stats,
-        )
+        TableSlot::new(self.heap_rel, heap_pointer, self.heap_attr, stats)
     }
 }
 
