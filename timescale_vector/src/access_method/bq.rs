@@ -7,7 +7,7 @@ use super::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
-    storage::{ArchivedData, NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage::{ArchivedData, NodeDistanceMeasure, Storage},
     storage_common::get_attribute_number_from_index,
 };
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
@@ -413,7 +413,7 @@ impl<'a> BqSpeedupStorage<'a> {
                                 &mut lsr.stats,
                             )
                         }
-                        GraphNeighborStore::Builder(b) => {
+                        GraphNeighborStore::Builder(_) => {
                             let mut cache = self.qv_cache.borrow_mut();
                             let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
                             let dist = BqSearchDistanceMeasure::calculate_bq_distance(
@@ -433,6 +433,19 @@ impl<'a> BqSpeedupStorage<'a> {
 
             lsr.insert_neighbor(lsn);
         }
+    }
+
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
+        &self,
+        heap_pointer: HeapPointer,
+        stats: &mut T,
+    ) -> TableSlot {
+        TableSlot::new(
+            self.heap_rel.unwrap(),
+            heap_pointer,
+            self.heap_attr.unwrap(),
+            stats,
+        )
     }
 }
 
@@ -516,7 +529,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         );
     }
 
-    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+    fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
         qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
@@ -627,33 +640,6 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
 
     fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
         self.distance_fn
-    }
-}
-
-impl<'a> StorageFullDistanceFromHeap for BqSpeedupStorage<'a> {
-    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsHeapNodeRead + StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> TableSlot {
-        let rn = unsafe { BqNode::read(self.index, index_pointer, stats) };
-        let node = rn.get_archived_node();
-        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-
-        self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats)
-    }
-
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
-        &self,
-        heap_pointer: HeapPointer,
-        stats: &mut T,
-    ) -> TableSlot {
-        TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr.unwrap(),
-            stats,
-        )
     }
 }
 

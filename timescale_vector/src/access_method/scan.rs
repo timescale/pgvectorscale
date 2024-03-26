@@ -1,4 +1,4 @@
-use std::{cmp::Reverse, collections::BinaryHeap};
+use std::collections::BinaryHeap;
 
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
@@ -203,7 +203,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         while self.resort_buffer.len() < self.resort_buffer.capacity() {
             match self.next(index, storage) {
                 Some((heap_pointer, index_pointer)) => {
-                    let distance = storage.get_fulL_distance_for_resort(
+                    let distance = storage.get_full_distance_for_resort(
                         self.lsr.sdm.as_ref().unwrap(),
                         index_pointer,
                         heap_pointer,

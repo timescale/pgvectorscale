@@ -2,7 +2,7 @@ use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
 use crate::access_method::pg_vector::PgVector;
-use crate::access_method::stats::{StatsHeapNodeRead, StatsNodeRead};
+use crate::access_method::stats::StatsHeapNodeRead;
 use crate::util::ports::slot_getattr;
 use crate::util::HeapPointer;
 

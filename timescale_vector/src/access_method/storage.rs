@@ -1,8 +1,6 @@
 use std::pin::Pin;
 
-use crate::util::{
-    page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
-};
+use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
     graph::{ListSearchNeighbor, ListSearchResult},
@@ -74,7 +72,7 @@ pub trait Storage {
 
     fn get_query_distance_measure(&self, query: PgVector) -> Self::QueryDistanceMeasure;
 
-    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+    fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
         query: &Self::QueryDistanceMeasure,
         index_pointer: IndexPointer,
@@ -123,20 +121,6 @@ pub trait Storage {
     );
 
     fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32;
-}
-
-pub trait StorageFullDistanceFromHeap {
-    unsafe fn get_heap_table_slot_from_index_pointer<T: StatsHeapNodeRead + StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut T,
-    ) -> TableSlot;
-
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
-        &self,
-        heap_pointer: HeapPointer,
-        stats: &mut T,
-    ) -> TableSlot;
 }
 
 pub enum StorageType {

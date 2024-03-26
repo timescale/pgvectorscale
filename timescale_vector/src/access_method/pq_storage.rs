@@ -11,7 +11,7 @@ use super::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
-    storage::{NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage::{NodeDistanceMeasure, Storage},
     storage_common::get_attribute_number_from_index,
 };
 
@@ -200,6 +200,19 @@ impl<'a> PqCompressionStorage<'a> {
             lsr.insert_neighbor(lsn);
         }
     }
+
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
+        &self,
+        heap_pointer: HeapPointer,
+        stats: &mut T,
+    ) -> TableSlot {
+        TableSlot::new(
+            self.heap_rel.unwrap(),
+            heap_pointer,
+            self.heap_attr.unwrap(),
+            stats,
+        )
+    }
 }
 
 impl<'a> Storage for PqCompressionStorage<'a> {
@@ -269,16 +282,16 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         );
     }
 
-    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+    fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
         qdm: &Self::QueryDistanceMeasure,
-        index_pointer: IndexPointer,
+        _index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
         stats: &mut S,
     ) -> f32 {
         let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
         match qdm {
-            PqSearchDistanceMeasure::Pq(table, query) => self.get_distance_function()(
+            PqSearchDistanceMeasure::Pq(_, query) => self.get_distance_function()(
                 unsafe { slot.get_pg_vector().to_slice() },
                 query.to_slice(),
             ),
@@ -366,33 +379,6 @@ impl<'a> Storage for PqCompressionStorage<'a> {
 
     fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
         self.distance_fn
-    }
-}
-
-impl<'a> StorageFullDistanceFromHeap for PqCompressionStorage<'a> {
-    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead + StatsHeapNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> TableSlot {
-        let rn = unsafe { Node::read(self.index, index_pointer, stats) };
-        let node = rn.get_archived_node();
-        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-
-        self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats)
-    }
-
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
-        &self,
-        heap_pointer: HeapPointer,
-        stats: &mut T,
-    ) -> TableSlot {
-        TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr.unwrap(),
-            stats,
-        )
     }
 }
 

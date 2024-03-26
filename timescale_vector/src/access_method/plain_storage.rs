@@ -189,7 +189,7 @@ impl<'a> Storage for PlainStorage<'a> {
     fn get_query_distance_measure(&self, query: PgVector) -> PlainDistanceMeasure {
         return PlainDistanceMeasure::Full(query);
     }
-    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+    fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
         _qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
