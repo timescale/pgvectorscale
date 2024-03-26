@@ -200,7 +200,7 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
-fn get_attribute_number(index_info: *mut pg_sys::IndexInfo) -> pg_sys::AttrNumber {
+pub fn get_attribute_number(index_info: *mut pg_sys::IndexInfo) -> pg_sys::AttrNumber {
     unsafe { assert!((*index_info).ii_NumIndexAttrs == 1) };
     unsafe { (*index_info).ii_IndexAttrNumbers[0] }
 }

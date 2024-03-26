@@ -4,6 +4,10 @@ pub trait StatsNodeRead {
     fn record_read(&mut self);
 }
 
+pub trait StatsHeapNodeRead {
+    fn record_heap_read(&mut self);
+}
+
 pub trait StatsNodeModify {
     fn record_modify(&mut self);
 }
@@ -67,6 +71,7 @@ pub struct GreedySearchStats {
     calls: usize,
     full_distance_comparisons: usize,
     node_reads: usize,
+    node_heap_reads: usize,
     quantized_distance_comparisons: usize,
 }
 
@@ -76,6 +81,7 @@ impl GreedySearchStats {
             calls: 0,
             full_distance_comparisons: 0,
             node_reads: 0,
+            node_heap_reads: 0,
             quantized_distance_comparisons: 0,
         }
     }
@@ -84,6 +90,7 @@ impl GreedySearchStats {
         self.calls += other.calls;
         self.full_distance_comparisons += other.full_distance_comparisons;
         self.node_reads += other.node_reads;
+        self.node_heap_reads += other.node_heap_reads;
         self.quantized_distance_comparisons += other.quantized_distance_comparisons;
     }
 
@@ -115,6 +122,12 @@ impl GreedySearchStats {
 impl StatsNodeRead for GreedySearchStats {
     fn record_read(&mut self) {
         self.node_reads += 1;
+    }
+}
+
+impl StatsHeapNodeRead for GreedySearchStats {
+    fn record_heap_read(&mut self) {
+        self.node_heap_reads += 1;
     }
 }
 

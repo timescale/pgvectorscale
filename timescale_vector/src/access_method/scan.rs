@@ -1,3 +1,5 @@
+use std::collections::BinaryHeap;
+
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
@@ -5,7 +7,7 @@ use crate::{
         bq::BqSpeedupStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
         pg_vector::PgVector,
     },
-    util::{buffer::PinnedBufferShare, HeapPointer},
+    util::{buffer::PinnedBufferShare, HeapPointer, IndexPointer},
 };
 
 use super::{
@@ -44,7 +46,13 @@ impl TSVScanState {
         }
     }
 
-    fn initialize(&mut self, index: &PgRelation, query: PgVector, search_list_size: usize) {
+    fn initialize(
+        &mut self,
+        index: &PgRelation,
+        heap: &PgRelation,
+        query: PgVector,
+        search_list_size: usize,
+    ) {
         let meta_page = MetaPage::read(&index);
         let storage = meta_page.get_storage_type();
 
@@ -59,7 +67,7 @@ impl TSVScanState {
             StorageType::PqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = PqQuantizer::load(index, &meta_page, &mut stats);
-                let pq = PqCompressionStorage::load_for_search(index, &quantizer);
+                let pq = PqCompressionStorage::load_for_search(index, heap, &quantizer);
                 let it =
                     TSVResponseIterator::new(&pq, index, query, search_list_size, meta_page, stats);
                 StorageState::PqCompression(quantizer, it)
@@ -67,7 +75,7 @@ impl TSVScanState {
             StorageType::BqSpeedup => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
-                let bq = BqSpeedupStorage::load_for_search(index, &quantizer);
+                let bq = BqSpeedupStorage::load_for_search(index, heap, &quantizer);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::BqSpeedup(quantizer, it)
@@ -78,6 +86,34 @@ impl TSVScanState {
     }
 }
 
+struct ResortData {
+    heap_pointer: HeapPointer,
+    index_pointer: IndexPointer,
+    distance: f32,
+}
+
+impl PartialEq for ResortData {
+    fn eq(&self, other: &Self) -> bool {
+        self.heap_pointer == other.heap_pointer
+    }
+}
+
+impl PartialOrd for ResortData {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        //notice the reverse here. Other is the one that is being compared to self
+        //this allows us to have a min heap
+        other.distance.partial_cmp(&self.distance)
+    }
+}
+
+impl Eq for ResortData {}
+
+impl Ord for ResortData {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.partial_cmp(other).unwrap()
+    }
+}
+
 struct TSVResponseIterator<QDM, PD> {
     lsr: ListSearchResult<QDM, PD>,
     search_list_size: usize,
@@ -85,6 +121,7 @@ struct TSVResponseIterator<QDM, PD> {
     last_buffer: Option<PinnedBufferShare>,
     meta_page: MetaPage,
     quantizer_stats: QuantizerStats,
+    resort_buffer: BinaryHeap<ResortData>,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -100,6 +137,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
+        let resort_size = super::guc::TSV_RESORT_SIZE.get() as usize;
 
         Self {
             search_list_size,
@@ -108,6 +146,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             last_buffer: None,
             meta_page,
             quantizer_stats,
+            resort_buffer: BinaryHeap::with_capacity(resort_size),
         }
     }
 }
@@ -117,7 +156,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         &mut self,
         index: &PgRelation,
         storage: &S,
-    ) -> Option<HeapPointer> {
+    ) -> Option<(HeapPointer, IndexPointer)> {
         let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
@@ -142,13 +181,50 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                         /* deleted tuple */
                         continue;
                     }
-                    return Some(heap_pointer);
+                    return Some((heap_pointer, index_pointer));
                 }
                 None => {
                     self.last_buffer = None;
                     return None;
                 }
             }
+        }
+    }
+
+    fn next_with_resort<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
+        &mut self,
+        index: &PgRelation,
+        storage: &S,
+    ) -> Option<(HeapPointer, IndexPointer)> {
+        if self.resort_buffer.capacity() == 0 {
+            return self.next(index, storage);
+        }
+
+        while self.resort_buffer.len() < self.resort_buffer.capacity() {
+            match self.next(index, storage) {
+                Some((heap_pointer, index_pointer)) => {
+                    let distance = storage.get_full_distance_for_resort(
+                        self.lsr.sdm.as_ref().unwrap(),
+                        index_pointer,
+                        heap_pointer,
+                        &mut self.lsr.stats,
+                    );
+
+                    self.resort_buffer.push(ResortData {
+                        heap_pointer,
+                        index_pointer,
+                        distance,
+                    });
+                }
+                None => {
+                    break;
+                }
+            }
+        }
+
+        match self.resort_buffer.pop() {
+            Some(rd) => Some((rd.heap_pointer, rd.index_pointer)),
+            None => None,
         }
     }
 }
@@ -195,6 +271,7 @@ pub extern "C" fn amrescan(
     }
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
+    let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
     let meta_page = MetaPage::read(&indexrel);
     let _storage = meta_page.get_storage_type();
 
@@ -212,7 +289,7 @@ pub extern "C" fn amrescan(
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-    state.initialize(&indexrel, query, search_list_size);
+    state.initialize(&indexrel, &heaprel, query, search_list_size);
     /*match &mut storage {
         Storage::None => pgrx::error!("not implemented"),
         Storage::PQ(_pq) => pgrx::error!("not implemented"),
@@ -236,33 +313,35 @@ pub extern "C" fn amgettuple(
     //let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
 
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
+    let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
         StorageState::BqSpeedup(quantizer, iter) => {
-            let bq = BqSpeedupStorage::load_for_search(&indexrel, quantizer);
-            get_tuple(&bq, &indexrel, iter, scan)
+            let bq = BqSpeedupStorage::load_for_search(&indexrel, &heaprel, quantizer);
+            let next = iter.next_with_resort(&indexrel, &bq);
+            get_tuple(next, scan)
         }
         StorageState::PqCompression(quantizer, iter) => {
-            let pq = PqCompressionStorage::load_for_search(&indexrel, quantizer);
-            get_tuple(&pq, &indexrel, iter, scan)
+            let pq = PqCompressionStorage::load_for_search(&indexrel, &heaprel, quantizer);
+            let next = iter.next_with_resort(&indexrel, &pq);
+            get_tuple(next, scan)
         }
         StorageState::Plain(iter) => {
-            let bq = PlainStorage::load_for_search(&indexrel);
-            get_tuple(&bq, &indexrel, iter, scan)
+            let storage = PlainStorage::load_for_search(&indexrel);
+            let next = iter.next(&indexrel, &storage);
+            get_tuple(next, scan)
         }
     }
 }
 
-fn get_tuple<'a, S: Storage>(
-    storage: &S,
-    index: &'a PgRelation,
-    iter: &'a mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
+fn get_tuple(
+    next: Option<(HeapPointer, IndexPointer)>,
     mut scan: PgBox<pg_sys::IndexScanDescData>,
 ) -> bool {
     scan.xs_recheckorderby = false;
-    match iter.next(&index, storage) {
-        Some(heap_pointer) => {
+    match next {
+        Some((heap_pointer, _)) => {
             let tid_to_set = &mut scan.xs_heaptid;
             heap_pointer.to_item_pointer_data(tid_to_set);
             true
