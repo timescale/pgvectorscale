@@ -11,8 +11,8 @@ use super::{
     neighbor_with_distance::NeighborWithDistance,
     pg_vector::PgVector,
     stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
-        WriteStats,
+        GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
+        StatsNodeRead, StatsNodeWrite, WriteStats,
     },
 };
 
@@ -74,6 +74,14 @@ pub trait Storage {
 
     fn get_query_distance_measure(&self, query: PgVector) -> Self::QueryDistanceMeasure;
 
+    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+        &self,
+        query: &Self::QueryDistanceMeasure,
+        index_pointer: IndexPointer,
+        heap_pointer: HeapPointer,
+        stats: &mut S,
+    ) -> f32;
+
     fn visit_lsn(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
@@ -118,13 +126,13 @@ pub trait Storage {
 }
 
 pub trait StorageFullDistanceFromHeap {
-    unsafe fn get_heap_table_slot_from_index_pointer<T: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_index_pointer<T: StatsHeapNodeRead + StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> TableSlot;
 
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
         &self,
         heap_pointer: HeapPointer,
         stats: &mut T,

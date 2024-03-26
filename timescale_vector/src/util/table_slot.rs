@@ -2,7 +2,7 @@ use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
 use crate::access_method::pg_vector::PgVector;
-use crate::access_method::stats::StatsNodeRead;
+use crate::access_method::stats::{StatsHeapNodeRead, StatsNodeRead};
 use crate::util::ports::slot_getattr;
 use crate::util::HeapPointer;
 
@@ -12,7 +12,7 @@ pub struct TableSlot {
 }
 
 impl TableSlot {
-    pub unsafe fn new<S: StatsNodeRead>(
+    pub unsafe fn new<S: StatsHeapNodeRead>(
         heap_rel: &PgRelation,
         heap_pointer: HeapPointer,
         attribute_number: pg_sys::AttrNumber,
@@ -35,7 +35,7 @@ impl TableSlot {
             &mut pg_sys::SnapshotAnyData,
             slot.as_ptr(),
         );
-        stats.record_read();
+        stats.record_heap_read();
 
         Self {
             slot,

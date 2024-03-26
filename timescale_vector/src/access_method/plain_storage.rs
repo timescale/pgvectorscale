@@ -5,8 +5,8 @@ use super::{
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
     stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
-        WriteStats,
+        GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
+        StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
 };
@@ -189,7 +189,15 @@ impl<'a> Storage for PlainStorage<'a> {
     fn get_query_distance_measure(&self, query: PgVector) -> PlainDistanceMeasure {
         return PlainDistanceMeasure::Full(query);
     }
-
+    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+        &self,
+        _qdm: &Self::QueryDistanceMeasure,
+        _index_pointer: IndexPointer,
+        _heap_pointer: HeapPointer,
+        _stats: &mut S,
+    ) -> f32 {
+        pgrx::error!("Plain node should never be resorted");
+    }
     fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         neighbors_of: ItemPointer,

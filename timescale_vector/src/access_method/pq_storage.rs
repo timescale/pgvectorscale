@@ -8,10 +8,11 @@ use super::{
     pq_quantizer::{PqQuantizer, PqSearchDistanceMeasure, PqVectorElement},
     pq_quantizer_storage::write_pq,
     stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
-        WriteStats,
+        GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
+        StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage_common::get_attribute_number_from_index,
 };
 
 use pgrx::PgRelation;
@@ -144,6 +145,7 @@ impl<'a> PqCompressionStorage<'a> {
 
     pub fn load_for_search(
         index_relation: &'a PgRelation,
+        heap_relation: &'a PgRelation,
         quantizer: &PqQuantizer,
     ) -> PqCompressionStorage<'a> {
         Self {
@@ -151,19 +153,9 @@ impl<'a> PqCompressionStorage<'a> {
             distance_fn: default_distance,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
-            heap_rel: None,
-            heap_attr: None,
+            heap_rel: Some(heap_relation),
+            heap_attr: Some(get_attribute_number_from_index(heap_relation)),
         }
-    }
-
-    fn get_quantized_vector_from_heap_pointer<S: StatsNodeRead>(
-        &self,
-        heap_pointer: HeapPointer,
-        stats: &mut S,
-    ) -> Vec<PqVectorElement> {
-        let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
-        let slice = unsafe { slot.get_pg_vector() };
-        self.quantizer.quantize(slice.to_slice())
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
@@ -191,7 +183,7 @@ impl<'a> PqCompressionStorage<'a> {
             let node_neighbor = rn_neighbor.get_archived_node();
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                PqSearchDistanceMeasure::Pq(table) => {
+                PqSearchDistanceMeasure::Pq(table, _) => {
                     PqSearchDistanceMeasure::calculate_pq_distance(
                         table,
                         node_neighbor.pq_vector.as_slice(),
@@ -273,7 +265,24 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         return PqSearchDistanceMeasure::Pq(
             self.quantizer
                 .get_distance_table_full_query(query.to_slice(), self.distance_fn),
+            query,
         );
+    }
+
+    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+        &self,
+        qdm: &Self::QueryDistanceMeasure,
+        index_pointer: IndexPointer,
+        heap_pointer: HeapPointer,
+        stats: &mut S,
+    ) -> f32 {
+        let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
+        match qdm {
+            PqSearchDistanceMeasure::Pq(table, query) => self.get_distance_function()(
+                unsafe { slot.get_pg_vector().to_slice() },
+                query.to_slice(),
+            ),
+        }
     }
 
     //todo: same as Bq code?
@@ -307,11 +316,13 @@ impl<'a> Storage for PqCompressionStorage<'a> {
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            PqSearchDistanceMeasure::Pq(table) => PqSearchDistanceMeasure::calculate_pq_distance(
-                table,
-                node.pq_vector.as_slice(),
-                &mut lsr.stats,
-            ),
+            PqSearchDistanceMeasure::Pq(table, _) => {
+                PqSearchDistanceMeasure::calculate_pq_distance(
+                    table,
+                    node.pq_vector.as_slice(),
+                    &mut lsr.stats,
+                )
+            }
         };
 
         ListSearchNeighbor::new(
@@ -359,7 +370,7 @@ impl<'a> Storage for PqCompressionStorage<'a> {
 }
 
 impl<'a> StorageFullDistanceFromHeap for PqCompressionStorage<'a> {
-    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead + StatsHeapNodeRead>(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -371,7 +382,7 @@ impl<'a> StorageFullDistanceFromHeap for PqCompressionStorage<'a> {
         self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats)
     }
 
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
         &self,
         heap_pointer: HeapPointer,
         stats: &mut T,

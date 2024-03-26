@@ -4,10 +4,11 @@ use super::{
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
     stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
-        WriteStats,
+        GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
+        StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage, StorageFullDistanceFromHeap},
+    storage_common::get_attribute_number_from_index,
 };
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
@@ -193,7 +194,7 @@ impl BqDistanceTable {
 
 //FIXME: cleanup make this into a struct
 pub enum BqSearchDistanceMeasure {
-    Bq(BqDistanceTable),
+    Bq(BqDistanceTable, PgVector),
 }
 
 impl BqSearchDistanceMeasure {
@@ -345,6 +346,7 @@ impl<'a> BqSpeedupStorage<'a> {
 
     pub fn load_for_search(
         index_relation: &'a PgRelation,
+        heap_relation: &'a PgRelation,
         quantizer: &BqQuantizer,
     ) -> BqSpeedupStorage<'a> {
         Self {
@@ -352,8 +354,8 @@ impl<'a> BqSpeedupStorage<'a> {
             distance_fn: default_distance,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
-            heap_rel: None,
-            heap_attr: None,
+            heap_rel: Some(heap_relation),
+            heap_attr: Some(get_attribute_number_from_index(index_relation)),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -399,7 +401,7 @@ impl<'a> BqSpeedupStorage<'a> {
             }
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                BqSearchDistanceMeasure::Bq(table) => {
+                BqSearchDistanceMeasure::Bq(table, _) => {
                     /* Note: there is no additional node reads here. We get all of our info from node_visiting
                      * This is what gives us a speedup in BQ Speedup */
                     match gns {
@@ -510,7 +512,24 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         return BqSearchDistanceMeasure::Bq(
             self.quantizer
                 .get_distance_table(query.to_slice(), self.distance_fn),
+            query,
         );
+    }
+
+    fn get_fulL_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
+        &self,
+        qdm: &Self::QueryDistanceMeasure,
+        _index_pointer: IndexPointer,
+        heap_pointer: HeapPointer,
+        stats: &mut S,
+    ) -> f32 {
+        let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
+        match qdm {
+            BqSearchDistanceMeasure::Bq(_, query) => self.get_distance_function()(
+                unsafe { slot.get_pg_vector().to_slice() },
+                query.to_slice(),
+            ),
+        }
     }
 
     fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
@@ -549,11 +568,13 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            BqSearchDistanceMeasure::Bq(table) => BqSearchDistanceMeasure::calculate_bq_distance(
-                table,
-                node.bq_vector.as_slice(),
-                &mut lsr.stats,
-            ),
+            BqSearchDistanceMeasure::Bq(table, _) => {
+                BqSearchDistanceMeasure::calculate_bq_distance(
+                    table,
+                    node.bq_vector.as_slice(),
+                    &mut lsr.stats,
+                )
+            }
         };
 
         ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>)
@@ -610,7 +631,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
 }
 
 impl<'a> StorageFullDistanceFromHeap for BqSpeedupStorage<'a> {
-    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_index_pointer<S: StatsHeapNodeRead + StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -622,7 +643,7 @@ impl<'a> StorageFullDistanceFromHeap for BqSpeedupStorage<'a> {
         self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats)
     }
 
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsNodeRead>(
+    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
         &self,
         heap_pointer: HeapPointer,
         stats: &mut T,
