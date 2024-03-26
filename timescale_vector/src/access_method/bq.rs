@@ -298,8 +298,8 @@ pub struct BqSpeedupStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
     quantizer: BqQuantizer,
-    heap_rel: Option<&'a PgRelation>,
-    heap_attr: Option<pgrx::pg_sys::AttrNumber>,
+    heap_rel: &'a PgRelation,
+    heap_attr: pgrx::pg_sys::AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
 }
 
@@ -313,8 +313,8 @@ impl<'a> BqSpeedupStorage<'a> {
             index: index,
             distance_fn: default_distance,
             quantizer: BqQuantizer::new(),
-            heap_rel: Some(heap_rel),
-            heap_attr: Some(heap_attr),
+            heap_rel: heap_rel,
+            heap_attr: heap_attr,
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -338,8 +338,8 @@ impl<'a> BqSpeedupStorage<'a> {
             index: index_relation,
             distance_fn: default_distance,
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
-            heap_rel: Some(heap_rel),
-            heap_attr: Some(heap_attr),
+            heap_rel: heap_rel,
+            heap_attr: heap_attr,
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -354,8 +354,8 @@ impl<'a> BqSpeedupStorage<'a> {
             distance_fn: default_distance,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
-            heap_rel: Some(heap_relation),
-            heap_attr: Some(get_attribute_number_from_index(index_relation)),
+            heap_rel: heap_relation,
+            heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -440,12 +440,7 @@ impl<'a> BqSpeedupStorage<'a> {
         heap_pointer: HeapPointer,
         stats: &mut T,
     ) -> TableSlot {
-        TableSlot::new(
-            self.heap_rel.unwrap(),
-            heap_pointer,
-            self.heap_attr.unwrap(),
-            stats,
-        )
+        TableSlot::new(self.heap_rel, heap_pointer, self.heap_attr, stats)
     }
 }
 
