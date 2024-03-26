@@ -9,6 +9,7 @@ use crate::access_method::{
 
 use super::{
     meta_page::MetaPage,
+    pg_vector::PgVector,
     stats::{StatsDistanceComparison, StatsNodeRead},
 };
 
@@ -298,7 +299,7 @@ impl PqDistanceTable {
 }
 
 pub enum PqSearchDistanceMeasure {
-    Pq(PqDistanceTable),
+    Pq(PqDistanceTable, PgVector),
 }
 
 impl PqSearchDistanceMeasure {
