@@ -448,8 +448,8 @@ impl<'a> Graph<'a> {
     ) {
         if self.meta_page.get_init_ids().is_none() {
             //TODO probably better set off of centeroids
-            MetaPage::update_init_ids(index, vec![index_pointer]);
-            *self.meta_page = MetaPage::read(index);
+            MetaPage::update_init_ids(index, vec![index_pointer], stats);
+            *self.meta_page = MetaPage::fetch(index);
 
             self.neighbor_store.set_neighbors(
                 storage,

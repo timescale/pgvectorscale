@@ -3,12 +3,16 @@
 
 use pg_sys::Page;
 use pgrx::{
-    pg_sys::{BlockNumber, BufferGetPage},
+    pg_sys::{BlockNumber, BufferGetPage, OffsetNumber, BLCKSZ},
     *,
 };
 use std::ops::Deref;
 
-use super::buffer::{LockedBufferExclusive, LockedBufferShare};
+use super::{
+    buffer::{LockedBufferExclusive, LockedBufferShare},
+    ports::{PageGetItem, PageGetItemId},
+    ReadableBuffer,
+};
 pub struct WritablePage<'a> {
     buffer: LockedBufferExclusive<'a>,
     page: Page,
@@ -20,25 +24,27 @@ pub const TSV_PAGE_ID: u16 = 0xAE24; /* magic number, generated randomly */
 
 /// PageType identifies different types of pages in our index.
 /// The layout of any one type should be consistent
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PageType {
-    Meta = 0,
+    MetaV1 = 0,
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
     BqMeans = 4,
     BqNode = 5,
+    Meta = 6,
 }
 
 impl PageType {
     fn from_u8(value: u8) -> Self {
         match value {
-            0 => PageType::Meta,
+            0 => PageType::MetaV1,
             1 => PageType::Node,
             2 => PageType::PqQuantizerDef,
             3 => PageType::PqQuantizerVector,
             4 => PageType::BqMeans,
             5 => PageType::BqNode,
+            6 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
@@ -96,24 +102,53 @@ impl<'a> WritablePage<'a> {
             let state = pg_sys::GenericXLogStart(index.as_ptr());
             //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
             let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
-            pg_sys::PageInit(
-                page,
-                pg_sys::BLCKSZ as usize,
-                std::mem::size_of::<TsvPageOpaqueData>(),
-            );
-            *TsvPageOpaqueData::with_page(page) = TsvPageOpaqueData::new(page_type);
-            Self {
+            let mut new = Self {
                 buffer: buffer,
                 page: page,
                 state: state,
                 committed: false,
-            }
+            };
+            new.reinit(page_type);
+            new
+        }
+    }
+
+    pub fn reinit(&mut self, page_type: PageType) {
+        unsafe {
+            pg_sys::PageInit(
+                self.page,
+                pg_sys::BLCKSZ as usize,
+                std::mem::size_of::<TsvPageOpaqueData>(),
+            );
+            *TsvPageOpaqueData::with_page(self.page) = TsvPageOpaqueData::new(page_type);
         }
     }
 
     pub fn modify(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferExclusive::read(index, block);
         Self::modify_with_buffer(index, buffer)
+    }
+
+    pub fn add_item(&mut self, data: &[u8]) -> OffsetNumber {
+        let size = data.len();
+        assert!(self.get_free_space() >= size);
+        unsafe { self.add_item_unchecked(data) }
+    }
+
+    pub unsafe fn add_item_unchecked(&mut self, data: &[u8]) -> OffsetNumber {
+        let size = data.len();
+        assert!(size < BLCKSZ as usize);
+
+        let offset_number = pg_sys::PageAddItemExtended(
+            self.page,
+            data.as_ptr() as _,
+            size,
+            pg_sys::InvalidOffsetNumber,
+            0,
+        );
+
+        assert!(offset_number != pg_sys::InvalidOffsetNumber);
+        offset_number
     }
 
     /// get a writable page for cleanup(vacuum) operations.
@@ -157,6 +192,16 @@ impl<'a> WritablePage<'a> {
             TsvPageOpaqueData::with_page(self.page);
 
             PageType::from_u8((*opaque_data).page_type)
+        }
+    }
+
+    pub fn set_types(&self, new: PageType) {
+        unsafe {
+            let opaque_data =
+            //safe to do because self.page was already verified during construction
+            TsvPageOpaqueData::with_page(self.page);
+
+            (*opaque_data).page_type = new as u8;
         }
     }
     /// commit saves all the changes to the page.
@@ -204,8 +249,33 @@ impl<'a> ReadablePage<'a> {
         }
     }
 
+    pub fn get_type(&self) -> PageType {
+        unsafe {
+            let opaque_data =
+            //safe to do because self.page was already verified during construction
+            TsvPageOpaqueData::with_page(self.page);
+
+            PageType::from_u8((*opaque_data).page_type)
+        }
+    }
+
     pub fn get_buffer(&self) -> &LockedBufferShare {
         &self.buffer
+    }
+
+    // Safety: unsafe because no verification of the offset is done.
+    pub unsafe fn get_item_unchecked(
+        self,
+        offset: pgrx::pg_sys::OffsetNumber,
+    ) -> ReadableBuffer<'a> {
+        let item_id = PageGetItemId(self.page, offset);
+        let item = PageGetItem(self.page, item_id) as *mut u8;
+        let len = (*item_id).lp_len();
+        ReadableBuffer {
+            _page: self,
+            ptr: item,
+            len: len as _,
+        }
     }
 }
 

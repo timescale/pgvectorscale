@@ -1,5 +1,4 @@
 use std::mem::size_of;
-use std::pin::Pin;
 
 use ndarray::Array3;
 use pgrx::pg_sys::BLCKSZ;
@@ -13,7 +12,7 @@ use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::{IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
-use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
+use super::stats::{StatsNodeRead, StatsNodeWrite};
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
