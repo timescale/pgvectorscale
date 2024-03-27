@@ -8,11 +8,63 @@ use crate::util::*;
 use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
-const TSV_VERSION: u32 = 1;
+const TSV_VERSION: u32 = 2;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
+/// This is old metadata version for extension versions <=0.0.2.
+/// Note it is NOT repr(C)
+#[derive(Clone)]
+pub struct MetaPageV1 {
+    /// random magic number for identifying the index
+    magic_number: u32,
+    /// version number for future-proofing
+    version: u32,
+    /// number of dimensions in the vector
+    num_dimensions: u32,
+    /// max number of outgoing edges a node in the graph can have (R in the papers)
+    num_neighbors: u32,
+    search_list_size: u32,
+    max_alpha: f64,
+    init_ids_block_number: pg_sys::BlockNumber,
+    init_ids_offset: pg_sys::OffsetNumber,
+    use_pq: bool,
+    pq_vector_length: usize,
+    pq_block_number: pg_sys::BlockNumber,
+    pq_block_offset: pg_sys::OffsetNumber,
+}
+
+impl MetaPageV1 {
+    /// Returns the MetaPage from a page.
+    /// Should only be called from the very first page in a relation.
+    unsafe fn page_get_meta(page: pg_sys::Page, buffer: pg_sys::Buffer) -> *mut MetaPageV1 {
+        assert_eq!(BufferGetBlockNumber(buffer), 0);
+        let meta_page = ports::PageGetContents(page) as *mut MetaPageV1;
+        assert_eq!((*meta_page).magic_number, TSV_MAGIC_NUMBER);
+        assert_eq!((*meta_page).version, 1);
+        meta_page
+    }
+
+    pub fn get_new_meta(&self) -> MetaPage {
+        MetaPage {
+            magic_number: self.magic_number,
+            version: self.version,
+            num_dimensions: self.num_dimensions,
+            num_neighbors: self.num_neighbors,
+            search_list_size: self.search_list_size,
+            max_alpha: self.max_alpha,
+            init_ids_block_number: self.init_ids_block_number,
+            init_ids_offset: self.init_ids_offset,
+            use_pq: self.use_pq,
+            pq_vector_length: self.pq_vector_length,
+            pq_block_number: self.pq_block_number,
+            pq_block_offset: self.pq_block_offset,
+            use_bq: false,
+        }
+    }
+}
+
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct MetaPage {
     /// random magic number for identifying the index
     magic_number: u32,
@@ -118,36 +170,66 @@ impl MetaPage {
         num_dimensions: u32,
         opt: PgBox<TSVIndexOptions>,
     ) -> MetaPage {
+        let meta = MetaPage {
+            magic_number: TSV_MAGIC_NUMBER,
+            version: TSV_VERSION,
+            num_dimensions,
+            num_neighbors: (*opt).num_neighbors,
+            search_list_size: (*opt).search_list_size,
+            max_alpha: (*opt).max_alpha,
+            init_ids_block_number: 0,
+            init_ids_offset: 0,
+            use_pq: (*opt).use_pq,
+            pq_vector_length: (*opt).pq_vector_length,
+            pq_block_number: 0,
+            pq_block_offset: 0,
+            use_bq: (*opt).use_bq,
+        };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
+        meta.write_to_page(page);
+        meta
+    }
+
+    pub unsafe fn write_to_page(&self, page: page::WritablePage) {
         let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), true);
-        (*meta).magic_number = TSV_MAGIC_NUMBER;
-        (*meta).version = TSV_VERSION;
-        (*meta).num_dimensions = num_dimensions;
-        (*meta).num_neighbors = (*opt).num_neighbors;
-        (*meta).search_list_size = (*opt).search_list_size;
-        (*meta).max_alpha = (*opt).max_alpha;
-        (*meta).use_pq = (*opt).use_pq;
-        (*meta).pq_vector_length = (*opt).pq_vector_length;
-        (*meta).pq_block_number = 0;
-        (*meta).pq_block_offset = 0;
-        (*meta).init_ids_block_number = 0;
-        (*meta).init_ids_offset = 0;
-        (*meta).use_bq = (*opt).use_bq;
+        (*meta) = self.clone();
         let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
 
         let meta_end = (meta as Pointer).add(std::mem::size_of::<MetaPage>());
         let page_start = (*page) as Pointer;
         (*header).pd_lower = meta_end.offset_from(page_start) as _;
 
-        let mp = (*meta).clone();
         page.commit();
-        mp
     }
 
     /// Read the meta page for an index
     pub fn read(index: &PgRelation) -> MetaPage {
         unsafe {
             let page = page::ReadablePage::read(index, 0);
+            let page_type = page.get_type();
+            if page_type == crate::util::page::PageType::MetaV1 {
+                let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
+                let new_meta = (*old_meta).get_new_meta();
+
+                std::mem::drop(page);
+                let page = page::WritablePage::modify(index, 0);
+                page.set_types(crate::util::page::PageType::Meta);
+                new_meta.write_to_page(page);
+
+                let page = page::ReadablePage::read(index, 0);
+                let page_type = page.get_type();
+                if page_type != crate::util::page::PageType::Meta {
+                    pgrx::error!(
+                        "Problem upgrading meta page: wrong page type: {:?}",
+                        page_type
+                    );
+                }
+                let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
+                if *meta != new_meta {
+                    pgrx::error!("Problem upgrading meta page: meta mismatch");
+                }
+                return new_meta;
+            }
             let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
             (*meta).clone()
         }

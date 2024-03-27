@@ -20,25 +20,27 @@ pub const TSV_PAGE_ID: u16 = 0xAE24; /* magic number, generated randomly */
 
 /// PageType identifies different types of pages in our index.
 /// The layout of any one type should be consistent
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PageType {
-    Meta = 0,
+    MetaV1 = 0,
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
     BqMeans = 4,
     BqNode = 5,
+    Meta = 6,
 }
 
 impl PageType {
     fn from_u8(value: u8) -> Self {
         match value {
-            0 => PageType::Meta,
+            0 => PageType::MetaV1,
             1 => PageType::Node,
             2 => PageType::PqQuantizerDef,
             3 => PageType::PqQuantizerVector,
             4 => PageType::BqMeans,
             5 => PageType::BqNode,
+            6 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
@@ -159,6 +161,16 @@ impl<'a> WritablePage<'a> {
             PageType::from_u8((*opaque_data).page_type)
         }
     }
+
+    pub fn set_types(&self, new: PageType) {
+        unsafe {
+            let opaque_data =
+            //safe to do because self.page was already verified during construction
+            TsvPageOpaqueData::with_page(self.page);
+
+            (*opaque_data).page_type = new as u8;
+        }
+    }
     /// commit saves all the changes to the page.
     /// Note that this will consume the page and make it unusable after the call.
     pub fn commit(mut self) {
@@ -201,6 +213,16 @@ impl<'a> ReadablePage<'a> {
         Self {
             buffer: buffer,
             page: page,
+        }
+    }
+
+    pub fn get_type(&self) -> PageType {
+        unsafe {
+            let opaque_data =
+            //safe to do because self.page was already verified during construction
+            TsvPageOpaqueData::with_page(self.page);
+
+            PageType::from_u8((*opaque_data).page_type)
         }
     }
 
