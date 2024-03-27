@@ -36,6 +36,10 @@ impl<'a> ReadableBuffer<'a> {
     pub fn get_data_slice(&self) -> &[u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
+
+    pub fn get_owned_page(self) -> ReadablePage<'a> {
+        self._page
+    }
 }
 
 pub struct WritableBuffer<'a> {
@@ -84,15 +88,9 @@ impl ItemPointer {
 
     pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer {
         let page = ReadablePage::read(index, self.block_number);
-        let item_id = PageGetItemId(*page, self.offset);
-        let item = PageGetItem(*page, item_id) as *mut u8;
-        let len = (*item_id).lp_len();
-        ReadableBuffer {
-            _page: page,
-            ptr: item,
-            len: len as _,
-        }
+        page.get_item_unchecked(self.offset)
     }
+
     pub unsafe fn modify_bytes(self, index: &PgRelation) -> WritableBuffer {
         let page = WritablePage::modify(index, self.block_number);
         let item_id = PageGetItemId(*page, self.offset);

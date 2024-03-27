@@ -8,9 +8,7 @@ use timescale_vector_derive::{Readable, Writeable};
 
 use super::neighbor_with_distance::NeighborWithDistance;
 use super::pq_quantizer::PqVectorElement;
-use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
 use super::storage::ArchivedData;
-use crate::util::tape::Tape;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
 use super::meta_page::MetaPage;

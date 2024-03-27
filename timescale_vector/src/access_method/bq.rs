@@ -370,10 +370,10 @@ impl<'a> BqSpeedupStorage<'a> {
         node.bq_vector.as_slice().to_vec()
     }
 
-    fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
+    fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
         if self.quantizer.use_mean {
             let index_pointer = unsafe { BqMeans::store(&self.index, &self.quantizer, stats) };
-            super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
+            super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer, stats);
         }
     }
 
