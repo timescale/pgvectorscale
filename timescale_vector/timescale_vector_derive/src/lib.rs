@@ -37,6 +37,10 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
                 //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
                 unsafe { rkyv::archived_root::<#name>(self._rb.get_data_slice()) }
             }
+
+            pub fn get_owned_page(self) -> crate::util::page::ReadablePage<'a> {
+                self._rb.get_owned_page()
+            }
         }
 
         impl #name {

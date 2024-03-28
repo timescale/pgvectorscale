@@ -13,6 +13,10 @@ use super::storage::StorageType;
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 2;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
+
+const META_BLOCK_NUMBER: pg_sys::BlockNumber = 0;
+const META_HEADER_OFFSET: pgrx::pg_sys::OffsetNumber = 1;
+const META_OFFSET: pgrx::pg_sys::OffsetNumber = 2;
 /// This is old metadata version for extension versions <=0.0.2.
 /// Note it is NOT repr(C)
 #[derive(Clone)]
@@ -48,8 +52,8 @@ impl MetaPageV1 {
 
     pub fn get_new_meta(&self) -> MetaPage {
         MetaPage {
-            magic_number: self.magic_number,
-            version: self.version,
+            magic_number: TSV_MAGIC_NUMBER,
+            version: TSV_VERSION,
             num_dimensions: self.num_dimensions,
             num_neighbors: self.num_neighbors,
             search_list_size: self.search_list_size,
@@ -65,14 +69,26 @@ impl MetaPageV1 {
     }
 }
 
-/// This is metadata about the entire index.
-/// Stored as the first page in the index relation.
+/// This is metadata header. It contains just the magic number and version number.
+/// Stored as the first page (offset 1) in the index relation.
+/// The header is separate from the actual metadata to allow for future-proofing.
+/// In particular, if the metadata format changes, we can still read the header to check the version.
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-pub struct MetaPage {
+pub struct MetaPageHeader {
     /// random magic number for identifying the index
     magic_number: u32,
     /// version number for future-proofing
+    version: u32,
+}
+
+/// This is metadata about the entire index.
+/// Stored as the first page (offset 2) in the index relation.
+#[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[archive(check_bytes)]
+pub struct MetaPage {
+    /// repeat the magic number and version from MetaPageHeader for sanity checks
+    magic_number: u32,
     version: u32,
     /// number of dimensions in the vector
     num_dimensions: u32,
@@ -180,19 +196,33 @@ impl MetaPage {
     }
 
     unsafe fn write_to_page(&self, mut page: page::WritablePage) {
+        let header = MetaPageHeader {
+            magic_number: self.magic_number,
+            version: self.version,
+        };
+
+        assert!(header.magic_number == TSV_MAGIC_NUMBER);
+        assert!(header.version == TSV_VERSION);
+
+        //serialize the header
+        let bytes = header.serialize_to_vec();
+        let off = page.add_item(&bytes);
+        assert!(off == META_HEADER_OFFSET);
+
+        //serialize the meta
         let bytes = self.serialize_to_vec();
         let off = page.add_item(&bytes);
-        assert!(off == 1);
+        assert!(off == META_OFFSET);
 
         page.commit();
     }
 
     unsafe fn overwrite(index: &PgRelation, new_meta: &MetaPage) {
-        let mut page = page::WritablePage::modify(index, 0);
+        let mut page = page::WritablePage::modify(index, META_BLOCK_NUMBER);
         page.reinit(crate::util::page::PageType::Meta);
         new_meta.write_to_page(page);
 
-        let page = page::ReadablePage::read(index, 0);
+        let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
         let page_type = page.get_type();
         if page_type != crate::util::page::PageType::Meta {
             pgrx::error!(
@@ -209,7 +239,7 @@ impl MetaPage {
     /// Read the meta page for an index
     pub fn fetch(index: &PgRelation) -> MetaPage {
         unsafe {
-            let page = page::ReadablePage::read(index, 0);
+            let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
             let page_type = page.get_type();
             if page_type == crate::util::page::PageType::MetaV1 {
                 let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
@@ -226,9 +256,21 @@ impl MetaPage {
     }
 
     unsafe fn get_meta_from_page(page: page::ReadablePage) -> MetaPage {
-        let rb = page.get_item_unchecked(1);
+        //check the header. In the future, we can use this to check the version
+        let rb = page.get_item_unchecked(META_HEADER_OFFSET);
+        let meta = ReadableMetaPageHeader::with_readable_buffer(rb);
+        let archived = meta.get_archived_node();
+        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
+        assert!(archived.version == TSV_VERSION);
+
+        let page = meta.get_owned_page();
+
+        //retrieve the MetaPage itself and deserialize it
+        let rb = page.get_item_unchecked(META_OFFSET);
         let meta = ReadableMetaPage::with_readable_buffer(rb);
         let archived = meta.get_archived_node();
+        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
+        assert!(archived.version == TSV_VERSION);
 
         archived.deserialize(&mut rkyv::Infallible).unwrap()
     }
@@ -243,7 +285,7 @@ impl MetaPage {
         let id = init_ids[0];
 
         unsafe {
-            let ip = ItemPointer::new(0, 1);
+            let ip = ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET);
             let m = MetaPage::modify(index, ip, stats);
             let mut archived = m.get_archived_node();
             archived.init_ids_block_number = id.block_number;
@@ -258,7 +300,7 @@ impl MetaPage {
         stats: &mut S,
     ) {
         unsafe {
-            let ip = ItemPointer::new(0, 1);
+            let ip = ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET);
             let m = MetaPage::modify(index, ip, stats);
             let mut archived = m.get_archived_node();
             archived.pq_block_number = pq_pointer.block_number;
