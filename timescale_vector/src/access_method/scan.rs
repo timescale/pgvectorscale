@@ -53,7 +53,7 @@ impl TSVScanState {
         query: PgVector,
         search_list_size: usize,
     ) {
-        let meta_page = MetaPage::read(&index);
+        let meta_page = MetaPage::fetch(&index);
         let storage = meta_page.get_storage_type();
 
         let store_type = match storage {
@@ -133,7 +133,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
-        let mut meta_page = MetaPage::read(&index);
+        let mut meta_page = MetaPage::fetch(&index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
@@ -272,7 +272,7 @@ pub extern "C" fn amrescan(
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
-    let meta_page = MetaPage::read(&indexrel);
+    let meta_page = MetaPage::fetch(&indexrel);
     let _storage = meta_page.get_storage_type();
 
     if nkeys > 0 {

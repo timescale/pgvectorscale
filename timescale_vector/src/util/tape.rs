@@ -41,18 +41,11 @@ impl<'a> Tape<'a> {
                 panic!("Not enough free space on new page");
             }
         }
-        let offset_number = pg_sys::PageAddItemExtended(
-            *current_page,
-            data.as_ptr() as _,
-            size,
-            pg_sys::InvalidOffsetNumber,
-            0,
-        );
+        let offset_number = current_page.add_item_unchecked(data);
 
-        assert!(offset_number != pg_sys::InvalidOffsetNumber);
-        let index_pointer = super::ItemPointer::with_page(&current_page, offset_number);
+        let item_pointer = super::ItemPointer::with_page(&current_page, offset_number);
         current_page.commit();
-        index_pointer
+        item_pointer
     }
 
     pub fn close(self) {

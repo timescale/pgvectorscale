@@ -3,12 +3,16 @@
 
 use pg_sys::Page;
 use pgrx::{
-    pg_sys::{BlockNumber, BufferGetPage},
+    pg_sys::{BlockNumber, BufferGetPage, OffsetNumber, BLCKSZ},
     *,
 };
 use std::ops::Deref;
 
-use super::buffer::{LockedBufferExclusive, LockedBufferShare};
+use super::{
+    buffer::{LockedBufferExclusive, LockedBufferShare},
+    ports::{PageGetItem, PageGetItemId},
+    ReadableBuffer,
+};
 pub struct WritablePage<'a> {
     buffer: LockedBufferExclusive<'a>,
     page: Page,
@@ -98,24 +102,53 @@ impl<'a> WritablePage<'a> {
             let state = pg_sys::GenericXLogStart(index.as_ptr());
             //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
             let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
-            pg_sys::PageInit(
-                page,
-                pg_sys::BLCKSZ as usize,
-                std::mem::size_of::<TsvPageOpaqueData>(),
-            );
-            *TsvPageOpaqueData::with_page(page) = TsvPageOpaqueData::new(page_type);
-            Self {
+            let mut new = Self {
                 buffer: buffer,
                 page: page,
                 state: state,
                 committed: false,
-            }
+            };
+            new.reinit(page_type);
+            new
+        }
+    }
+
+    pub fn reinit(&mut self, page_type: PageType) {
+        unsafe {
+            pg_sys::PageInit(
+                self.page,
+                pg_sys::BLCKSZ as usize,
+                std::mem::size_of::<TsvPageOpaqueData>(),
+            );
+            *TsvPageOpaqueData::with_page(self.page) = TsvPageOpaqueData::new(page_type);
         }
     }
 
     pub fn modify(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferExclusive::read(index, block);
         Self::modify_with_buffer(index, buffer)
+    }
+
+    pub fn add_item(&mut self, data: &[u8]) -> OffsetNumber {
+        let size = data.len();
+        assert!(self.get_free_space() >= size);
+        unsafe { self.add_item_unchecked(data) }
+    }
+
+    pub unsafe fn add_item_unchecked(&mut self, data: &[u8]) -> OffsetNumber {
+        let size = data.len();
+        assert!(size < BLCKSZ as usize);
+
+        let offset_number = pg_sys::PageAddItemExtended(
+            self.page,
+            data.as_ptr() as _,
+            size,
+            pg_sys::InvalidOffsetNumber,
+            0,
+        );
+
+        assert!(offset_number != pg_sys::InvalidOffsetNumber);
+        offset_number
     }
 
     /// get a writable page for cleanup(vacuum) operations.
@@ -228,6 +261,21 @@ impl<'a> ReadablePage<'a> {
 
     pub fn get_buffer(&self) -> &LockedBufferShare {
         &self.buffer
+    }
+
+    // Safety: unsafe because no verification of the offset is done.
+    pub unsafe fn get_item_unchecked(
+        self,
+        offset: pgrx::pg_sys::OffsetNumber,
+    ) -> ReadableBuffer<'a> {
+        let item_id = PageGetItemId(self.page, offset);
+        let item = PageGetItem(self.page, item_id) as *mut u8;
+        let len = (*item_id).lp_len();
+        ReadableBuffer {
+            _page: self,
+            ptr: item,
+            len: len as _,
+        }
     }
 }
 

@@ -27,6 +27,10 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl<'a> #readable_name<'a> {
+            pub fn with_readable_buffer(rb: ReadableBuffer<'a>) -> Self {
+                Self { _rb: rb }
+            }
+
             pub fn get_archived_node(&self) -> & #archived_name {
                 // checking the code here is expensive during build, so skip it.
                 // TODO: should we check the data during queries?
@@ -36,10 +40,10 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl #name {
-            pub unsafe fn read<'a, 'b, S: StatsNodeRead>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #readable_name<'a> {
+            pub unsafe fn read<'a, 'b, S: crate::access_method::stats::StatsNodeRead>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #readable_name<'a> {
                 let rb = index_pointer.read_bytes(index);
                 stats.record_read();
-                #readable_name { _rb: rb }
+                #readable_name::with_readable_buffer(rb)
             }
         }
     };
@@ -51,19 +55,20 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
     let writeable_name = format_ident!("Writable{}", name);
     let archived_name = format_ident!("Archived{}", name);
     let gen = quote! {
+
         pub struct #writeable_name<'a> {
             wb: WritableBuffer<'a>,
         }
 
         impl #archived_name {
-            pub fn with_data(data: &mut [u8]) -> Pin<&mut #archived_name> {
-                let pinned_bytes = Pin::new(data);
+            pub fn with_data(data: &mut [u8]) -> std::pin::Pin<&mut #archived_name> {
+                let pinned_bytes = std::pin::Pin::new(data);
                 unsafe { rkyv::archived_root_mut::<#name>(pinned_bytes) }
             }
         }
 
         impl<'a> #writeable_name<'a> {
-            pub fn get_archived_node(&self) -> Pin<&mut #archived_name> {
+            pub fn get_archived_node(&self) -> std::pin::Pin<&mut #archived_name> {
                 #archived_name::with_data(self.wb.get_data_slice())
             }
 
@@ -73,17 +78,22 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl #name {
-            pub unsafe fn modify<'a, 'b, S: StatsNodeModify>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #writeable_name<'a> {
+            pub unsafe fn modify<'a, 'b, S: crate::access_method::stats::StatsNodeModify>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #writeable_name<'a> {
                 let wb = index_pointer.modify_bytes(index);
                 stats.record_modify();
                 #writeable_name { wb: wb }
             }
 
-            pub fn write<S: StatsNodeWrite>(&self, tape: &mut Tape, stats: &mut S) -> ItemPointer {
+            pub fn write<S: crate::access_method::stats::StatsNodeWrite>(&self, tape: &mut crate::util::tape::Tape, stats: &mut S) -> ItemPointer {
                 //TODO 256 probably too small
-                let bytes = rkyv::to_bytes::<_, 256>(self).unwrap();
+                let bytes = self.serialize_to_vec();
                 stats.record_write();
                 unsafe { tape.write(&bytes) }
+            }
+
+            pub fn serialize_to_vec(&self) -> rkyv::util::AlignedVec {
+                //TODO 256 probably too small
+                rkyv::to_bytes::<_, 256>(self).unwrap()
             }
         }
     };

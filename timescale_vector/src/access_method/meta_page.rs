@@ -1,10 +1,13 @@
-use pgrx::pg_sys::{BufferGetBlockNumber, Pointer};
+use pgrx::pg_sys::BufferGetBlockNumber;
 use pgrx::*;
+use rkyv::{Archive, Deserialize, Serialize};
+use timescale_vector_derive::{Readable, Writeable};
 
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
+use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
@@ -64,7 +67,8 @@ impl MetaPageV1 {
 
 /// This is metadata about the entire index.
 /// Stored as the first page in the index relation.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[archive(check_bytes)]
 pub struct MetaPage {
     /// random magic number for identifying the index
     magic_number: u32,
@@ -148,21 +152,6 @@ impl MetaPage {
         Some(ptr)
     }
 
-    /// Returns the MetaPage from a page.
-    /// Should only be called from the very first page in a relation.
-    unsafe fn page_get_meta(
-        page: pg_sys::Page,
-        buffer: pg_sys::Buffer,
-        new: bool,
-    ) -> *mut MetaPage {
-        assert_eq!(BufferGetBlockNumber(buffer), 0);
-        let meta_page = ports::PageGetContents(page) as *mut MetaPage;
-        if !new {
-            assert_eq!((*meta_page).magic_number, TSV_MAGIC_NUMBER);
-        }
-        meta_page
-    }
-
     /// Write out a new meta page.
     /// Has to be done as the first write to a new relation.
     pub unsafe fn create(
@@ -190,20 +179,35 @@ impl MetaPage {
         meta
     }
 
-    pub unsafe fn write_to_page(&self, page: page::WritablePage) {
-        let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), true);
-        (*meta) = self.clone();
-        let header = page.cast::<pgrx::pg_sys::PageHeaderData>();
-
-        let meta_end = (meta as Pointer).add(std::mem::size_of::<MetaPage>());
-        let page_start = (*page) as Pointer;
-        (*header).pd_lower = meta_end.offset_from(page_start) as _;
+    unsafe fn write_to_page(&self, mut page: page::WritablePage) {
+        let bytes = self.serialize_to_vec();
+        let off = page.add_item(&bytes);
+        assert!(off == 1);
 
         page.commit();
     }
 
+    unsafe fn overwrite(index: &PgRelation, new_meta: &MetaPage) {
+        let mut page = page::WritablePage::modify(index, 0);
+        page.reinit(crate::util::page::PageType::Meta);
+        new_meta.write_to_page(page);
+
+        let page = page::ReadablePage::read(index, 0);
+        let page_type = page.get_type();
+        if page_type != crate::util::page::PageType::Meta {
+            pgrx::error!(
+                "Problem upgrading meta page: wrong page type: {:?}",
+                page_type
+            );
+        }
+        let meta = Self::get_meta_from_page(page);
+        if meta != *new_meta {
+            pgrx::error!("Problem upgrading meta page: meta mismatch");
+        }
+    }
+
     /// Read the meta page for an index
-    pub fn read(index: &PgRelation) -> MetaPage {
+    pub fn fetch(index: &PgRelation) -> MetaPage {
         unsafe {
             let page = page::ReadablePage::read(index, 0);
             let page_type = page.get_type();
@@ -211,51 +215,55 @@ impl MetaPage {
                 let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
                 let new_meta = (*old_meta).get_new_meta();
 
+                //release the page
                 std::mem::drop(page);
-                let page = page::WritablePage::modify(index, 0);
-                page.set_types(crate::util::page::PageType::Meta);
-                new_meta.write_to_page(page);
 
-                let page = page::ReadablePage::read(index, 0);
-                let page_type = page.get_type();
-                if page_type != crate::util::page::PageType::Meta {
-                    pgrx::error!(
-                        "Problem upgrading meta page: wrong page type: {:?}",
-                        page_type
-                    );
-                }
-                let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
-                if *meta != new_meta {
-                    pgrx::error!("Problem upgrading meta page: meta mismatch");
-                }
+                Self::overwrite(index, &new_meta);
                 return new_meta;
             }
-            let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
-            (*meta).clone()
+            Self::get_meta_from_page(page)
         }
     }
 
+    unsafe fn get_meta_from_page(page: page::ReadablePage) -> MetaPage {
+        let rb = page.get_item_unchecked(1);
+        let meta = ReadableMetaPage::with_readable_buffer(rb);
+        let archived = meta.get_archived_node();
+
+        archived.deserialize(&mut rkyv::Infallible).unwrap()
+    }
+
     /// Change the init ids for an index.
-    pub fn update_init_ids(index: &PgRelation, init_ids: Vec<IndexPointer>) {
+    pub fn update_init_ids<S: StatsNodeModify>(
+        index: &PgRelation,
+        init_ids: Vec<IndexPointer>,
+        stats: &mut S,
+    ) {
         assert_eq!(init_ids.len(), 1); //change this if we support multiple
         let id = init_ids[0];
 
         unsafe {
-            let page = page::WritablePage::modify(index, 0);
-            let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
-            (*meta).init_ids_block_number = id.block_number;
-            (*meta).init_ids_offset = id.offset;
-            page.commit()
+            let ip = ItemPointer::new(0, 1);
+            let m = MetaPage::modify(index, ip, stats);
+            let mut archived = m.get_archived_node();
+            archived.init_ids_block_number = id.block_number;
+            archived.init_ids_offset = id.offset;
+            m.commit()
         }
     }
 
-    pub fn update_pq_pointer(index: &PgRelation, pq_pointer: IndexPointer) {
+    pub fn update_pq_pointer<S: StatsNodeModify>(
+        index: &PgRelation,
+        pq_pointer: IndexPointer,
+        stats: &mut S,
+    ) {
         unsafe {
-            let page = page::WritablePage::modify(index, 0);
-            let meta = Self::page_get_meta(*page, *(*(page.get_buffer())), false);
-            (*meta).pq_block_number = pq_pointer.block_number;
-            (*meta).pq_block_offset = pq_pointer.offset;
-            page.commit()
+            let ip = ItemPointer::new(0, 1);
+            let m = MetaPage::modify(index, ip, stats);
+            let mut archived = m.get_archived_node();
+            archived.pq_block_number = pq_pointer.block_number;
+            archived.pq_block_offset = pq_pointer.offset;
+            m.commit();
         }
     }
 }

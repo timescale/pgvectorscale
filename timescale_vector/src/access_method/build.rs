@@ -120,7 +120,7 @@ pub unsafe extern "C" fn aminsert(
     }
     let vec = vec.unwrap();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
-    let mut meta_page = MetaPage::read(&index_relation);
+    let mut meta_page = MetaPage::fetch(&index_relation);
 
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();

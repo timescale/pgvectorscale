@@ -121,10 +121,10 @@ impl<'a> PqCompressionStorage<'a> {
         }
     }
 
-    fn write_quantizer_metadata<S: StatsNodeWrite>(&self, stats: &mut S) {
+    fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
         let pq = self.quantizer.must_get_pq();
         let index_pointer: IndexPointer = unsafe { write_pq(pq, &self.index, stats) };
-        super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer);
+        super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer, stats);
     }
 
     fn visit_lsn_internal(

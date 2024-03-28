@@ -40,7 +40,7 @@ pub extern "C" fn ambulkdelete(
         )
     };
 
-    let meta_page = MetaPage::read(&index_relation);
+    let meta_page = MetaPage::fetch(&index_relation);
     let storage = meta_page.get_storage_type();
     match storage {
         StorageType::BqSpeedup => {
