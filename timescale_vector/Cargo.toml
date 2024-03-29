@@ -1,6 +1,6 @@
 [package]
 name = "timescale_vector"
-version = "0.0.2"
+version = "0.0.3-dev"
 edition = "2021"
 
 [lib]

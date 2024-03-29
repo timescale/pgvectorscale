@@ -28,7 +28,7 @@ mod pq_quantizer_storage;
 mod pq_storage;
 
 #[pg_extern(sql = "
-    CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS 'MODULE_PATHNAME', '@FUNCTION_NAME@';
+    CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '@MODULE_PATHNAME@', '@FUNCTION_NAME@';
     CREATE ACCESS METHOD tsv TYPE INDEX HANDLER tsv_amhandler;
 ")]
 fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine> {
@@ -73,12 +73,27 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
     amroutine.into_pg_boxed()
 }
 
+// This SQL is made idempotent so that we can use the same script for the installation and the upgrade.
 extension_sql!(
     r#"
-CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-FOR TYPE vector USING tsv AS
-	OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops
-;
+DO $$
+DECLARE
+  c int;
+BEGIN
+    SELECT count(*)
+    INTO c
+    FROM pg_catalog.pg_opclass c
+    WHERE c.opcname = 'vector_cosine_ops'
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'tsv');
+
+    IF c = 0 THEN
+        CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
+        FOR TYPE vector USING tsv AS
+	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops;
+    END IF;
+END;
+$$;
+
 "#,
     name = "tsv_ops_operator"
 );
