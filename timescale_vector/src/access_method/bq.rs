@@ -1,5 +1,5 @@
 use super::{
-    distance::{distance_cosine as default_distance, distance_xor_optimized},
+    distance::distance_xor_optimized,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -308,10 +308,11 @@ impl<'a> BqSpeedupStorage<'a> {
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> BqSpeedupStorage<'a> {
         Self {
             index: index,
-            distance_fn: default_distance,
+            distance_fn: distance_fn,
             quantizer: BqQuantizer::new(),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -336,7 +337,7 @@ impl<'a> BqSpeedupStorage<'a> {
     ) -> BqSpeedupStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn: meta_page.get_distance_function(),
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -348,10 +349,11 @@ impl<'a> BqSpeedupStorage<'a> {
         index_relation: &'a PgRelation,
         heap_relation: &'a PgRelation,
         quantizer: &BqQuantizer,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> BqSpeedupStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn: distance_fn,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,

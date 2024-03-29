@@ -1,6 +1,6 @@
 [package]
 name = "timescale_vector"
-version = "0.0.2"
+version = "0.0.3-dev"
 edition = "2021"
 
 [lib]
@@ -27,10 +27,13 @@ rand_core = "0.6"
 rand_xorshift = "0.3"
 rayon = "1"
 timescale_vector_derive = { path = "timescale_vector_derive" }
+semver = "1.0.22"
 
 [dev-dependencies]
 pgrx-tests = "=0.11.2"
+pgrx-pg-config = "=0.11.2"
 criterion = "0.5.1"
+tempfile = "3.3.0"
 
 [profile.dev]
 panic = "unwind"
