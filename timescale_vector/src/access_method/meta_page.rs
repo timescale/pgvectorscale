@@ -1,12 +1,14 @@
 use pgrx::pg_sys::BufferGetBlockNumber;
 use pgrx::*;
 use rkyv::{Archive, Deserialize, Serialize};
+use semver::Version;
 use timescale_vector_derive::{Readable, Writeable};
 
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
+use super::distance;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -54,6 +56,8 @@ impl MetaPageV1 {
         MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
+            extension_version_when_built: "0.0.2".to_string(),
+            distance_type: DistanceType::L2 as u16,
             num_dimensions: self.num_dimensions,
             num_neighbors: self.num_neighbors,
             search_list_size: self.search_list_size,
@@ -82,6 +86,21 @@ pub struct MetaPageHeader {
     version: u32,
 }
 
+pub enum DistanceType {
+    Cosine = 0,
+    L2 = 1,
+}
+
+impl DistanceType {
+    fn from_u16(value: u16) -> Self {
+        match value {
+            0 => DistanceType::Cosine,
+            1 => DistanceType::L2,
+            _ => panic!("Unknown DistanceType number {}", value),
+        }
+    }
+}
+
 /// This is metadata about the entire index.
 /// Stored as the first page (offset 2) in the index relation.
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -90,6 +109,8 @@ pub struct MetaPage {
     /// repeat the magic number and version from MetaPageHeader for sanity checks
     magic_number: u32,
     version: u32,
+    extension_version_when_built: String,
+    distance_type: u16,
     /// number of dimensions in the vector
     num_dimensions: u32,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
@@ -134,6 +155,13 @@ impl MetaPage {
         self.use_pq
     }
 
+    pub fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
+        match DistanceType::from_u16(self.distance_type) {
+            DistanceType::Cosine => distance::distance_cosine,
+            DistanceType::L2 => distance::distance_l2,
+        }
+    }
+
     pub fn get_storage_type(&self) -> StorageType {
         if self.get_use_pq() {
             StorageType::PqCompression
@@ -175,9 +203,13 @@ impl MetaPage {
         num_dimensions: u32,
         opt: PgBox<TSVIndexOptions>,
     ) -> MetaPage {
+        let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
+
         let meta = MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
+            extension_version_when_built: version.to_string(),
+            distance_type: DistanceType::Cosine as u16,
             num_dimensions,
             num_neighbors: (*opt).num_neighbors,
             search_list_size: (*opt).search_list_size,
@@ -284,14 +316,14 @@ impl MetaPage {
         assert_eq!(init_ids.len(), 1); //change this if we support multiple
         let id = init_ids[0];
 
+        let mut meta = Self::fetch(index);
+        meta.init_ids_block_number = id.block_number;
+        meta.init_ids_offset = id.offset;
+
         unsafe {
-            let ip = ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET);
-            let m = MetaPage::modify(index, ip, stats);
-            let mut archived = m.get_archived_node();
-            archived.init_ids_block_number = id.block_number;
-            archived.init_ids_offset = id.offset;
-            m.commit()
-        }
+            Self::overwrite(index, &meta);
+            stats.record_modify();
+        };
     }
 
     pub fn update_pq_pointer<S: StatsNodeModify>(
@@ -299,13 +331,13 @@ impl MetaPage {
         pq_pointer: IndexPointer,
         stats: &mut S,
     ) {
+        let mut meta = Self::fetch(index);
+        meta.pq_block_number = pq_pointer.block_number;
+        meta.pq_block_offset = pq_pointer.offset;
+
         unsafe {
-            let ip = ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET);
-            let m = MetaPage::modify(index, ip, stats);
-            let mut archived = m.get_archived_node();
-            archived.pq_block_number = pq_pointer.block_number;
-            archived.pq_block_offset = pq_pointer.offset;
-            m.commit();
-        }
+            Self::overwrite(index, &meta);
+            stats.record_modify();
+        };
     }
 }

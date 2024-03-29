@@ -1,5 +1,4 @@
 use super::{
-    distance::distance_cosine as default_distance,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -72,10 +71,11 @@ impl<'a> PqCompressionStorage<'a> {
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         heap_attr: pgrx::pg_sys::AttrNumber,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PqCompressionStorage<'a> {
         Self {
             index: index,
-            distance_fn: default_distance,
+            distance_fn,
             quantizer: PqQuantizer::new(),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -99,7 +99,7 @@ impl<'a> PqCompressionStorage<'a> {
     ) -> PqCompressionStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn: meta_page.get_distance_function(),
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: heap_rel,
             heap_attr: heap_attr,
@@ -110,10 +110,11 @@ impl<'a> PqCompressionStorage<'a> {
         index_relation: &'a PgRelation,
         heap_relation: &'a PgRelation,
         quantizer: &PqQuantizer,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PqCompressionStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn,
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,

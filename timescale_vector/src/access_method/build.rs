@@ -126,7 +126,8 @@ pub unsafe extern "C" fn aminsert(
     let mut stats = InsertStats::new();
     match &mut storage {
         StorageType::Plain => {
-            let plain = PlainStorage::load_for_insert(&index_relation);
+            let plain =
+                PlainStorage::load_for_insert(&index_relation, meta_page.get_distance_function());
             insert_storage(
                 &plain,
                 &index_relation,
@@ -221,7 +222,8 @@ fn do_heap_scan<'a>(
     let mut write_stats = WriteStats::new();
     match storage {
         StorageType::Plain => {
-            let mut plain = PlainStorage::new_for_build(index_relation);
+            let mut plain =
+                PlainStorage::new_for_build(index_relation, meta_page.get_distance_function());
             plain.start_training(&meta_page);
             let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
@@ -244,6 +246,7 @@ fn do_heap_scan<'a>(
                 index_relation,
                 heap_relation,
                 get_attribute_number(index_info),
+                meta_page.get_distance_function(),
             );
             pq.start_training(&meta_page);
             unsafe {
@@ -278,6 +281,7 @@ fn do_heap_scan<'a>(
                 index_relation,
                 heap_relation,
                 get_attribute_number(index_info),
+                meta_page.get_distance_function(),
             );
             bq.start_training(&meta_page);
             unsafe {
