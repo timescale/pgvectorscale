@@ -1,5 +1,4 @@
 use super::{
-    distance::distance_cosine as default_distance,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -23,24 +22,33 @@ pub struct PlainStorage<'a> {
 }
 
 impl<'a> PlainStorage<'a> {
-    pub fn new_for_build(index: &'a PgRelation) -> PlainStorage<'a> {
+    pub fn new_for_build(
+        index: &'a PgRelation,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+    ) -> PlainStorage<'a> {
         Self {
             index: index,
-            distance_fn: default_distance,
+            distance_fn: distance_fn,
         }
     }
 
-    pub fn load_for_insert(index_relation: &'a PgRelation) -> PlainStorage<'a> {
+    pub fn load_for_insert(
+        index_relation: &'a PgRelation,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+    ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn: distance_fn,
         }
     }
 
-    pub fn load_for_search(index_relation: &'a PgRelation) -> PlainStorage<'a> {
+    pub fn load_for_search(
+        index_relation: &'a PgRelation,
+        distance_fn: fn(&[f32], &[f32]) -> f32,
+    ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: default_distance,
+            distance_fn: distance_fn,
         }
     }
 }

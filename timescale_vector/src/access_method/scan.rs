@@ -37,12 +37,14 @@ enum StorageState {
 /* no lifetime usage here. */
 struct TSVScanState {
     storage: *mut StorageState,
+    distance_fn: Option<fn(&[f32], &[f32]) -> f32>,
 }
 
 impl TSVScanState {
     fn new() -> Self {
         Self {
             storage: std::ptr::null_mut(),
+            distance_fn: None,
         }
     }
 
@@ -55,11 +57,12 @@ impl TSVScanState {
     ) {
         let meta_page = MetaPage::fetch(&index);
         let storage = meta_page.get_storage_type();
+        let distance = meta_page.get_distance_function();
 
         let store_type = match storage {
             StorageType::Plain => {
                 let stats = QuantizerStats::new();
-                let bq = PlainStorage::load_for_search(index);
+                let bq = PlainStorage::load_for_search(index, meta_page.get_distance_function());
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
@@ -67,7 +70,12 @@ impl TSVScanState {
             StorageType::PqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = PqQuantizer::load(index, &meta_page, &mut stats);
-                let pq = PqCompressionStorage::load_for_search(index, heap, &quantizer);
+                let pq = PqCompressionStorage::load_for_search(
+                    index,
+                    heap,
+                    &quantizer,
+                    meta_page.get_distance_function(),
+                );
                 let it =
                     TSVResponseIterator::new(&pq, index, query, search_list_size, meta_page, stats);
                 StorageState::PqCompression(quantizer, it)
@@ -75,7 +83,12 @@ impl TSVScanState {
             StorageType::BqSpeedup => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
-                let bq = BqSpeedupStorage::load_for_search(index, heap, &quantizer);
+                let bq = BqSpeedupStorage::load_for_search(
+                    index,
+                    heap,
+                    &quantizer,
+                    meta_page.get_distance_function(),
+                );
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::BqSpeedup(quantizer, it)
@@ -83,6 +96,7 @@ impl TSVScanState {
         };
 
         self.storage = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(store_type);
+        self.distance_fn = Some(distance);
     }
 }
 
@@ -318,17 +332,27 @@ pub extern "C" fn amgettuple(
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
         StorageState::BqSpeedup(quantizer, iter) => {
-            let bq = BqSpeedupStorage::load_for_search(&indexrel, &heaprel, quantizer);
+            let bq = BqSpeedupStorage::load_for_search(
+                &indexrel,
+                &heaprel,
+                quantizer,
+                state.distance_fn.unwrap(),
+            );
             let next = iter.next_with_resort(&indexrel, &bq);
             get_tuple(next, scan)
         }
         StorageState::PqCompression(quantizer, iter) => {
-            let pq = PqCompressionStorage::load_for_search(&indexrel, &heaprel, quantizer);
+            let pq = PqCompressionStorage::load_for_search(
+                &indexrel,
+                &heaprel,
+                quantizer,
+                state.distance_fn.unwrap(),
+            );
             let next = iter.next_with_resort(&indexrel, &pq);
             get_tuple(next, scan)
         }
         StorageState::Plain(iter) => {
-            let storage = PlainStorage::load_for_search(&indexrel);
+            let storage = PlainStorage::load_for_search(&indexrel, state.distance_fn.unwrap());
             let next = iter.next(&indexrel, &storage);
             get_tuple(next, scan)
         }
