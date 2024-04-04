@@ -7,7 +7,6 @@ use rkyv::{Archive, Archived, Deserialize, Serialize};
 use timescale_vector_derive::{Readable, Writeable};
 
 use super::neighbor_with_distance::NeighborWithDistance;
-use super::pq_quantizer::PqVectorElement;
 use super::storage::ArchivedData;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
@@ -48,16 +47,6 @@ impl Node {
         meta_page: &MetaPage,
     ) -> Self {
         let pq_vector = Vec::with_capacity(0);
-        Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
-    }
-
-    pub fn new_for_pq(
-        heap_item_pointer: ItemPointer,
-        pq_vector: Vec<PqVectorElement>,
-        meta_page: &MetaPage,
-    ) -> Self {
-        let vector = Vec::with_capacity(0);
-
         Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
     }
 }

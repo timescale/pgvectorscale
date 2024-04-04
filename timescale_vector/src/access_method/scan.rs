@@ -14,8 +14,6 @@ use super::{
     bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData},
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
-    pq_quantizer::{PqQuantizer, PqSearchDistanceMeasure},
-    pq_storage::PqCompressionStorage,
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -26,10 +24,6 @@ enum StorageState {
     BqSpeedup(
         BqQuantizer,
         TSVResponseIterator<BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData>,
-    ),
-    PqCompression(
-        PqQuantizer,
-        TSVResponseIterator<PqSearchDistanceMeasure, PlainStorageLsnPrivateData>,
     ),
     Plain(TSVResponseIterator<PlainDistanceMeasure, PlainStorageLsnPrivateData>),
 }
@@ -66,19 +60,6 @@ impl TSVScanState {
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
-            }
-            StorageType::PqCompression => {
-                let mut stats = QuantizerStats::new();
-                let quantizer = PqQuantizer::load(index, &meta_page, &mut stats);
-                let pq = PqCompressionStorage::load_for_search(
-                    index,
-                    heap,
-                    &quantizer,
-                    meta_page.get_distance_function(),
-                );
-                let it =
-                    TSVResponseIterator::new(&pq, index, query, search_list_size, meta_page, stats);
-                StorageState::PqCompression(quantizer, it)
             }
             StorageType::BqSpeedup => {
                 let mut stats = QuantizerStats::new();
@@ -341,16 +322,6 @@ pub extern "C" fn amgettuple(
             let next = iter.next_with_resort(&indexrel, &bq);
             get_tuple(next, scan)
         }
-        StorageState::PqCompression(quantizer, iter) => {
-            let pq = PqCompressionStorage::load_for_search(
-                &indexrel,
-                &heaprel,
-                quantizer,
-                state.distance_fn.unwrap(),
-            );
-            let next = iter.next_with_resort(&indexrel, &pq);
-            get_tuple(next, scan)
-        }
         StorageState::Plain(iter) => {
             let storage = PlainStorage::load_for_search(&indexrel, state.distance_fn.unwrap());
             let next = iter.next(&indexrel, &storage);
@@ -389,7 +360,6 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
             StorageState::BqSpeedup(_bq, iter) => end_scan::<BqSpeedupStorage>(iter),
-            StorageState::PqCompression(_pq, iter) => end_scan::<PqCompressionStorage>(iter),
             StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
         }
     }

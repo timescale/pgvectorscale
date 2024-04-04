@@ -18,12 +18,10 @@ use super::graph_neighbor_store::BuilderNeighborCache;
 use super::meta_page::MetaPage;
 
 use super::plain_storage::PlainStorage;
-use super::pq_storage::PqCompressionStorage;
 use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
     BqSpeedup(&'a mut BqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
-    PqCompression(&'a mut PqCompressionStorage<'b>, &'c mut BuildState<'d, 'e>),
     Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
 }
 
@@ -138,23 +136,6 @@ pub unsafe extern "C" fn aminsert(
                 &mut stats,
             );
         }
-        StorageType::PqCompression => {
-            let pq = PqCompressionStorage::load_for_insert(
-                &heap_relation,
-                get_attribute_number(index_info),
-                &index_relation,
-                &meta_page,
-                &mut stats.quantizer_stats,
-            );
-            insert_storage(
-                &pq,
-                &index_relation,
-                vec,
-                heap_pointer,
-                &mut meta_page,
-                &mut stats,
-            );
-        }
         StorageType::BqSpeedup => {
             let bq = BqSpeedupStorage::load_for_insert(
                 &heap_relation,
@@ -241,41 +222,6 @@ fn do_heap_scan<'a>(
             }
 
             finalize_index_build(&mut plain, &mut bs, write_stats)
-        }
-        StorageType::PqCompression => {
-            let mut pq = PqCompressionStorage::new_for_build(
-                index_relation,
-                heap_relation,
-                get_attribute_number(index_info),
-                meta_page.get_distance_function(),
-            );
-            pq.start_training(&meta_page);
-            unsafe {
-                pg_sys::IndexBuildHeapScan(
-                    heap_relation.as_ptr(),
-                    index_relation.as_ptr(),
-                    index_info,
-                    Some(build_callback_pq_train),
-                    &mut pq,
-                );
-            }
-            pq.finish_training(&mut write_stats);
-
-            let page_type = PqCompressionStorage::page_type();
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
-            let mut state = StorageBuildState::PqCompression(&mut pq, &mut bs);
-
-            unsafe {
-                pg_sys::IndexBuildHeapScan(
-                    heap_relation.as_ptr(),
-                    index_relation.as_ptr(),
-                    index_info,
-                    Some(build_callback),
-                    &mut state,
-                );
-            }
-
-            finalize_index_build(&mut pq, &mut bs, write_stats)
         }
         StorageType::BqSpeedup => {
             let mut bq = BqSpeedupStorage::new_for_build(
@@ -398,22 +344,6 @@ unsafe extern "C" fn build_callback_bq_train(
 }
 
 #[pg_guard]
-unsafe extern "C" fn build_callback_pq_train(
-    _index: pg_sys::Relation,
-    _ctid: pg_sys::ItemPointer,
-    values: *mut pg_sys::Datum,
-    isnull: *mut bool,
-    _tuple_is_alive: bool,
-    state: *mut std::os::raw::c_void,
-) {
-    let vec = PgVector::from_pg_parts(values, isnull, 0);
-    if let Some(vec) = vec {
-        let pq = (state as *mut PqCompressionStorage).as_mut().unwrap();
-        pq.add_sample(vec.to_slice());
-    }
-}
-
-#[pg_guard]
 unsafe extern "C" fn build_callback(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
@@ -431,9 +361,6 @@ unsafe extern "C" fn build_callback(
         match state {
             StorageBuildState::BqSpeedup(bq, state) => {
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
-            }
-            StorageBuildState::PqCompression(pq, state) => {
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *pq);
             }
             StorageBuildState::Plain(plain, state) => {
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
