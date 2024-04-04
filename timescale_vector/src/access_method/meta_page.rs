@@ -53,6 +53,10 @@ impl MetaPageV1 {
     }
 
     pub fn get_new_meta(&self) -> MetaPage {
+        if self.use_pq {
+            pgrx::error!("PQ is no longer supported. Please rebuild the TSV index.");
+        }
+
         MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
@@ -60,15 +64,14 @@ impl MetaPageV1 {
             distance_type: DistanceType::L2 as u16,
             num_dimensions: self.num_dimensions,
             num_neighbors: self.num_neighbors,
+            storage_type: StorageType::Plain as u8,
             search_list_size: self.search_list_size,
             max_alpha: self.max_alpha,
             init_ids_block_number: self.init_ids_block_number,
             init_ids_offset: self.init_ids_offset,
-            use_pq: self.use_pq,
             pq_vector_length: self.pq_vector_length,
             pq_block_number: self.pq_block_number,
             pq_block_offset: self.pq_block_offset,
-            use_bq: false,
         }
     }
 }
@@ -110,20 +113,21 @@ pub struct MetaPage {
     magic_number: u32,
     version: u32,
     extension_version_when_built: String,
+    /// The value of the DistanceType enum
     distance_type: u16,
     /// number of dimensions in the vector
     num_dimensions: u32,
+    /// the value of the TSVStorageLayout enum
+    storage_type: u8,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
     num_neighbors: u32,
     search_list_size: u32,
     max_alpha: f64,
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
-    use_pq: bool,
     pq_vector_length: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
-    use_bq: bool,
 }
 
 impl MetaPage {
@@ -151,10 +155,6 @@ impl MetaPage {
         self.max_alpha
     }
 
-    fn get_use_pq(&self) -> bool {
-        self.use_pq
-    }
-
     pub fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
         match DistanceType::from_u16(self.distance_type) {
             DistanceType::Cosine => distance::distance_cosine,
@@ -163,13 +163,7 @@ impl MetaPage {
     }
 
     pub fn get_storage_type(&self) -> StorageType {
-        if self.get_use_pq() {
-            StorageType::PqCompression
-        } else if self.use_bq {
-            StorageType::BqSpeedup
-        } else {
-            StorageType::Plain
-        }
+        StorageType::from_u8(self.storage_type)
     }
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
@@ -186,7 +180,7 @@ impl MetaPage {
     }
 
     pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
-        if (!self.use_pq && !self.use_bq)
+        if (self.storage_type != StorageType::BqSpeedup as u8)
             || (self.pq_block_number == 0 && self.pq_block_offset == 0)
         {
             return None;
@@ -211,16 +205,15 @@ impl MetaPage {
             extension_version_when_built: version.to_string(),
             distance_type: DistanceType::Cosine as u16,
             num_dimensions,
+            storage_type: (*opt).get_storage_type() as u8,
             num_neighbors: (*opt).num_neighbors,
             search_list_size: (*opt).search_list_size,
             max_alpha: (*opt).max_alpha,
             init_ids_block_number: 0,
             init_ids_offset: 0,
-            use_pq: (*opt).use_pq,
             pq_vector_length: (*opt).pq_vector_length,
             pq_block_number: 0,
             pq_block_offset: 0,
-            use_bq: (*opt).use_bq,
         };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
         meta.write_to_page(page);
