@@ -1,34 +1,40 @@
 use memoffset::*;
-use pgrx::{pg_sys::AsPgCStr, prelude::*, set_varsize, PgRelation};
-use std::fmt::Debug;
+use pgrx::{pg_sys::AsPgCStr, prelude::*, set_varsize, void_ptr, PgRelation};
+use std::{ffi::CStr, fmt::Debug};
 
-#[derive(Copy, Clone, Debug, PartialEq)]
+use super::storage::StorageType;
+
+//DO NOT derive Clone for this struct. The storage layout string comes at the end and wouldn't be copied properly.
+#[derive(Debug, PartialEq)]
 #[repr(C)]
 pub struct TSVIndexOptions {
     /* varlena header (do not touch directly!) */
     #[allow(dead_code)]
     vl_len_: i32,
 
-    pub num_neighbors: u32,
+    pub storage_layout_offset: i32,
+    num_neighbors: i32,
     pub search_list_size: u32,
     pub max_alpha: f64,
-    pub use_pq: bool,
-    pub use_bq: bool,
     pub pq_vector_length: usize,
 }
 
+pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
+const DEFAULT_MAX_ALPHA: f64 = 1.2;
+
 impl TSVIndexOptions {
+    //note: this should only be used when building a new index. The options aren't really versioned.
+    //therefore, we should move all the options to the meta page when building the index (meta pages are properly versioned).
     pub fn from_relation(relation: &PgRelation) -> PgBox<TSVIndexOptions> {
         if relation.rd_index.is_null() {
             panic!("'{}' is not a TSV index", relation.name())
         } else if relation.rd_options.is_null() {
             // use defaults
             let mut ops = unsafe { PgBox::<TSVIndexOptions>::alloc0() };
-            ops.num_neighbors = 50;
+            ops.storage_layout_offset = 0;
+            ops.num_neighbors = NUM_NEIGHBORS_DEFAULT_SENTINEL;
             ops.search_list_size = 100;
-            ops.max_alpha = 1.0;
-            ops.use_pq = false;
-            ops.use_bq = false;
+            ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.pq_vector_length = 256;
             unsafe {
                 set_varsize(
@@ -41,11 +47,54 @@ impl TSVIndexOptions {
             unsafe { PgBox::from_pg(relation.rd_options as *mut TSVIndexOptions) }
         }
     }
+
+    pub fn get_num_neighbors(&self) -> i32 {
+        if self.num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
+            //specify to use the default value here
+            //we can't derive the default at this point in the code because the default is based on the number of dimensions in the vector in the io_optimized case.
+            NUM_NEIGHBORS_DEFAULT_SENTINEL
+        } else {
+            if self.num_neighbors < 10 {
+                panic!("num_neighbors must be greater than 10, or -1 for default")
+            }
+            self.num_neighbors
+        }
+    }
+
+    pub fn get_storage_type(&self) -> StorageType {
+        let s = self.get_str(self.storage_layout_offset, || "io_optimized".to_string());
+        match s.as_str() {
+            "io_optimized" => StorageType::BqSpeedup,
+            "plain" => StorageType::Plain,
+            _ => panic!("invalid storage_layout: {}", s),
+        }
+    }
+
+    fn get_str<F: FnOnce() -> String>(&self, offset: i32, default: F) -> String {
+        if offset == 0 {
+            default()
+        } else {
+            let opts = self as *const _ as void_ptr as usize;
+            let value =
+                unsafe { CStr::from_ptr((opts + offset as usize) as *const std::os::raw::c_char) };
+
+            value.to_str().unwrap().to_owned()
+        }
+    }
 }
 
-const NUM_REL_OPTS: usize = 6;
+const NUM_REL_OPTS: usize = 5;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
+// amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
+// this is used to fill the rd_options field in the index relation.
+// except for during build the validate parameter should be false.
+// any option that is no longer recognized that exists in the reloptions will simply be ignored when validate is false.
+// therefore, it is safe to change the options struct and add/remove new options without breaking existing indexes.
+// but note that the standard parsing way has no ability to put "migration" logic in here. So all new options will have to have defaults value when reading old indexes.
+// we could do additional logic to fix this here, but instead we just move the option values to the meta page when building the index, and do versioning there.
+// side note: this logic is not used in \d+ and similar psql commands to get description info. Those commands use the text array in pg_class.reloptions directly.
+// so when displaying the info, they'll show the old options and their values as set when the index was created.
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
 #[pg_guard]
 pub unsafe extern "C" fn amoptions(
@@ -54,6 +103,11 @@ pub unsafe extern "C" fn amoptions(
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
     let tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS] = [
+        pg_sys::relopt_parse_elt {
+            optname: "storage_layout".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_STRING,
+            offset: offset_of!(TSVIndexOptions, storage_layout_offset) as i32,
+        },
         pg_sys::relopt_parse_elt {
             optname: "num_neighbors".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
@@ -68,16 +122,6 @@ pub unsafe extern "C" fn amoptions(
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "use_pq".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
-            offset: offset_of!(TSVIndexOptions, use_pq) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "use_bq".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_BOOL,
-            offset: offset_of!(TSVIndexOptions, use_bq) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "pq_vector_length".as_pg_cstr(),
@@ -110,15 +154,43 @@ unsafe fn build_relopts(
     rdopts as *mut pg_sys::bytea
 }
 
+#[pg_guard]
+extern "C" fn validate_storage_layout(value: *const std::os::raw::c_char) {
+    if value.is_null() {
+        // use a default value
+        return;
+    }
+
+    let value = unsafe { CStr::from_ptr(value) }
+        .to_str()
+        .expect("failed to parse storage_layout value")
+        .to_lowercase();
+    if value != "io_optimized" && value != "plain" {
+        panic!(
+            "invalid storage_layout.  Must be one of 'io_optimized' or 'plain': {}",
+            value
+        )
+    }
+}
+
 pub unsafe fn init() {
     RELOPT_KIND_TSV = pg_sys::add_reloption_kind();
+
+    pg_sys::add_string_reloption(
+        RELOPT_KIND_TSV,
+        "storage_layout".as_pg_cstr(),
+        "Storage layout: either io_optimized or plain".as_pg_cstr(),
+        "io_optimized".as_pg_cstr(),
+        Some(validate_storage_layout),
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
 
     pg_sys::add_int_reloption(
         RELOPT_KIND_TSV,
         "num_neighbors".as_pg_cstr(),
         "Maximum number of neighbors in the graph".as_pg_cstr(),
-        50,
-        10,
+        NUM_NEIGHBORS_DEFAULT_SENTINEL,
+        -1,
         1000,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
@@ -137,23 +209,9 @@ pub unsafe fn init() {
         RELOPT_KIND_TSV,
         "max_alpha".as_pg_cstr(),
         "The maximum alpha used in pruning".as_pg_cstr(),
-        1.0,
+        DEFAULT_MAX_ALPHA,
         1.0,
         5.0,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
-    pg_sys::add_bool_reloption(
-        RELOPT_KIND_TSV,
-        "use_pq".as_pg_cstr(),
-        "Enable product quantization".as_pg_cstr(),
-        false,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
-    pg_sys::add_bool_reloption(
-        RELOPT_KIND_TSV,
-        "use_bq".as_pg_cstr(),
-        "Enable binary quantization".as_pg_cstr(),
-        false,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
     pg_sys::add_int_reloption(
@@ -170,7 +228,10 @@ pub unsafe fn init() {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::access_method::options::TSVIndexOptions;
+    use crate::access_method::{
+        options::{TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_NEIGHBORS_DEFAULT_SENTINEL},
+        storage::StorageType,
+    };
     use pgrx::*;
 
     #[pg_test]
@@ -204,11 +265,10 @@ mod tests {
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, 1.0);
-        assert_eq!(options.use_pq, false);
-        assert_eq!(options.use_bq, false);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
+        assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
         assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }
@@ -220,18 +280,39 @@ mod tests {
         CREATE INDEX idxtest
                   ON test
                USING tsv(encoding)
-               WITH (use_bq = TRUE);",
+               WITH (storage_layout = io_optimized);",
         ))?;
 
         let index_oid =
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, 1.0);
-        assert_eq!(options.use_pq, false);
-        assert_eq!(options.use_bq, true);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
+        assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
+        assert_eq!(options.pq_vector_length, 256);
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_index_options_plain() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(encoding vector(3));
+        CREATE INDEX idxtest
+                  ON test
+               USING tsv(encoding)
+               WITH (storage_layout = plain);",
+        ))?;
+
+        let index_oid =
+            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
+        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+        let options = TSVIndexOptions::from_relation(&indexrel);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
+        assert_eq!(options.search_list_size, 100);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
+        assert_eq!(options.get_storage_type(), StorageType::Plain);
         assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }

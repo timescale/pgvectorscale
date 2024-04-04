@@ -325,7 +325,7 @@ mod tests {
     #[pg_test]
     unsafe fn test_plain_storage_index_creation() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            "num_neighbors=38",
+            "num_neighbors=38, storage_layout = plain",
         )?;
         Ok(())
     }
@@ -334,7 +334,7 @@ mod tests {
     unsafe fn test_plain_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            "num_neighbors=10",
+            "num_neighbors=10, storage_layout = plain",
         )?;
         Ok(())
     }
@@ -342,22 +342,28 @@ mod tests {
     #[test]
     fn test_plain_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 38",
+            "num_neighbors = 38, storage_layout = plain",
         );
     }
 
     #[test]
     fn test_plain_storage_delete_vacuum_full() {
-        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold("num_neighbors = 38");
+        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
+            "num_neighbors = 38, storage_layout = plain",
+        );
     }
 
     #[pg_test]
     unsafe fn test_plain_storage_empty_table_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_empty_table_insert_scaffold("num_neighbors=38")
+        crate::access_method::build::tests::test_empty_table_insert_scaffold(
+            "num_neighbors=38, storage_layout = plain",
+        )
     }
 
     #[pg_test]
     unsafe fn test_plain_storage_insert_empty_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_insert_empty_insert_scaffold("num_neighbors=38")
+        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
+            "num_neighbors=38, storage_layout = plain",
+        )
     }
 }
