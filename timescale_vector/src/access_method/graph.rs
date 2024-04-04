@@ -385,7 +385,6 @@ impl<'a> Graph<'a> {
                         continue;
                     }
 
-                    //todo handle the non-pq case
                     let mut distance_between_candidate_and_existing_neighbor = unsafe {
                         dist_state
                             .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)

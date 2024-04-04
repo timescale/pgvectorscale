@@ -127,7 +127,6 @@ pub trait Storage {
 pub enum StorageType {
     Plain = 0,
     BqSpeedup = 1,
-    PqCompression = 2,
 }
 
 impl StorageType {
@@ -135,7 +134,6 @@ impl StorageType {
         match value {
             0 => StorageType::Plain,
             1 => StorageType::BqSpeedup,
-            2 => StorageType::PqCompression,
             _ => panic!("Invalid storage type"),
         }
     }

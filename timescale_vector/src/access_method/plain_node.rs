@@ -3,11 +3,10 @@ use std::pin::Pin;
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
 use rkyv::vec::ArchivedVec;
-use rkyv::{Archive, Archived, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use timescale_vector_derive::{Readable, Writeable};
 
 use super::neighbor_with_distance::NeighborWithDistance;
-use super::pq_quantizer::PqVectorElement;
 use super::storage::ArchivedData;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
@@ -50,16 +49,6 @@ impl Node {
         let pq_vector = Vec::with_capacity(0);
         Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
     }
-
-    pub fn new_for_pq(
-        heap_item_pointer: ItemPointer,
-        pq_vector: Vec<PqVectorElement>,
-        meta_page: &MetaPage,
-    ) -> Self {
-        let vector = Vec::with_capacity(0);
-
-        Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
-    }
 }
 
 /// contains helpers for mutate-in-place. See struct_mutable_refs in test_alloc.rs in rkyv
@@ -79,10 +68,6 @@ impl ArchivedNode {
         self: Pin<&mut Self>,
     ) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
-    }
-
-    pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
     }
 
     pub fn num_neighbors(&self) -> usize {
