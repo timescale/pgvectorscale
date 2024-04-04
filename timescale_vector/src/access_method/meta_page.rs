@@ -1,4 +1,4 @@
-use pgrx::pg_sys::BufferGetBlockNumber;
+use pgrx::pg_sys::{BufferGetBlockNumber, InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
 use rkyv::{Archive, Deserialize, Serialize};
 use semver::Version;
@@ -39,8 +39,8 @@ pub struct MetaPageV1 {
     init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
     _pq_vector_length: usize,
-    pq_block_number: pg_sys::BlockNumber,
-    pq_block_offset: pg_sys::OffsetNumber,
+    _pq_block_number: pg_sys::BlockNumber,
+    _pq_block_offset: pg_sys::OffsetNumber,
 }
 
 impl MetaPageV1 {
@@ -69,10 +69,8 @@ impl MetaPageV1 {
             storage_type: StorageType::Plain as u8,
             search_list_size: self.search_list_size,
             max_alpha: self.max_alpha,
-            init_ids_block_number: self.init_ids_block_number,
-            init_ids_offset: self.init_ids_offset,
-            quantizer_metadata_block_number: self.pq_block_number,
-            quantizer_metadata_block_offset: self.pq_block_offset,
+            init_ids: ItemPointer::new(self.init_ids_block_number, self.init_ids_offset),
+            quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
         }
     }
 }
@@ -90,7 +88,7 @@ pub struct MetaPageHeader {
     version: u32,
 }
 
-pub enum DistanceType {
+enum DistanceType {
     Cosine = 0,
     L2 = 1,
 }
@@ -124,10 +122,8 @@ pub struct MetaPage {
     num_neighbors: u32,
     search_list_size: u32,
     max_alpha: f64,
-    init_ids_block_number: pg_sys::BlockNumber,
-    init_ids_offset: pg_sys::OffsetNumber,
-    quantizer_metadata_block_number: pg_sys::BlockNumber,
-    quantizer_metadata_block_offset: pg_sys::OffsetNumber,
+    init_ids: ItemPointer,
+    quantizer_metadata: ItemPointer,
 }
 
 impl MetaPage {
@@ -167,27 +163,21 @@ impl MetaPage {
     }
 
     pub fn get_init_ids(&self) -> Option<Vec<IndexPointer>> {
-        if self.init_ids_block_number == 0 && self.init_ids_offset == 0 {
+        if !self.init_ids.is_valid() {
             return None;
         }
 
-        let ptr = HeapPointer::new(self.init_ids_block_number, self.init_ids_offset);
-        Some(vec![ptr])
+        Some(vec![self.init_ids])
     }
 
     pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
         if (self.storage_type != StorageType::BqSpeedup as u8)
-            || (self.quantizer_metadata_block_number == 0
-                && self.quantizer_metadata_block_offset == 0)
+            || !self.quantizer_metadata.is_valid()
         {
             return None;
         }
 
-        let ptr = IndexPointer::new(
-            self.quantizer_metadata_block_number,
-            self.quantizer_metadata_block_offset,
-        );
-        Some(ptr)
+        Some(self.quantizer_metadata)
     }
 
     fn calculate_num_neighbors(num_dimensions: u32, opt: &PgBox<TSVIndexOptions>) -> u32 {
@@ -222,10 +212,8 @@ impl MetaPage {
             num_neighbors: Self::calculate_num_neighbors(num_dimensions, &opt),
             search_list_size: (*opt).search_list_size,
             max_alpha: (*opt).max_alpha,
-            init_ids_block_number: 0,
-            init_ids_offset: 0,
-            quantizer_metadata_block_number: 0,
-            quantizer_metadata_block_offset: 0,
+            init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
+            quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
         };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
         meta.write_to_page(page);
@@ -322,8 +310,7 @@ impl MetaPage {
         let id = init_ids[0];
 
         let mut meta = Self::fetch(index);
-        meta.init_ids_block_number = id.block_number;
-        meta.init_ids_offset = id.offset;
+        meta.init_ids = id;
 
         unsafe {
             Self::overwrite(index, &meta);
@@ -337,8 +324,7 @@ impl MetaPage {
         stats: &mut S,
     ) {
         let mut meta = Self::fetch(index);
-        meta.quantizer_metadata_block_number = quantizer_pointer.block_number;
-        meta.quantizer_metadata_block_offset = quantizer_pointer.offset;
+        meta.quantizer_metadata = quantizer_pointer;
 
         unsafe {
             Self::overwrite(index, &meta);

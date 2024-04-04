@@ -69,6 +69,11 @@ impl ItemPointer {
         }
     }
 
+    pub fn is_valid(&self) -> bool {
+        self.block_number != pgrx::pg_sys::InvalidBlockNumber
+            && self.offset != pgrx::pg_sys::InvalidOffsetNumber
+    }
+
     pub unsafe fn with_page(page: &page::WritablePage, offset: pgrx::pg_sys::OffsetNumber) -> Self {
         Self {
             block_number: pgrx::pg_sys::BufferGetBlockNumber(**(page.get_buffer())),
