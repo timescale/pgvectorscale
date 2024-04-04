@@ -1,7 +1,7 @@
 use pgrx::*;
 
 pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::<i32>::new(100);
-pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(10);
+pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(50);
 
 pub fn init() {
     GucRegistry::define_int_guc(
@@ -16,9 +16,9 @@ pub fn init() {
     );
 
     GucRegistry::define_int_guc(
-        "tsv.query_resort",
-        "The resort size used in queries",
-        "Resort size.",
+        "tsv.query_rescore",
+        "The number of elements rescored (0 to disable rescoring)",
+        "Rescoring takes the query_rescore number of elements that have the smallest approximate distance, rescores them with the exact distance, returning the closest ones with the exact distance.",
         &TSV_RESORT_SIZE,
         1,
         1000,
