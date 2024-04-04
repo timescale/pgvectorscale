@@ -285,17 +285,6 @@ pub extern "C" fn amrescan(
 
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
     state.initialize(&indexrel, &heaprel, query, search_list_size);
-    /*match &mut storage {
-        Storage::None => pgrx::error!("not implemented"),
-        Storage::PQ(_pq) => pgrx::error!("not implemented"),
-        Storage::BQ(_bq) => {
-            let state =
-                unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-
-            let res = TSVResponseIterator::new(&indexrel, query, search_list_size);
-            state.iterator = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(res);
-        }
-    }*/
 }
 
 #[pg_guard]

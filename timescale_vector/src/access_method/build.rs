@@ -68,25 +68,14 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, storage_layout={:?}, pq_vector_length={}",
+        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, storage_layout={:?}",
         opt.get_num_neighbors(),
         opt.search_list_size,
         opt.max_alpha,
         opt.get_storage_type(),
-        opt.pq_vector_length
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    // PQ is only applicable to high dimension vectors.
-    //FIXME: uncomment/delete
-    /*if opt.get_storage_layout() ==  {
-        if dimensions < opt.pq_vector_length as i32 {
-            error!("use_pq can only be applied to vectors with greater than {} dimensions. {} dimensions provided", opt.pq_vector_length, dimensions)
-        };
-        if dimensions % opt.pq_vector_length as i32 != 0 {
-            error!("use_pq can only be applied to vectors where the number of dimensions {} is divisible by the pq_vector_length {} ", dimensions, opt.pq_vector_length)
-        };
-    }*/
     assert!(dimensions > 0 && dimensions < 2000);
     let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt) };
 

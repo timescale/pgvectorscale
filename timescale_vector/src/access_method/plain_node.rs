@@ -3,7 +3,7 @@ use std::pin::Pin;
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
 use rkyv::vec::ArchivedVec;
-use rkyv::{Archive, Archived, Deserialize, Serialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use timescale_vector_derive::{Readable, Writeable};
 
 use super::neighbor_with_distance::NeighborWithDistance;
@@ -68,10 +68,6 @@ impl ArchivedNode {
         self: Pin<&mut Self>,
     ) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
-    }
-
-    pub fn pq_vectors(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<u8>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.pq_vector) }
     }
 
     pub fn num_neighbors(&self) -> usize {
