@@ -123,8 +123,20 @@ pub trait Storage {
     fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32;
 }
 
+#[derive(PartialEq, Debug)]
 pub enum StorageType {
-    BqSpeedup,
-    PqCompression,
-    Plain,
+    Plain = 0,
+    BqSpeedup = 1,
+    PqCompression = 2,
+}
+
+impl StorageType {
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            0 => StorageType::Plain,
+            1 => StorageType::BqSpeedup,
+            2 => StorageType::PqCompression,
+            _ => panic!("Invalid storage type"),
+        }
+    }
 }

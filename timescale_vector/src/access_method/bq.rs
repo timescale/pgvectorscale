@@ -13,7 +13,7 @@ use super::{
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber},
+    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
@@ -102,6 +102,10 @@ impl BqQuantizer {
         } else {
             (full_vector_size / BITS_STORE_TYPE_SIZE) + 1
         }
+    }
+
+    fn quantized_size_bytes(num_dimensions: usize) -> usize {
+        Self::quantized_size(num_dimensions) * std::mem::size_of::<BqVectorElement>()
     }
 
     fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
@@ -468,7 +472,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
-        let node = BqNode::new(heap_pointer, &meta_page, bq_vector.as_slice());
+        let node = BqNode::with_meta(heap_pointer, &meta_page, bq_vector.as_slice());
 
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
@@ -652,19 +656,32 @@ pub struct BqNode {
 }
 
 impl BqNode {
-    pub fn new(
+    pub fn with_meta(
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[BqVectorElement],
     ) -> Self {
-        let num_neighbors = meta_page.get_num_neighbors();
+        Self::new(
+            heap_pointer,
+            meta_page.get_num_neighbors() as usize,
+            meta_page.get_num_dimensions() as usize,
+            bq_vector,
+        )
+    }
+
+    fn new(
+        heap_pointer: HeapPointer,
+        num_neighbors: usize,
+        num_dimensions: usize,
+        bq_vector: &[BqVectorElement],
+    ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
         let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
         let neighbor_vectors: Vec<_> = (0..num_neighbors)
-            .map(|_| vec![0; BqQuantizer::quantized_size(meta_page.get_num_dimensions() as _)])
+            .map(|_| vec![0; BqQuantizer::quantized_size(num_dimensions as _)])
             .collect();
 
         Self {
@@ -673,6 +690,43 @@ impl BqNode {
             neighbor_index_pointers: neighbor_index_pointers,
             neighbor_vectors: neighbor_vectors,
         }
+    }
+
+    fn test_size(num_neighbors: usize, num_dimensions: usize) -> usize {
+        let v: Vec<BqVectorElement> = vec![0; BqQuantizer::quantized_size(num_dimensions)];
+        let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
+        let n = Self::new(hp, num_neighbors, num_dimensions, &v);
+        n.serialize_to_vec().len()
+    }
+
+    pub fn get_default_num_neighbors(num_dimensions: usize) -> usize {
+        //how many neighbors can fit on one page? That's what we choose.
+
+        //we first overapproximate the number of neighbors and then double check by actually calculating the size of the BqNode.
+
+        //blocksize - 100 bytes for the padding/header/etc.
+        let page_size = BLCKSZ as usize - 50;
+        //one quantized_vector takes this many bytes
+        let vec_size = BqQuantizer::quantized_size_bytes(num_dimensions as usize) + 1;
+        //start from the page size then subtract the heap_item_pointer and bq_vector elements of BqNode.
+        let starting = BLCKSZ as usize - std::mem::size_of::<HeapPointer>() - vec_size;
+        //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in BqNode.
+        let one_neighbor = vec_size + std::mem::size_of::<ItemPointer>();
+
+        let mut num_neighbors_overapproximate: usize = starting / one_neighbor;
+        while num_neighbors_overapproximate > 0 {
+            let serialized_size = BqNode::test_size(
+                num_neighbors_overapproximate as usize,
+                num_dimensions as usize,
+            );
+            if serialized_size <= page_size {
+                return num_neighbors_overapproximate;
+            }
+            num_neighbors_overapproximate -= 1;
+        }
+        pgrx::error!(
+            "Could not find a valid number of neighbors for the default value. Please specify one."
+        );
     }
 }
 
@@ -767,9 +821,9 @@ mod tests {
     use pgrx::*;
 
     #[pg_test]
-    unsafe fn test_bq_storage_index_creation() -> spi::Result<()> {
+    unsafe fn test_bq_storage_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            "num_neighbors=38, USE_BQ = TRUE",
+            "storage_layout = io_optimized",
         )?;
         Ok(())
     }
@@ -778,7 +832,7 @@ mod tests {
     unsafe fn test_bq_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            "num_neighbors=10, USE_BQ = TRUE",
+            "num_neighbors=10, storage_layout = io_optimized",
         )?;
         Ok(())
     }
@@ -786,28 +840,28 @@ mod tests {
     #[test]
     fn test_bq_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 10, use_bq = TRUE",
+            "num_neighbors = 10, storage_layout = io_optimized",
         );
     }
 
     #[test]
     fn test_bq_storage_delete_vacuum_full() {
         crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
-            "num_neighbors = 38, use_bq = TRUE",
+            "num_neighbors = 38, storage_layout = io_optimized",
         );
     }
 
     #[pg_test]
     unsafe fn test_bq_storage_empty_table_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_empty_table_insert_scaffold(
-            "num_neighbors=38, use_bq = TRUE",
+            "num_neighbors=38, storage_layout = io_optimized",
         )
     }
 
     #[pg_test]
     unsafe fn test_bq_storage_insert_empty_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_insert_empty_insert_scaffold(
-            "num_neighbors=38, use_bq = TRUE",
+            "num_neighbors=38, storage_layout = io_optimized",
         )
     }
 }
