@@ -8,7 +8,9 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
+use super::bq::BqNode;
 use super::distance;
+use super::options::NUM_NEIGHBORS_DEFAULT_SENTINEL;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -190,6 +192,19 @@ impl MetaPage {
         Some(ptr)
     }
 
+    fn calculate_num_neighbors(num_dimensions: u32, opt: &PgBox<TSVIndexOptions>) -> u32 {
+        let num_neighbors = (*opt).get_num_neighbors();
+        if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
+            if (*opt).get_storage_type() == StorageType::Plain {
+                50
+            } else {
+                BqNode::get_default_num_neighbors(num_dimensions as usize) as u32
+            }
+        } else {
+            num_neighbors as u32
+        }
+    }
+
     /// Write out a new meta page.
     /// Has to be done as the first write to a new relation.
     pub unsafe fn create(
@@ -206,7 +221,7 @@ impl MetaPage {
             distance_type: DistanceType::Cosine as u16,
             num_dimensions,
             storage_type: (*opt).get_storage_type() as u8,
-            num_neighbors: (*opt).num_neighbors,
+            num_neighbors: Self::calculate_num_neighbors(num_dimensions, &opt),
             search_list_size: (*opt).search_list_size,
             max_alpha: (*opt).max_alpha,
             init_ids_block_number: 0,

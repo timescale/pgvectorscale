@@ -71,7 +71,7 @@ pub extern "C" fn ambuild(
 
     notice!(
         "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, storage_layout={:?}, pq_vector_length={}",
-        opt.num_neighbors,
+        opt.get_num_neighbors(),
         opt.search_list_size,
         opt.max_alpha,
         opt.get_storage_type(),

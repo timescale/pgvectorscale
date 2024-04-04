@@ -13,11 +13,14 @@ pub struct TSVIndexOptions {
     vl_len_: i32,
 
     pub storage_layout_offset: i32,
-    pub num_neighbors: u32,
+    num_neighbors: i32,
     pub search_list_size: u32,
     pub max_alpha: f64,
     pub pq_vector_length: usize,
 }
+
+pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
+const DEFAULT_MAX_ALPHA: f64 = 1.2;
 
 impl TSVIndexOptions {
     //note: this should only be used when building a new index. The options aren't really versioned.
@@ -29,9 +32,9 @@ impl TSVIndexOptions {
             // use defaults
             let mut ops = unsafe { PgBox::<TSVIndexOptions>::alloc0() };
             ops.storage_layout_offset = 0;
-            ops.num_neighbors = 50;
+            ops.num_neighbors = NUM_NEIGHBORS_DEFAULT_SENTINEL;
             ops.search_list_size = 100;
-            ops.max_alpha = 1.0;
+            ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.pq_vector_length = 256;
             unsafe {
                 set_varsize(
@@ -42,6 +45,19 @@ impl TSVIndexOptions {
             ops.into_pg_boxed()
         } else {
             unsafe { PgBox::from_pg(relation.rd_options as *mut TSVIndexOptions) }
+        }
+    }
+
+    pub fn get_num_neighbors(&self) -> i32 {
+        if self.num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
+            //specify to use the default value here
+            //we can't derive the default at this point in the code because the default is based on the number of dimensions in the vector in the io_optimized case.
+            NUM_NEIGHBORS_DEFAULT_SENTINEL
+        } else {
+            if self.num_neighbors < 10 {
+                panic!("num_neighbors must be greater than 10, or -1 for default")
+            }
+            self.num_neighbors
         }
     }
 
@@ -173,8 +189,8 @@ pub unsafe fn init() {
         RELOPT_KIND_TSV,
         "num_neighbors".as_pg_cstr(),
         "Maximum number of neighbors in the graph".as_pg_cstr(),
-        50,
-        10,
+        NUM_NEIGHBORS_DEFAULT_SENTINEL,
+        -1,
         1000,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
@@ -193,7 +209,7 @@ pub unsafe fn init() {
         RELOPT_KIND_TSV,
         "max_alpha".as_pg_cstr(),
         "The maximum alpha used in pruning".as_pg_cstr(),
-        1.0,
+        DEFAULT_MAX_ALPHA,
         1.0,
         5.0,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
@@ -212,7 +228,10 @@ pub unsafe fn init() {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use crate::access_method::{options::TSVIndexOptions, storage::StorageType};
+    use crate::access_method::{
+        options::{TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_NEIGHBORS_DEFAULT_SENTINEL},
+        storage::StorageType,
+    };
     use pgrx::*;
 
     #[pg_test]
@@ -246,9 +265,9 @@ mod tests {
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
         assert_eq!(options.pq_vector_length, 256);
         Ok(())
@@ -268,9 +287,9 @@ mod tests {
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
         assert_eq!(options.pq_vector_length, 256);
         Ok(())
@@ -290,9 +309,9 @@ mod tests {
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.num_neighbors, 50);
+        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, 1.0);
+        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::Plain);
         assert_eq!(options.pq_vector_length, 256);
         Ok(())
