@@ -38,7 +38,7 @@ pub struct MetaPageV1 {
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
     use_pq: bool,
-    pq_vector_length: usize,
+    _pq_vector_length: usize,
     pq_block_number: pg_sys::BlockNumber,
     pq_block_offset: pg_sys::OffsetNumber,
 }
@@ -71,9 +71,8 @@ impl MetaPageV1 {
             max_alpha: self.max_alpha,
             init_ids_block_number: self.init_ids_block_number,
             init_ids_offset: self.init_ids_offset,
-            pq_vector_length: self.pq_vector_length,
-            pq_block_number: self.pq_block_number,
-            pq_block_offset: self.pq_block_offset,
+            quantizer_metadata_block_number: self.pq_block_number,
+            quantizer_metadata_block_offset: self.pq_block_offset,
         }
     }
 }
@@ -127,9 +126,8 @@ pub struct MetaPage {
     max_alpha: f64,
     init_ids_block_number: pg_sys::BlockNumber,
     init_ids_offset: pg_sys::OffsetNumber,
-    pq_vector_length: usize,
-    pq_block_number: pg_sys::BlockNumber,
-    pq_block_offset: pg_sys::OffsetNumber,
+    quantizer_metadata_block_number: pg_sys::BlockNumber,
+    quantizer_metadata_block_offset: pg_sys::OffsetNumber,
 }
 
 impl MetaPage {
@@ -143,10 +141,6 @@ impl MetaPage {
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
         self.num_neighbors
-    }
-
-    pub fn get_pq_vector_length(&self) -> usize {
-        self.pq_vector_length
     }
 
     pub fn get_search_list_size_for_build(&self) -> u32 {
@@ -181,14 +175,18 @@ impl MetaPage {
         Some(vec![ptr])
     }
 
-    pub fn get_pq_pointer(&self) -> Option<IndexPointer> {
+    pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
         if (self.storage_type != StorageType::BqSpeedup as u8)
-            || (self.pq_block_number == 0 && self.pq_block_offset == 0)
+            || (self.quantizer_metadata_block_number == 0
+                && self.quantizer_metadata_block_offset == 0)
         {
             return None;
         }
 
-        let ptr = IndexPointer::new(self.pq_block_number, self.pq_block_offset);
+        let ptr = IndexPointer::new(
+            self.quantizer_metadata_block_number,
+            self.quantizer_metadata_block_offset,
+        );
         Some(ptr)
     }
 
@@ -226,9 +224,8 @@ impl MetaPage {
             max_alpha: (*opt).max_alpha,
             init_ids_block_number: 0,
             init_ids_offset: 0,
-            pq_vector_length: (*opt).pq_vector_length,
-            pq_block_number: 0,
-            pq_block_offset: 0,
+            quantizer_metadata_block_number: 0,
+            quantizer_metadata_block_offset: 0,
         };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
         meta.write_to_page(page);
@@ -334,14 +331,14 @@ impl MetaPage {
         };
     }
 
-    pub fn update_pq_pointer<S: StatsNodeModify>(
+    pub fn update_quantizer_metadata_pointer<S: StatsNodeModify>(
         index: &PgRelation,
-        pq_pointer: IndexPointer,
+        quantizer_pointer: IndexPointer,
         stats: &mut S,
     ) {
         let mut meta = Self::fetch(index);
-        meta.pq_block_number = pq_pointer.block_number;
-        meta.pq_block_offset = pq_pointer.offset;
+        meta.quantizer_metadata_block_number = quantizer_pointer.block_number;
+        meta.quantizer_metadata_block_offset = quantizer_pointer.offset;
 
         unsafe {
             Self::overwrite(index, &meta);

@@ -16,7 +16,6 @@ pub struct TSVIndexOptions {
     num_neighbors: i32,
     pub search_list_size: u32,
     pub max_alpha: f64,
-    pub pq_vector_length: usize,
 }
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
@@ -35,7 +34,6 @@ impl TSVIndexOptions {
             ops.num_neighbors = NUM_NEIGHBORS_DEFAULT_SENTINEL;
             ops.search_list_size = 100;
             ops.max_alpha = DEFAULT_MAX_ALPHA;
-            ops.pq_vector_length = 256;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -83,7 +81,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 5;
+const NUM_REL_OPTS: usize = 4;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
@@ -122,11 +120,6 @@ pub unsafe extern "C" fn amoptions(
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "pq_vector_length".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, pq_vector_length) as i32,
         },
     ];
 
@@ -214,15 +207,6 @@ pub unsafe fn init() {
         5.0,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
-    pg_sys::add_int_reloption(
-        RELOPT_KIND_TSV,
-        "pq_vector_length".as_pg_cstr(),
-        "Length of the quantized vector representation".as_pg_cstr(),
-        256,
-        8,
-        256,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -269,7 +253,6 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
-        assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }
 
@@ -291,7 +274,6 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
-        assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }
 
@@ -313,7 +295,6 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::Plain);
-        assert_eq!(options.pq_vector_length, 256);
         Ok(())
     }
 }

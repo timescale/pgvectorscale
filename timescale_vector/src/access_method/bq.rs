@@ -45,14 +45,14 @@ impl BqMeans {
     ) -> BqQuantizer {
         let mut quantizer = BqQuantizer::new();
         if quantizer.use_mean {
-            if meta_page.get_pq_pointer().is_none() {
+            if meta_page.get_quantizer_metadata_pointer().is_none() {
                 pgrx::error!("No BQ pointer found in meta page");
             }
-            let pq_item_pointer = meta_page.get_pq_pointer().unwrap();
-            let rpq = BqMeans::read(index, pq_item_pointer, stats);
-            let rpn = rpq.get_archived_node();
+            let quantizer_item_pointer = meta_page.get_quantizer_metadata_pointer().unwrap();
+            let bq = BqMeans::read(index, quantizer_item_pointer, stats);
+            let archived = bq.get_archived_node();
 
-            quantizer.load(rpn.count, rpn.means.to_vec());
+            quantizer.load(archived.count, archived.means.to_vec());
         }
         quantizer
     }
@@ -379,7 +379,11 @@ impl<'a> BqSpeedupStorage<'a> {
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
         if self.quantizer.use_mean {
             let index_pointer = unsafe { BqMeans::store(&self.index, &self.quantizer, stats) };
-            super::meta_page::MetaPage::update_pq_pointer(&self.index, index_pointer, stats);
+            super::meta_page::MetaPage::update_quantizer_metadata_pointer(
+                &self.index,
+                index_pointer,
+                stats,
+            );
         }
     }
 
