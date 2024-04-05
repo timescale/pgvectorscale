@@ -44,7 +44,6 @@ impl<'a, 'b> BuildState<'a, 'b> {
     ) -> Self {
         let tape = unsafe { Tape::new(index_relation, page_type) };
 
-        //TODO: some ways to get rid of meta_page.clone?
         BuildState {
             memcxt: PgMemoryContexts::new("tsv build context"),
             ntuples: 0,
@@ -97,25 +96,28 @@ pub unsafe extern "C" fn aminsert(
     heaprel: pg_sys::Relation,
     _check_unique: pg_sys::IndexUniqueCheck,
     _index_unchanged: bool,
-    index_info: *mut pg_sys::IndexInfo,
+    _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
     let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
-    let vec = PgVector::from_pg_parts(values, isnull, 0);
+    let mut meta_page = MetaPage::fetch(&index_relation);
+    let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
     if let None = vec {
         //todo handle NULLs?
         return false;
     }
     let vec = vec.unwrap();
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
-    let mut meta_page = MetaPage::fetch(&index_relation);
 
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();
     match &mut storage {
         StorageType::Plain => {
-            let plain =
-                PlainStorage::load_for_insert(&index_relation, meta_page.get_distance_function());
+            let plain = PlainStorage::load_for_insert(
+                &index_relation,
+                &heap_relation,
+                meta_page.get_distance_function(),
+            );
             insert_storage(
                 &plain,
                 &index_relation,
@@ -128,7 +130,6 @@ pub unsafe extern "C" fn aminsert(
         StorageType::BqSpeedup => {
             let bq = BqSpeedupStorage::load_for_insert(
                 &heap_relation,
-                get_attribute_number(index_info),
                 &index_relation,
                 &meta_page,
                 &mut stats.quantizer_stats,
@@ -156,7 +157,7 @@ unsafe fn insert_storage<S: Storage>(
 ) {
     let mut tape = Tape::new(&index_relation, S::page_type());
     let index_pointer = storage.create_node(
-        vector.to_slice(),
+        vector.to_index_slice(),
         heap_pointer,
         &meta_page,
         &mut tape,
@@ -170,11 +171,6 @@ unsafe fn insert_storage<S: Storage>(
 #[pg_guard]
 pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
-}
-
-pub fn get_attribute_number(index_info: *mut pg_sys::IndexInfo) -> pg_sys::AttrNumber {
-    unsafe { assert!((*index_info).ii_NumIndexAttrs == 1) };
-    unsafe { (*index_info).ii_IndexAttrNumbers[0] }
 }
 
 fn do_heap_scan<'a>(
@@ -193,8 +189,11 @@ fn do_heap_scan<'a>(
     let mut write_stats = WriteStats::new();
     match storage {
         StorageType::Plain => {
-            let mut plain =
-                PlainStorage::new_for_build(index_relation, meta_page.get_distance_function());
+            let mut plain = PlainStorage::new_for_build(
+                index_relation,
+                heap_relation,
+                meta_page.get_distance_function(),
+            );
             plain.start_training(&meta_page);
             let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
@@ -216,23 +215,27 @@ fn do_heap_scan<'a>(
             let mut bq = BqSpeedupStorage::new_for_build(
                 index_relation,
                 heap_relation,
-                get_attribute_number(index_info),
                 meta_page.get_distance_function(),
             );
+
+            let page_type = BqSpeedupStorage::page_type();
+
             bq.start_training(&meta_page);
+
+            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
+
             unsafe {
                 pg_sys::IndexBuildHeapScan(
                     heap_relation.as_ptr(),
                     index_relation.as_ptr(),
                     index_info,
                     Some(build_callback_bq_train),
-                    &mut bq,
+                    &mut state,
                 );
             }
             bq.finish_training(&mut write_stats);
 
-            let page_type = BqSpeedupStorage::page_type();
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
             let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
 
             unsafe {
@@ -325,10 +328,17 @@ unsafe extern "C" fn build_callback_bq_train(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
-    let vec = PgVector::from_pg_parts(values, isnull, 0);
-    if let Some(vec) = vec {
-        let bq = (state as *mut BqSpeedupStorage).as_mut().unwrap();
-        bq.add_sample(vec.to_slice());
+    let state = (state as *mut StorageBuildState).as_mut().unwrap();
+    match state {
+        StorageBuildState::BqSpeedup(bq, state) => {
+            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            if let Some(vec) = vec {
+                bq.add_sample(vec.to_index_slice());
+            }
+        }
+        StorageBuildState::Plain(_, _) => {
+            panic!("Should not be training with plain storage");
+        }
     }
 }
 
@@ -342,16 +352,19 @@ unsafe extern "C" fn build_callback(
     state: *mut std::os::raw::c_void,
 ) {
     let index_relation = unsafe { PgRelation::from_pg(index) };
-    let vec = PgVector::from_pg_parts(values, isnull, 0);
-    if let Some(vec) = vec {
-        let state = (state as *mut StorageBuildState).as_mut().unwrap();
-        let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
-
-        match state {
-            StorageBuildState::BqSpeedup(bq, state) => {
+    let state = (state as *mut StorageBuildState).as_mut().unwrap();
+    match state {
+        StorageBuildState::BqSpeedup(bq, state) => {
+            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            if let Some(vec) = vec {
+                let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
             }
-            StorageBuildState::Plain(plain, state) => {
+        }
+        StorageBuildState::Plain(plain, state) => {
+            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            if let Some(vec) = vec {
+                let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
                 build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
             }
         }
@@ -399,7 +412,7 @@ fn build_callback_internal<S: Storage>(
     }
 
     let index_pointer = storage.create_node(
-        vector.to_slice(),
+        vector.to_index_slice(),
         heap_pointer,
         &state.meta_page,
         &mut state.tape,

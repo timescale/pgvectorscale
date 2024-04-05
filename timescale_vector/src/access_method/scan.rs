@@ -32,13 +32,15 @@ enum StorageState {
 struct TSVScanState {
     storage: *mut StorageState,
     distance_fn: Option<fn(&[f32], &[f32]) -> f32>,
+    meta_page: MetaPage,
 }
 
 impl TSVScanState {
-    fn new() -> Self {
+    fn new(meta_page: MetaPage) -> Self {
         Self {
             storage: std::ptr::null_mut(),
             distance_fn: None,
+            meta_page: meta_page,
         }
     }
 
@@ -56,7 +58,8 @@ impl TSVScanState {
         let store_type = match storage {
             StorageType::Plain => {
                 let stats = QuantizerStats::new();
-                let bq = PlainStorage::load_for_search(index, meta_page.get_distance_function());
+                let bq =
+                    PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
@@ -125,6 +128,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         index: &PgRelation,
         query: PgVector,
         search_list_size: usize,
+        //FIXME?
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
@@ -202,6 +206,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                         self.lsr.sdm.as_ref().unwrap(),
                         index_pointer,
                         heap_pointer,
+                        &self.meta_page,
                         &mut self.lsr.stats,
                     );
 
@@ -242,8 +247,10 @@ pub extern "C" fn ambeginscan(
             norderbys,
         ))
     };
+    let indexrel = unsafe { PgRelation::from_pg(index_relation) };
+    let meta_page = MetaPage::fetch(&indexrel);
 
-    let state: TSVScanState = TSVScanState::new();
+    let state: TSVScanState = TSVScanState::new(meta_page);
     scandesc.opaque =
         PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(state) as void_mut_ptr;
 
@@ -267,8 +274,6 @@ pub extern "C" fn amrescan(
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
-    let meta_page = MetaPage::fetch(&indexrel);
-    let _storage = meta_page.get_storage_type();
 
     if nkeys > 0 {
         scan.xs_recheck = true;
@@ -277,13 +282,19 @@ pub extern "C" fn amrescan(
     let orderby_keys = unsafe {
         std::slice::from_raw_parts(orderbys as *const pg_sys::ScanKeyData, norderbys as _)
     };
-    let query = unsafe { PgVector::from_datum(orderby_keys[0].sk_argument) };
 
-    //TODO need to set search_list_size correctly
-    //TODO right now doesn't handle more than LIMIT 100;
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+
+    let query = unsafe {
+        PgVector::from_datum(
+            orderby_keys[0].sk_argument,
+            &state.meta_page,
+            true, /* needed for search */
+            true, /* needed for resort */
+        )
+    };
     state.initialize(&indexrel, &heaprel, query, search_list_size);
 }
 
@@ -312,8 +323,16 @@ pub extern "C" fn amgettuple(
             get_tuple(next, scan)
         }
         StorageState::Plain(iter) => {
-            let storage = PlainStorage::load_for_search(&indexrel, state.distance_fn.unwrap());
-            let next = iter.next(&indexrel, &storage);
+            let storage =
+                PlainStorage::load_for_search(&indexrel, &heaprel, state.distance_fn.unwrap());
+            let next = if state.meta_page.get_num_dimensions()
+                == state.meta_page.get_num_dimensions_to_index()
+            {
+                /* no need to resort */
+                iter.next(&indexrel, &storage)
+            } else {
+                iter.next_with_resort(&indexrel, &storage)
+            };
             get_tuple(next, scan)
         }
     }
