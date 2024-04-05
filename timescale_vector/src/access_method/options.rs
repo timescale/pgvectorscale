@@ -15,10 +15,12 @@ pub struct TSVIndexOptions {
     pub storage_layout_offset: i32,
     num_neighbors: i32,
     pub search_list_size: u32,
+    pub num_dimensions: u32,
     pub max_alpha: f64,
 }
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
+pub const NUM_DIMENSIONS_DEFAULT_SENTINEL: u32 = 0;
 const DEFAULT_MAX_ALPHA: f64 = 1.2;
 
 impl TSVIndexOptions {
@@ -34,6 +36,7 @@ impl TSVIndexOptions {
             ops.num_neighbors = NUM_NEIGHBORS_DEFAULT_SENTINEL;
             ops.search_list_size = 100;
             ops.max_alpha = DEFAULT_MAX_ALPHA;
+            ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -81,7 +84,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 4;
+const NUM_REL_OPTS: usize = 5;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
@@ -115,6 +118,11 @@ pub unsafe extern "C" fn amoptions(
             optname: "search_list_size".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, search_list_size) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "num_dimensions".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            offset: offset_of!(TSVIndexOptions, num_dimensions) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "max_alpha".as_pg_cstr(),
@@ -207,13 +215,26 @@ pub unsafe fn init() {
         5.0,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
+
+    pg_sys::add_int_reloption(
+        RELOPT_KIND_TSV,
+        "num_dimensions".as_pg_cstr(),
+        "The number of dimensions to index (0 to index all dimensions)".as_pg_cstr(),
+        0,
+        0,
+        5000,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
 }
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
     use crate::access_method::{
-        options::{TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_NEIGHBORS_DEFAULT_SENTINEL},
+        options::{
+            TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_DIMENSIONS_DEFAULT_SENTINEL,
+            NUM_NEIGHBORS_DEFAULT_SENTINEL,
+        },
         storage::StorageType,
     };
     use pgrx::*;
@@ -233,6 +254,7 @@ mod tests {
         let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
         let options = TSVIndexOptions::from_relation(&indexrel);
         assert_eq!(options.num_neighbors, 30);
+        assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
         Ok(())
     }
 
@@ -252,6 +274,7 @@ mod tests {
         assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
+        assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
         Ok(())
     }
@@ -273,6 +296,7 @@ mod tests {
         assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
+        assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
         assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
         Ok(())
     }
@@ -295,6 +319,28 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::Plain);
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_index_options_custom() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(encoding vector(3));
+        CREATE INDEX idxtest
+                  ON test
+               USING tsv(encoding)
+               WITH (storage_layout = plain, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4);",
+        ))?;
+
+        let index_oid =
+            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
+        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+        let options = TSVIndexOptions::from_relation(&indexrel);
+        assert_eq!(options.get_num_neighbors(), 40);
+        assert_eq!(options.search_list_size, 18);
+        assert_eq!(options.max_alpha, 1.4);
+        assert_eq!(options.get_storage_type(), StorageType::Plain);
+        assert_eq!(options.num_dimensions, 20);
         Ok(())
     }
 }

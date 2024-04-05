@@ -137,7 +137,7 @@ impl BqQuantizer {
         self.training = true;
         if self.use_mean {
             self.count = 0;
-            self.mean = vec![0.0; meta_page.get_num_dimensions() as _];
+            self.mean = vec![0.0; meta_page.get_num_dimensions_to_index() as _];
         }
     }
 
@@ -186,7 +186,6 @@ impl BqDistanceTable {
         }
     }
 
-    /// distance emits the sum of distances between each centroid in the quantized vector.
     pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
         let count_ones = distance_xor_optimized(&self.quantized_vector, bq_vector);
         //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
@@ -311,7 +310,6 @@ impl<'a> BqSpeedupStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        heap_attr: pgrx::pg_sys::AttrNumber,
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> BqSpeedupStorage<'a> {
         Self {
@@ -319,7 +317,7 @@ impl<'a> BqSpeedupStorage<'a> {
             distance_fn: distance_fn,
             quantizer: BqQuantizer::new(),
             heap_rel: heap_rel,
-            heap_attr: heap_attr,
+            heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -334,7 +332,6 @@ impl<'a> BqSpeedupStorage<'a> {
 
     pub fn load_for_insert<S: StatsNodeRead>(
         heap_rel: &'a PgRelation,
-        heap_attr: pgrx::pg_sys::AttrNumber,
         index_relation: &'a PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
@@ -344,7 +341,7 @@ impl<'a> BqSpeedupStorage<'a> {
             distance_fn: meta_page.get_distance_function(),
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel: heap_rel,
-            heap_attr: heap_attr,
+            heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
         }
     }
@@ -450,7 +447,7 @@ impl<'a> BqSpeedupStorage<'a> {
         heap_pointer: HeapPointer,
         stats: &mut T,
     ) -> TableSlot {
-        TableSlot::new(self.heap_rel, heap_pointer, self.heap_attr, stats)
+        TableSlot::new(self.heap_rel, heap_pointer, stats)
     }
 }
 
@@ -529,7 +526,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     fn get_query_distance_measure(&self, query: PgVector) -> BqSearchDistanceMeasure {
         return BqSearchDistanceMeasure::Bq(
             self.quantizer
-                .get_distance_table(query.to_slice(), self.distance_fn),
+                .get_distance_table(query.to_index_slice(), self.distance_fn),
             query,
         );
     }
@@ -539,14 +536,16 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
+        meta_page: &MetaPage,
         stats: &mut S,
     ) -> f32 {
         let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
         match qdm {
-            BqSearchDistanceMeasure::Bq(_, query) => self.get_distance_function()(
-                unsafe { slot.get_pg_vector().to_slice() },
-                query.to_slice(),
-            ),
+            BqSearchDistanceMeasure::Bq(_, query) => {
+                let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
+                let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
+                self.get_distance_function()(vec.to_full_slice(), query.to_full_slice())
+            }
         }
     }
 
@@ -867,5 +866,13 @@ mod tests {
         crate::access_method::build::tests::test_insert_empty_insert_scaffold(
             "num_neighbors=38, storage_layout = io_optimized",
         )
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_storage_index_creation_num_dimensions() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "storage_layout = io_optimized, num_dimensions=768",
+        )?;
+        Ok(())
     }
 }
