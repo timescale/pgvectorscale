@@ -77,6 +77,7 @@ pub trait Storage {
         query: &Self::QueryDistanceMeasure,
         index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
+        meta_page: &MetaPage,
         stats: &mut S,
     ) -> f32;
 

@@ -10,7 +10,7 @@ use crate::util::*;
 
 use super::bq::BqNode;
 use super::distance;
-use super::options::NUM_NEIGHBORS_DEFAULT_SENTINEL;
+use super::options::{NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL};
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -65,6 +65,7 @@ impl MetaPageV1 {
             extension_version_when_built: "0.0.2".to_string(),
             distance_type: DistanceType::L2 as u16,
             num_dimensions: self.num_dimensions,
+            num_dimensions_to_index: self.num_dimensions,
             num_neighbors: self.num_neighbors,
             storage_type: StorageType::Plain as u8,
             search_list_size: self.search_list_size,
@@ -114,8 +115,10 @@ pub struct MetaPage {
     extension_version_when_built: String,
     /// The value of the DistanceType enum
     distance_type: u16,
-    /// number of dimensions in the vector
+    /// number of total_dimensions in the vector
     num_dimensions: u32,
+    //number of dimensions in the vectors stored in the index
+    num_dimensions_to_index: u32,
     /// the value of the TSVStorageLayout enum
     storage_type: u8,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
@@ -131,6 +134,10 @@ impl MetaPage {
     /// Has to be the same for all vectors in the graph and cannot change.
     pub fn get_num_dimensions(&self) -> u32 {
         self.num_dimensions
+    }
+
+    pub fn get_num_dimensions_to_index(&self) -> u32 {
+        self.num_dimensions_to_index
     }
 
     /// Maximum number of neigbors per node. Given that we pre-allocate
@@ -202,12 +209,19 @@ impl MetaPage {
     ) -> MetaPage {
         let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
 
+        let num_dimensions_to_index = if (*opt).num_dimensions == NUM_DIMENSIONS_DEFAULT_SENTINEL {
+            num_dimensions
+        } else {
+            (*opt).num_dimensions
+        };
+
         let meta = MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
             extension_version_when_built: version.to_string(),
             distance_type: DistanceType::Cosine as u16,
             num_dimensions,
+            num_dimensions_to_index,
             storage_type: (*opt).get_storage_type() as u8,
             num_neighbors: Self::calculate_num_neighbors(num_dimensions, &opt),
             search_list_size: (*opt).search_list_size,

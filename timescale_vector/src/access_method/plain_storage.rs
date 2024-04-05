@@ -8,47 +8,61 @@ use super::{
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
+    storage_common::get_attribute_number_from_index,
 };
 
 use pgrx::PgRelation;
 
-use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
+use crate::util::{
+    page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
+};
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct PlainStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
+    heap_rel: &'a PgRelation,
+    heap_attr: pgrx::pg_sys::AttrNumber,
 }
 
 impl<'a> PlainStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
+        heap_rel: &'a PgRelation,
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PlainStorage<'a> {
         Self {
             index: index,
             distance_fn: distance_fn,
+            heap_rel: heap_rel,
+            heap_attr: get_attribute_number_from_index(index),
         }
     }
 
     pub fn load_for_insert(
         index_relation: &'a PgRelation,
+        heap_rel: &'a PgRelation,
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: distance_fn,
+            heap_rel: heap_rel,
+            heap_attr: get_attribute_number_from_index(&index_relation),
         }
     }
 
     pub fn load_for_search(
         index_relation: &'a PgRelation,
+        heap_rel: &'a PgRelation,
         distance_fn: fn(&[f32], &[f32]) -> f32,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: distance_fn,
+            heap_rel: heap_rel,
+            heap_attr: get_attribute_number_from_index(&index_relation),
         }
     }
 }
@@ -199,12 +213,23 @@ impl<'a> Storage for PlainStorage<'a> {
     }
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
-        _qdm: &Self::QueryDistanceMeasure,
+        qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
-        _heap_pointer: HeapPointer,
-        _stats: &mut S,
+        heap_pointer: HeapPointer,
+        meta_page: &MetaPage,
+        stats: &mut S,
     ) -> f32 {
-        pgrx::error!("Plain node should never be resorted");
+        /* Plain storage only needs to resort when the index is using less dimensions than the underlying data. */
+        assert!(meta_page.get_num_dimensions() > meta_page.get_num_dimensions_to_index());
+
+        let slot = unsafe { TableSlot::new(self.heap_rel, heap_pointer, stats) };
+        match qdm {
+            PlainDistanceMeasure::Full(query) => {
+                let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
+                let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
+                self.get_distance_function()(vec.to_full_slice(), query.to_full_slice())
+            }
+        }
     }
     fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
@@ -240,7 +265,7 @@ impl<'a> Storage for PlainStorage<'a> {
         let distance = match lsr.sdm.as_ref().unwrap() {
             PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
                 self.distance_fn,
-                query.to_slice(),
+                query.to_index_slice(),
                 node.vector.as_slice(),
                 &mut lsr.stats,
             ),
@@ -275,7 +300,7 @@ impl<'a> Storage for PlainStorage<'a> {
             let distance = match lsr.sdm.as_ref().unwrap() {
                 PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
                     self.distance_fn,
-                    query.to_slice(),
+                    query.to_index_slice(),
                     node_neighbor.vector.as_slice(),
                     &mut lsr.stats,
                 ),
@@ -323,7 +348,7 @@ mod tests {
     use pgrx::*;
 
     #[pg_test]
-    unsafe fn test_plain_storage_index_creation() -> spi::Result<()> {
+    unsafe fn test_plain_storage_index_creation_many_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, storage_layout = plain",
         )?;
@@ -365,5 +390,13 @@ mod tests {
         crate::access_method::build::tests::test_insert_empty_insert_scaffold(
             "num_neighbors=38, storage_layout = plain",
         )
+    }
+
+    #[pg_test]
+    unsafe fn test_plain_storage_num_dimensions() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "num_neighbors=38, storage_layout = plain, num_dimensions=768",
+        )?;
+        Ok(())
     }
 }
