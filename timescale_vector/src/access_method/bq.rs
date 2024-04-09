@@ -875,4 +875,13 @@ mod tests {
         )?;
         Ok(())
     }
+
+    #[pg_test]
+    unsafe fn test_bq_storage_index_updates() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            "storage_layout = io_optimized, num_neighbors=10",
+            300,
+        )?;
+        Ok(())
+    }
 }

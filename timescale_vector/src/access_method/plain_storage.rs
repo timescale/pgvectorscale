@@ -399,4 +399,13 @@ mod tests {
         )?;
         Ok(())
     }
+
+    #[pg_test]
+    unsafe fn test_plain_storage_index_updates() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            "storage_layout = plain, num_neighbors=30",
+            50,
+        )?;
+        Ok(())
+    }
 }
