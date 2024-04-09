@@ -703,4 +703,105 @@ pub mod tests {
 
         Ok(())
     }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_index_updates(index_options: &str, expected_cnt: i64) -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test_data (
+                id int,
+                embedding vector (1536)
+            );
+
+            select setseed(0.5);
+           -- generate 300 vectors
+            INSERT INTO test_data (id, embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    i % {expected_cnt},
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, 1536 * {expected_cnt}) i
+                GROUP BY
+                    i % {expected_cnt}) g;
+
+            CREATE INDEX idx_tsv_bq ON test_data USING tsv (embedding) WITH ({index_options});
+
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, 1536));"))?;
+
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, 1536)"
+        ))?;
+
+        let cnt: Option<i64> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET tsv.query_search_list_size = 2;
+            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+        assert!(cnt.unwrap() == expected_cnt, "initial count");
+
+        Spi::run(&format!(
+            "
+
+        --CREATE INDEX idx_id ON test_data(id);
+
+        WITH CTE as (
+            SELECT
+                i % {expected_cnt} as id,
+                ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM
+                generate_series(1, 1536 * {expected_cnt}) i
+            GROUP BY
+            i % {expected_cnt}
+        )
+        UPDATE test_data SET embedding = cte.embedding
+        FROM cte
+        WHERE test_data.id = cte.id;
+
+        --DROP INDEX idx_id;
+            ",
+        ))?;
+
+        let cnt: Option<i64> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET tsv.query_search_list_size = 2;
+        WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+        ",
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
+
+        assert!(cnt.unwrap() == expected_cnt, "after update count");
+
+        Ok(())
+    }
 }
