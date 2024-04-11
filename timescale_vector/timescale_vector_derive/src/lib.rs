@@ -24,18 +24,20 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
     let gen = quote! {
         pub struct #readable_name<'a> {
             _rb: ReadableBuffer<'a>,
+            data: Vec<u8>,
         }
 
         impl<'a> #readable_name<'a> {
             pub fn with_readable_buffer(rb: ReadableBuffer<'a>) -> Self {
-                Self { _rb: rb }
+                let slice = rb.get_data_slice().to_vec();
+                Self { _rb: rb, data: slice }
             }
 
             pub fn get_archived_node(&self) -> & #archived_name {
                 // checking the code here is expensive during build, so skip it.
                 // TODO: should we check the data during queries?
                 //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
-                unsafe { rkyv::archived_root::<#name>(self._rb.get_data_slice()) }
+                unsafe { rkyv::archived_root::<#name>(self.data.as_slice()) }
             }
 
             pub fn get_owned_page(self) -> crate::util::page::ReadablePage<'a> {
