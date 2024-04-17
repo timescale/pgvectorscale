@@ -137,6 +137,29 @@ impl<'a> Deref for LockedBufferExclusive<'a> {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+pub unsafe fn prefetch(index: &PgRelation, block_number: BlockNumber) {
+    let res = pgrx::pg_sys::PrefetchBuffer(index.as_ptr(), ForkNumber_MAIN_FORKNUM, block_number);
+    if res.recent_buffer > 0 {
+        let page_size = 4096;
+        let ptr = pg_sys::BufferGetPage(res.recent_buffer) as *mut std::os::raw::c_void;
+        let off = ptr.align_offset(page_size);
+        let (ptr, sz) = if off > 0 {
+            (
+                ptr.offset((off as isize) - (page_size as isize)),
+                page_size * 3,
+            )
+        } else {
+            (ptr, page_size * 2)
+        };
+        let mres = libc::madvise(ptr, sz, libc::MADV_POPULATE_READ);
+        if mres != 0 {
+            let err = std::io::Error::last_os_error();
+            error!("Error in madvise: {}", err);
+        }
+    }
+}
+
 /// LockedBufferShare is an RAII-guarded buffer that
 /// has been locked for share access.
 ///
@@ -154,6 +177,11 @@ impl<'a> LockedBufferShare<'a> {
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
+
+        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+        unsafe {
+            prefetch(index, block);
+        }
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
