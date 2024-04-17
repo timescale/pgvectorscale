@@ -14,7 +14,11 @@ pub unsafe extern "C" fn _PG_init() {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
         let sz = pg_sys::NBuffers as libc::size_t * pg_sys::BLCKSZ as libc::size_t;
-        let mres = libc::madvise(pg_sys::BufferBlocks, sz, libc::MADV_RANDOM);
+        let mres = libc::madvise(
+            pg_sys::BufferBlocks as *mut std::os::raw::c_void,
+            sz,
+            libc::MADV_RANDOM,
+        );
         if mres != 0 {
             let err = std::io::Error::last_os_error();
             error!("Error in madvise: {}", err);
