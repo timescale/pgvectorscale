@@ -124,6 +124,25 @@ impl<'a> Drop for LockedBufferExclusive<'a> {
             // Only unlock while in a transaction state. Should not be unlocking during abort or commit.
             // During abort, the system will unlock stuff itself. During commit, the release should have already happened.
             if pgrx::pg_sys::IsTransactionState() {
+                #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+                {
+                    let page_size = 4096;
+                    let ptr = pg_sys::BufferGetPage(self.buffer) as *mut std::os::raw::c_void;
+                    let off = ptr.align_offset(page_size);
+                    let (ptr, sz) = if off > 0 {
+                        (
+                            ptr.offset((off as isize) - (page_size as isize)),
+                            page_size * 3,
+                        )
+                    } else {
+                        (ptr, page_size * 2)
+                    };
+                    let mres = libc::madvise(ptr, sz, libc::MADV_DONTNEED);
+                    if mres != 0 {
+                        let err = std::io::Error::last_os_error();
+                        error!("Error in madvise: {}", err);
+                    }
+                }
                 pg_sys::UnlockReleaseBuffer(self.buffer);
             }
         }
@@ -152,9 +171,9 @@ pub unsafe fn prefetch(index: &PgRelation, block_number: BlockNumber) {
         } else {
             (ptr, page_size * 2)
         };
-        let mres = libc::madvise(ptr, sz, libc::MADV_POPULATE_READ);
+        let mres = libc::madvise(ptr, sz, libc::MADV | libc::MADV_WILLNEED);
         if mres != 0 {
-            let err = std::io::Error::last_os_error();
+            let err = Error::last_os_error();
             error!("Error in madvise: {}", err);
         }
     }
@@ -177,11 +196,6 @@ impl<'a> LockedBufferShare<'a> {
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let fork_number = ForkNumber_MAIN_FORKNUM;
-
-        #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-        unsafe {
-            prefetch(index, block);
-        }
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
