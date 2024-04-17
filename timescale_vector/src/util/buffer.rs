@@ -171,9 +171,9 @@ pub unsafe fn prefetch(index: &PgRelation, block_number: BlockNumber) {
         } else {
             (ptr, page_size * 2)
         };
-        let mres = libc::madvise(ptr, sz, libc::MADV | libc::MADV_WILLNEED);
+        let mres = libc::madvise(ptr, sz, libc::MADV_WILLNEED);
         if mres != 0 {
-            let err = Error::last_os_error();
+            let err = std::io::Error::last_os_error();
             error!("Error in madvise: {}", err);
         }
     }
