@@ -397,6 +397,7 @@ impl<'a> BqSpeedupStorage<'a> {
         let rn_visiting = unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
         let node_visiting = rn_visiting.get_archived_node();
 
+        //TODO get neighbors from private data just like plain storage
         let neighbors = match gns {
             GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
             GraphNeighborStore::Builder(b) => b.get_neighbors(lsn_index_pointer),
@@ -409,11 +410,15 @@ impl<'a> BqSpeedupStorage<'a> {
 
             let distance = match lsr.sdm.as_ref().unwrap() {
                 BqSearchDistanceMeasure::Bq(table, _) => {
-                    /* Note: there is no additional node reads here. We get all of our info from node_visiting
-                     * This is what gives us a speedup in BQ Speedup */
                     match gns {
                         GraphNeighborStore::Disk => {
-                            let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                            let rn_neighbor = unsafe {
+                                BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
+                            };
+                            let node_neighbor = rn_neighbor.get_archived_node();
+                            let bq_vector = node_neighbor.bq_vector.as_slice();
+
+                            //let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
                             BqSearchDistanceMeasure::calculate_bq_distance(
                                 table,
                                 bq_vector,
@@ -561,10 +566,12 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
 
         for (i, n) in rn.get_archived_node().iter_neighbors().enumerate() {
             //let dist = unsafe { dist_state.get_distance(n, stats) };
-            assert!(i < archived.neighbor_vectors.len());
-            let neighbor_q = archived.neighbor_vectors[i].as_slice();
+            let rn1 = unsafe { BqNode::read(self.index, n, stats) };
+
+            //assert!(i < archived.neighbor_vectors.len());
+            //let neighbor_q = archived.neighbor_vectors[i].as_slice();
             stats.record_quantized_distance_comparison();
-            let dist = distance_xor_optimized(q, neighbor_q);
+            let dist = distance_xor_optimized(q, rn1.get_archived_node().bq_vector.as_slice());
             result.push(NeighborWithDistance::new(n, dist as f32))
         }
     }
@@ -655,7 +662,6 @@ pub struct BqNode {
     pub heap_item_pointer: HeapPointer,
     pub bq_vector: Vec<u64>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_vectors: Vec<Vec<u64>>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
 }
 
 impl BqNode {
@@ -683,15 +689,10 @@ impl BqNode {
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
-        let neighbor_vectors: Vec<_> = (0..num_neighbors)
-            .map(|_| vec![0; BqQuantizer::quantized_size(num_dimensions as _)])
-            .collect();
-
         Self {
             heap_item_pointer: heap_pointer,
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers: neighbor_index_pointers,
-            neighbor_vectors: neighbor_vectors,
         }
     }
 
@@ -740,10 +741,6 @@ impl ArchivedBqNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    pub fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u64>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_vectors) }
-    }
-
     pub fn bq_vector(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<BqVectorElement>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.bq_vector) }
     }
@@ -760,14 +757,6 @@ impl ArchivedBqNode {
             //TODO hate that we have to set each field like this
             a_index_pointer.block_number = ip.block_number;
             a_index_pointer.offset = ip.offset;
-
-            let quantized = cache.must_get(ip);
-
-            let mut neighbor_vector = self.as_mut().neighbor_vector().index_pin(i);
-            for (index_in_q_vec, val) in quantized.iter().enumerate() {
-                let mut x = neighbor_vector.as_mut().index_pin(index_in_q_vec);
-                *x = *val;
-            }
         }
         //set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
