@@ -386,26 +386,20 @@ impl<'a> BqSpeedupStorage<'a> {
         lsn_index_pointer: IndexPointer,
         gns: &GraphNeighborStore,
     ) {
-        //Opt shouldn't need to read the node in the builder graph case.
-        let rn_visiting = unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
-        let node_visiting = rn_visiting.get_archived_node();
+        match gns {
+            GraphNeighborStore::Disk => {
+                let rn_visiting =
+                    unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
+                let node_visiting = rn_visiting.get_archived_node();
+                let neighbors = node_visiting.get_index_pointer_to_neighbors();
 
-        let neighbors = match gns {
-            GraphNeighborStore::Disk => node_visiting.get_index_pointer_to_neighbors(),
-            GraphNeighborStore::Builder(b) => b.get_neighbors(lsn_index_pointer),
-        };
+                for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
+                    if !lsr.prepare_insert(neighbor_index_pointer) {
+                        continue;
+                    }
 
-        for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
-            if !lsr.prepare_insert(neighbor_index_pointer) {
-                continue;
-            }
-
-            let distance = match lsr.sdm.as_ref().unwrap() {
-                BqSearchDistanceMeasure::Bq(table, _) => {
-                    /* Note: there is no additional node reads here. We get all of our info from node_visiting
-                     * This is what gives us a speedup in BQ Speedup */
-                    match gns {
-                        GraphNeighborStore::Disk => {
+                    let distance = match lsr.sdm.as_ref().unwrap() {
+                        BqSearchDistanceMeasure::Bq(table, _) => {
                             let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
                             BqSearchDistanceMeasure::calculate_bq_distance(
                                 table,
@@ -413,7 +407,24 @@ impl<'a> BqSpeedupStorage<'a> {
                                 &mut lsr.stats,
                             )
                         }
-                        GraphNeighborStore::Builder(_) => {
+                    };
+                    let lsn = ListSearchNeighbor::new(
+                        neighbor_index_pointer,
+                        distance,
+                        PhantomData::<bool>,
+                    );
+
+                    lsr.insert_neighbor(lsn);
+                }
+            }
+            GraphNeighborStore::Builder(b) => {
+                let neighbors = b.get_neighbors(lsn_index_pointer);
+                for &neighbor_index_pointer in neighbors.iter() {
+                    if !lsr.prepare_insert(neighbor_index_pointer) {
+                        continue;
+                    }
+                    let distance = match lsr.sdm.as_ref().unwrap() {
+                        BqSearchDistanceMeasure::Bq(table, _) => {
                             let mut cache = self.qv_cache.borrow_mut();
                             let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
                             let dist = BqSearchDistanceMeasure::calculate_bq_distance(
@@ -423,15 +434,17 @@ impl<'a> BqSpeedupStorage<'a> {
                             );
                             dist
                         }
-                    }
-                    //let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                    //BqSearchDistanceMeasure::calculate_bq_distance(table, bq_vector, &mut lsr.stats)
-                }
-            };
-            let lsn =
-                ListSearchNeighbor::new(neighbor_index_pointer, distance, PhantomData::<bool>);
+                    };
 
-            lsr.insert_neighbor(lsn);
+                    let lsn = ListSearchNeighbor::new(
+                        neighbor_index_pointer,
+                        distance,
+                        PhantomData::<bool>,
+                    );
+
+                    lsr.insert_neighbor(lsn);
+                }
+            }
         }
     }
 
