@@ -20,6 +20,20 @@ pub struct ItemPointer {
     pub offset: pgrx::pg_sys::OffsetNumber,
 }
 
+impl PartialOrd for ItemPointer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ItemPointer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.block_number
+            .cmp(&other.block_number)
+            .then_with(|| self.offset.cmp(&other.offset))
+    }
+}
+
 impl ArchivedItemPointer {
     pub fn deserialize_item_pointer(&self) -> ItemPointer {
         self.deserialize(&mut rkyv::Infallible).unwrap()

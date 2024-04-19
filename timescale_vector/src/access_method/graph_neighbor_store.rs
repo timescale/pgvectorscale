@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use crate::util::{IndexPointer, ItemPointer};
 
@@ -15,13 +15,15 @@ use super::storage::Storage;
 /// the neighbors to the right pages.
 pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk
-    neighbor_map: HashMap<ItemPointer, Vec<NeighborWithDistance>>,
+    //use a btree to provide ordering on the item pointers in iter().
+    //this ensures the write in finalize_node_at_end_of_build() is ordered, not random.
+    neighbor_map: BTreeMap<ItemPointer, Vec<NeighborWithDistance>>,
 }
 
 impl BuilderNeighborCache {
     pub fn new() -> Self {
         Self {
-            neighbor_map: HashMap::with_capacity(200),
+            neighbor_map: BTreeMap::new(),
         }
     }
     pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
