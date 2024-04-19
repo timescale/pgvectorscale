@@ -214,7 +214,7 @@ impl BqSearchDistanceMeasure {
 }
 
 pub struct BqNodeDistanceMeasure<'a> {
-    readable_node: ReadableBqNode<'a>,
+    vec: Vec<BqVectorElement>,
     storage: &'a BqSpeedupStorage<'a>,
 }
 
@@ -224,9 +224,9 @@ impl<'a> BqNodeDistanceMeasure<'a> {
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
-        let rn = unsafe { BqNode::read(storage.index, index_pointer, stats) };
+        let cache = &mut storage.qv_cache.borrow_mut();
         Self {
-            readable_node: rn,
+            vec: cache.get(index_pointer, storage, stats).to_vec(),
             storage: storage,
         }
     }
@@ -238,16 +238,9 @@ impl<'a> NodeDistanceMeasure for BqNodeDistanceMeasure<'a> {
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> f32 {
-        //OPT: should I get and memoize the vector from self.readable_node in with_index_pointer above?
-        let rn1 = BqNode::read(self.storage.index, index_pointer, stats);
-        let rn2 = &self.readable_node;
-        let node1 = rn1.get_archived_node();
-        let node2 = rn2.get_archived_node();
-        assert!(node1.bq_vector.len() > 0);
-        assert!(node1.bq_vector.len() == node2.bq_vector.len());
-        let vec1 = node1.bq_vector.as_slice();
-        let vec2 = node2.bq_vector.as_slice();
-        distance_xor_optimized(vec1, vec2) as f32
+        let cache = &mut self.storage.qv_cache.borrow_mut();
+        let vec1 = cache.get(index_pointer, self.storage, stats);
+        distance_xor_optimized(vec1, self.vec.as_slice()) as f32
     }
 }
 
