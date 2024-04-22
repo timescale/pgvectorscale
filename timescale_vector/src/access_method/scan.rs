@@ -89,7 +89,8 @@ impl TSVScanState {
 struct ResortData {
     heap_pointer: HeapPointer,
     index_pointer: IndexPointer,
-    distance: f32,
+    exact_distance: f32,
+    approx_distance: f32,
 }
 
 impl PartialEq for ResortData {
@@ -102,7 +103,7 @@ impl PartialOrd for ResortData {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         //notice the reverse here. Other is the one that is being compared to self
         //this allows us to have a min heap
-        other.distance.partial_cmp(&self.distance)
+        other.exact_distance.partial_cmp(&self.exact_distance)
     }
 }
 
@@ -119,7 +120,9 @@ struct TSVResponseIterator<QDM, PD> {
     search_list_size: usize,
     meta_page: MetaPage,
     quantizer_stats: QuantizerStats,
+    resort_size: usize,
     resort_buffer: BinaryHeap<ResortData>,
+    max_approx_distance_in_resort_buffer: f32,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -143,7 +146,9 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             lsr,
             meta_page,
             quantizer_stats,
+            resort_size,
             resort_buffer: BinaryHeap::with_capacity(resort_size),
+            max_approx_distance_in_resort_buffer: 0.0,
         }
     }
 }
@@ -152,7 +157,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
     fn next<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
         storage: &S,
-    ) -> Option<(HeapPointer, IndexPointer)> {
+    ) -> Option<(HeapPointer, IndexPointer, f32)> {
         let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
@@ -162,12 +167,12 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             let item = self.lsr.consume(storage);
 
             match item {
-                Some((heap_pointer, index_pointer)) => {
+                Some((heap_pointer, index_pointer, approx_distance)) => {
                     if heap_pointer.offset == InvalidOffsetNumber {
                         /* deleted tuple */
                         continue;
                     }
-                    return Some((heap_pointer, index_pointer));
+                    return Some((heap_pointer, index_pointer, approx_distance));
                 }
                 None => {
                     return None;
@@ -182,12 +187,18 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.resort_buffer.capacity() == 0 {
-            return self.next(storage);
+            return self
+                .next(storage)
+                .map(|(heap_pointer, index_pointer, _)| (heap_pointer, index_pointer));
         }
 
-        while self.resort_buffer.len() < self.resort_buffer.capacity() {
+        while self.resort_buffer.len() < 2
+            || self.max_approx_distance_in_resort_buffer
+                - self.resort_buffer.peek().unwrap().approx_distance
+                > self.resort_size as f32
+        {
             match self.next(storage) {
-                Some((heap_pointer, index_pointer)) => {
+                Some((heap_pointer, index_pointer, approx_distance)) => {
                     let distance = storage.get_full_distance_for_resort(
                         self.lsr.sdm.as_ref().unwrap(),
                         index_pointer,
@@ -199,8 +210,12 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                     self.resort_buffer.push(ResortData {
                         heap_pointer,
                         index_pointer,
-                        distance,
+                        exact_distance: distance,
+                        approx_distance,
                     });
+                    self.max_approx_distance_in_resort_buffer = self
+                        .max_approx_distance_in_resort_buffer
+                        .max(approx_distance);
                 }
                 None => {
                     break;
@@ -315,7 +330,7 @@ pub extern "C" fn amgettuple(
                 == state.meta_page.get_num_dimensions_to_index()
             {
                 /* no need to resort */
-                iter.next(&storage)
+                iter.next(&storage).map(|(hp, ip, _)| (hp, ip))
             } else {
                 iter.next_with_resort(&indexrel, &storage)
             };
