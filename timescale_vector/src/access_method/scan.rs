@@ -195,7 +195,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         while self.resort_buffer.len() < 2
             || self.max_approx_distance_in_resort_buffer
                 - self.resort_buffer.peek().unwrap().approx_distance
-                > self.resort_size as f32
+                < self.resort_size as f32
         {
             match self.next(storage) {
                 Some((heap_pointer, index_pointer, approx_distance)) => {
