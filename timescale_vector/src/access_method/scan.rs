@@ -33,6 +33,7 @@ struct TSVScanState {
     storage: *mut StorageState,
     distance_fn: Option<fn(&[f32], &[f32]) -> f32>,
     meta_page: MetaPage,
+    last_buffer: Option<PinnedBufferShare>,
 }
 
 impl TSVScanState {
@@ -41,6 +42,7 @@ impl TSVScanState {
             storage: std::ptr::null_mut(),
             distance_fn: None,
             meta_page: meta_page,
+            last_buffer: None,
         }
     }
 
@@ -115,8 +117,6 @@ impl Ord for ResortData {
 struct TSVResponseIterator<QDM, PD> {
     lsr: ListSearchResult<QDM, PD>,
     search_list_size: usize,
-    current: usize,
-    last_buffer: Option<PinnedBufferShare>,
     meta_page: MetaPage,
     quantizer_stats: QuantizerStats,
     resort_buffer: BinaryHeap<ResortData>,
@@ -141,8 +141,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         Self {
             search_list_size,
             lsr,
-            current: 0,
-            last_buffer: None,
             meta_page,
             quantizer_stats,
             resort_buffer: BinaryHeap::with_capacity(resort_size),
@@ -153,7 +151,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
     fn next<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
-        index: &PgRelation,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
@@ -166,16 +163,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 
             match item {
                 Some((heap_pointer, index_pointer)) => {
-                    /*
-                     * An index scan must maintain a pin on the index page holding the
-                     * item last returned by amgettuple
-                     *
-                     * https://www.postgresql.org/docs/current/index-locking.html
-                     */
-                    self.last_buffer =
-                        Some(PinnedBufferShare::read(index, index_pointer.block_number));
-
-                    self.current = self.current + 1;
                     if heap_pointer.offset == InvalidOffsetNumber {
                         /* deleted tuple */
                         continue;
@@ -183,7 +170,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                     return Some((heap_pointer, index_pointer));
                 }
                 None => {
-                    self.last_buffer = None;
                     return None;
                 }
             }
@@ -196,11 +182,11 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.resort_buffer.capacity() == 0 {
-            return self.next(index, storage);
+            return self.next(storage);
         }
 
         while self.resort_buffer.len() < self.resort_buffer.capacity() {
-            match self.next(index, storage) {
+            match self.next(storage) {
                 Some((heap_pointer, index_pointer)) => {
                     let distance = storage.get_full_distance_for_resort(
                         self.lsr.sdm.as_ref().unwrap(),
@@ -320,7 +306,7 @@ pub extern "C" fn amgettuple(
                 state.distance_fn.unwrap(),
             );
             let next = iter.next_with_resort(&indexrel, &bq);
-            get_tuple(next, scan)
+            get_tuple(state, next, scan)
         }
         StorageState::Plain(iter) => {
             let storage =
@@ -329,27 +315,43 @@ pub extern "C" fn amgettuple(
                 == state.meta_page.get_num_dimensions_to_index()
             {
                 /* no need to resort */
-                iter.next(&indexrel, &storage)
+                iter.next(&storage)
             } else {
                 iter.next_with_resort(&indexrel, &storage)
             };
-            get_tuple(next, scan)
+            get_tuple(state, next, scan)
         }
     }
 }
 
 fn get_tuple(
+    state: &mut TSVScanState,
     next: Option<(HeapPointer, IndexPointer)>,
     mut scan: PgBox<pg_sys::IndexScanDescData>,
 ) -> bool {
     scan.xs_recheckorderby = false;
     match next {
-        Some((heap_pointer, _)) => {
+        Some((heap_pointer, index_pointer)) => {
             let tid_to_set = &mut scan.xs_heaptid;
             heap_pointer.to_item_pointer_data(tid_to_set);
+
+            /*
+             * An index scan must maintain a pin on the index page holding the
+             * item last returned by amgettuple
+             *
+             * https://www.postgresql.org/docs/current/index-locking.html
+             */
+            let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
+            state.last_buffer = Some(PinnedBufferShare::read(
+                &indexrel,
+                index_pointer.block_number,
+            ));
             true
         }
-        None => false,
+        None => {
+            state.last_buffer = None;
+            false
+        }
     }
 }
 
