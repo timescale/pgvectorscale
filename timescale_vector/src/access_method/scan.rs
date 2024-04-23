@@ -114,6 +114,54 @@ impl Ord for ResortData {
     }
 }
 
+struct StreamingStats {
+    resort_size: usize,
+    count: i32,
+    mean: f32,
+    m2: f32,
+    max_distance: f32,
+}
+
+impl StreamingStats {
+    fn new(resort_size: usize) -> Self {
+        Self {
+            resort_size,
+            count: 0,
+            mean: 0.0,
+            m2: 0.0,
+            max_distance: 0.0,
+        }
+    }
+
+    fn update_base_stats(&mut self, distance: f32) {
+        if distance == 0.0 {
+            return;
+        }
+        self.count += 1;
+        let delta = distance - self.mean;
+        self.mean += delta / self.count as f32;
+        let delta2 = distance - self.mean;
+        self.m2 += delta * delta2;
+    }
+
+    fn variance(&self) -> f32 {
+        if self.count < 2 {
+            return 0.0;
+        }
+        self.m2 / (self.count - 1) as f32
+    }
+
+    fn mean(&self) -> f32 {
+        self.mean
+    }
+
+    fn update(&mut self, distance: f32, diff: f32) {
+        //base stats only on first resort_size elements
+        self.update_base_stats(diff);
+        self.max_distance = self.max_distance.max(distance);
+    }
+}
+
 struct TSVResponseIterator<QDM, PD> {
     lsr: ListSearchResult<QDM, PD>,
     search_list_size: usize,
@@ -121,6 +169,7 @@ struct TSVResponseIterator<QDM, PD> {
     quantizer_stats: QuantizerStats,
     resort_size: usize,
     resort_buffer: BinaryHeap<ResortData>,
+    streaming_stats: StreamingStats,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -146,6 +195,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             quantizer_stats,
             resort_size,
             resort_buffer: BinaryHeap::with_capacity(resort_size),
+            streaming_stats: StreamingStats::new(resort_size),
         }
     }
 }
@@ -187,7 +237,11 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             return self.next(storage);
         }
 
-        while self.resort_buffer.len() < self.resort_size {
+        while self.resort_buffer.len() < 2
+            || self.streaming_stats.count < 2
+            || (self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance)
+                < self.streaming_stats.variance().sqrt() * (self.resort_size as f32 / 100.0)
+        {
             match self.next(storage) {
                 Some((heap_pointer, index_pointer)) => {
                     let distance = storage.get_full_distance_for_resort(
@@ -197,6 +251,11 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                         &self.meta_page,
                         &mut self.lsr.stats,
                     );
+
+                    if self.resort_buffer.len() > 1 {
+                        self.streaming_stats
+                            .update(distance, distance - self.streaming_stats.max_distance);
+                    }
 
                     self.resort_buffer.push(ResortData {
                         heap_pointer,
@@ -209,6 +268,15 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                 }
             }
         }
+
+        /*error!(
+            "Resort buffer size: {}, mean: {}, variance: {}, max_distance: {}: diff: {}",
+            self.resort_buffer.len(),
+            self.streaming_stats.mean(),
+            self.streaming_stats.variance().sqrt(),
+            self.streaming_stats.max_distance,
+            self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance
+        );*/
 
         match self.resort_buffer.pop() {
             Some(rd) => Some((rd.heap_pointer, rd.index_pointer)),
