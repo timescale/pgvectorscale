@@ -119,6 +119,7 @@ struct TSVResponseIterator<QDM, PD> {
     search_list_size: usize,
     meta_page: MetaPage,
     quantizer_stats: QuantizerStats,
+    resort_size: usize,
     resort_buffer: BinaryHeap<ResortData>,
 }
 
@@ -143,6 +144,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             lsr,
             meta_page,
             quantizer_stats,
+            resort_size,
             resort_buffer: BinaryHeap::with_capacity(resort_size),
         }
     }
@@ -185,7 +187,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             return self.next(storage);
         }
 
-        while self.resort_buffer.len() < self.resort_buffer.capacity() {
+        while self.resort_buffer.len() < self.resort_size {
             match self.next(storage) {
                 Some((heap_pointer, index_pointer)) => {
                     let distance = storage.get_full_distance_for_resort(
