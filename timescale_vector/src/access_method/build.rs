@@ -127,7 +127,7 @@ pub unsafe extern "C" fn aminsert(
                 &mut stats,
             );
         }
-        StorageType::BqSpeedup => {
+        StorageType::BqSpeedup | StorageType::BqCompression => {
             let bq = BqSpeedupStorage::load_for_insert(
                 &heap_relation,
                 &index_relation,
@@ -211,12 +211,8 @@ fn do_heap_scan<'a>(
 
             finalize_index_build(&mut plain, &mut bs, write_stats)
         }
-        StorageType::BqSpeedup => {
-            let mut bq = BqSpeedupStorage::new_for_build(
-                index_relation,
-                heap_relation,
-                meta_page.get_distance_function(),
-            );
+        StorageType::BqSpeedup | StorageType::BqCompression => {
+            let mut bq = BqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
 
             let page_type = BqSpeedupStorage::page_type();
 

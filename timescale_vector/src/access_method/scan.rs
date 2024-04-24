@@ -66,15 +66,10 @@ impl TSVScanState {
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
-            StorageType::BqSpeedup => {
+            StorageType::BqSpeedup | StorageType::BqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
-                let bq = BqSpeedupStorage::load_for_search(
-                    index,
-                    heap,
-                    &quantizer,
-                    meta_page.get_distance_function(),
-                );
+                let bq = BqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::BqSpeedup(quantizer, it)
@@ -115,7 +110,6 @@ impl Ord for ResortData {
 }
 
 struct StreamingStats {
-    resort_size: usize,
     count: i32,
     mean: f32,
     m2: f32,
@@ -123,9 +117,8 @@ struct StreamingStats {
 }
 
 impl StreamingStats {
-    fn new(resort_size: usize) -> Self {
+    fn new(_resort_size: usize) -> Self {
         Self {
-            resort_size,
             count: 0,
             mean: 0.0,
             m2: 0.0,
@@ -146,10 +139,6 @@ impl StreamingStats {
             return 0.0;
         }
         self.m2 / (self.count - 1) as f32
-    }
-
-    fn mean(&self) -> f32 {
-        self.mean
     }
 
     fn update(&mut self, distance: f32, diff: f32) {
@@ -227,7 +216,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 
     fn next_with_resort<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
-        index: &PgRelation,
+        _index: &PgRelation,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         if self.resort_buffer.capacity() == 0 {
@@ -365,12 +354,8 @@ pub extern "C" fn amgettuple(
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
         StorageState::BqSpeedup(quantizer, iter) => {
-            let bq = BqSpeedupStorage::load_for_search(
-                &indexrel,
-                &heaprel,
-                quantizer,
-                state.distance_fn.unwrap(),
-            );
+            let bq =
+                BqSpeedupStorage::load_for_search(&indexrel, &heaprel, quantizer, &state.meta_page);
             let next = iter.next_with_resort(&indexrel, &bq);
             get_tuple(state, next, scan)
         }

@@ -128,14 +128,29 @@ pub trait Storage {
 pub enum StorageType {
     Plain = 0,
     BqSpeedup = 1,
+    BqCompression = 2,
 }
+
+pub const DEFAULT_STORAGE_TYPE_STR: &str = "memory_optimized";
 
 impl StorageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => StorageType::Plain,
             1 => StorageType::BqSpeedup,
+            2 => StorageType::BqCompression,
             _ => panic!("Invalid storage type"),
+        }
+    }
+
+    pub fn from_str(value: &str) -> Self {
+        match value.to_lowercase().as_str() {
+            "plain" => StorageType::Plain,
+            "bq_speedup" | "io_optimized" => StorageType::BqSpeedup,
+            "bq_compression" | "memory_optimized" => StorageType::BqCompression,
+            _ => panic!(
+                "Invalid storage type. Must be one of 'plain', 'bq_speedup', 'bq_compression'"
+            ),
         }
     }
 }
