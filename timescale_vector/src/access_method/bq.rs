@@ -16,7 +16,7 @@ use pgrx::{
     pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgRelation,
 };
-use rkyv::{vec::ArchivedVec, Archive, Archived, Deserialize, Serialize};
+use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 
 use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, ArchivedItemPointer, HeapPointer,
@@ -164,52 +164,62 @@ impl BqQuantizer {
     ) -> Vec<BqVectorElement> {
         self.quantize(&full_vector)
     }
-
-    fn get_distance_table(
-        &self,
-        query: &[f32],
-        _distance_fn: fn(&[f32], &[f32]) -> f32,
-    ) -> BqDistanceTable {
-        BqDistanceTable::new(self.quantize(query))
-    }
 }
 
-/// DistanceCalculator encapsulates the code to generate distances between a BQ vector and a query.
-pub struct BqDistanceTable {
+pub struct BqSearchDistanceMeasure {
     quantized_vector: Vec<BqVectorElement>,
+    query: PgVector,
+    num_dimensions_for_neighbors: usize,
 }
 
-impl BqDistanceTable {
-    pub fn new(query: Vec<BqVectorElement>) -> BqDistanceTable {
-        BqDistanceTable {
-            quantized_vector: query,
+impl BqSearchDistanceMeasure {
+    pub fn new(
+        quantized_vector: Vec<BqVectorElement>,
+        query: PgVector,
+        num_dimensions_for_neighbors: usize,
+    ) -> BqSearchDistanceMeasure {
+        BqSearchDistanceMeasure {
+            quantized_vector,
+            query,
+            num_dimensions_for_neighbors,
         }
     }
 
-    pub fn distance(&self, bq_vector: &[BqVectorElement]) -> f32 {
-        let count_ones = distance_xor_optimized(&self.quantized_vector, bq_vector);
+    pub fn calculate_bq_distance<S: StatsDistanceComparison>(
+        &self,
+        bq_vector: &[BqVectorElement],
+        gns: &GraphNeighborStore,
+        stats: &mut S,
+    ) -> f32 {
+        assert!(bq_vector.len() > 0);
+        stats.record_quantized_distance_comparison();
+        let (a, b) = match gns {
+            GraphNeighborStore::Disk => {
+                if self.num_dimensions_for_neighbors > 0 {
+                    let quantized_dimensions =
+                        BqQuantizer::quantized_size(self.num_dimensions_for_neighbors);
+                    debug_assert!(self.quantized_vector.len() >= quantized_dimensions);
+                    debug_assert!(bq_vector.len() >= quantized_dimensions);
+                    (
+                        &self.quantized_vector.as_slice()[..quantized_dimensions],
+                        &bq_vector[..quantized_dimensions],
+                    )
+                } else {
+                    debug_assert!(self.quantized_vector.len() == bq_vector.len());
+                    (self.quantized_vector.as_slice(), bq_vector)
+                }
+            }
+            GraphNeighborStore::Builder(_b) => {
+                debug_assert!(self.quantized_vector.len() == bq_vector.len());
+                (self.quantized_vector.as_slice(), bq_vector)
+            }
+        };
+
+        let count_ones = distance_xor_optimized(a, b);
         //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
         //but the distance is 1 - dot product, so the more count_ones the higher the distance.
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
         count_ones as f32
-    }
-}
-
-//FIXME: cleanup make this into a struct
-pub enum BqSearchDistanceMeasure {
-    Bq(BqDistanceTable, PgVector),
-}
-
-impl BqSearchDistanceMeasure {
-    pub fn calculate_bq_distance<S: StatsDistanceComparison>(
-        table: &BqDistanceTable,
-        bq_vector: &[BqVectorElement],
-        stats: &mut S,
-    ) -> f32 {
-        assert!(bq_vector.len() > 0);
-        let vec = bq_vector;
-        stats.record_quantized_distance_comparison();
-        table.distance(vec)
     }
 }
 
@@ -297,21 +307,23 @@ pub struct BqSpeedupStorage<'a> {
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
+    num_dimensions_for_neighbors: usize,
 }
 
 impl<'a> BqSpeedupStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        meta_page: &super::meta_page::MetaPage,
     ) -> BqSpeedupStorage<'a> {
         Self {
             index: index,
-            distance_fn: distance_fn,
+            distance_fn: meta_page.get_distance_function(),
             quantizer: BqQuantizer::new(),
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -336,6 +348,7 @@ impl<'a> BqSpeedupStorage<'a> {
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -343,16 +356,17 @@ impl<'a> BqSpeedupStorage<'a> {
         index_relation: &'a PgRelation,
         heap_relation: &'a PgRelation,
         quantizer: &BqQuantizer,
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        meta_page: &super::meta_page::MetaPage,
     ) -> BqSpeedupStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn: distance_fn,
+            distance_fn: meta_page.get_distance_function(),
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -391,6 +405,7 @@ impl<'a> BqSpeedupStorage<'a> {
                 let rn_visiting =
                     unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
                 let node_visiting = rn_visiting.get_archived_node();
+                //OPT: get neighbors from private data just like plain storage in the self.num_dimensions_for_neighbors == 0 case
                 let neighbors = node_visiting.get_index_pointer_to_neighbors();
 
                 for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
@@ -398,16 +413,26 @@ impl<'a> BqSpeedupStorage<'a> {
                         continue;
                     }
 
-                    let distance = match lsr.sdm.as_ref().unwrap() {
-                        BqSearchDistanceMeasure::Bq(table, _) => {
-                            let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                            BqSearchDistanceMeasure::calculate_bq_distance(
-                                table,
-                                bq_vector,
-                                &mut lsr.stats,
-                            )
-                        }
+                    let distance = if self.num_dimensions_for_neighbors > 0 {
+                        let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
+                        lsr.sdm.as_ref().unwrap().calculate_bq_distance(
+                            bq_vector,
+                            gns,
+                            &mut lsr.stats,
+                        )
+                    } else {
+                        let rn_neighbor = unsafe {
+                            BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
+                        };
+                        let node_neighbor = rn_neighbor.get_archived_node();
+                        let bq_vector = node_neighbor.bq_vector.as_slice();
+                        lsr.sdm.as_ref().unwrap().calculate_bq_distance(
+                            bq_vector,
+                            gns,
+                            &mut lsr.stats,
+                        )
                     };
+
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
                         distance,
@@ -423,18 +448,13 @@ impl<'a> BqSpeedupStorage<'a> {
                     if !lsr.prepare_insert(neighbor_index_pointer) {
                         continue;
                     }
-                    let distance = match lsr.sdm.as_ref().unwrap() {
-                        BqSearchDistanceMeasure::Bq(table, _) => {
-                            let mut cache = self.qv_cache.borrow_mut();
-                            let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
-                            let dist = BqSearchDistanceMeasure::calculate_bq_distance(
-                                table,
-                                bq_vector,
-                                &mut lsr.stats,
-                            );
-                            dist
-                        }
-                    };
+                    let mut cache = self.qv_cache.borrow_mut();
+                    let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
+                    let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
+                        bq_vector,
+                        gns,
+                        &mut lsr.stats,
+                    );
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
@@ -530,10 +550,10 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     }
 
     fn get_query_distance_measure(&self, query: PgVector) -> BqSearchDistanceMeasure {
-        return BqSearchDistanceMeasure::Bq(
-            self.quantizer
-                .get_distance_table(query.to_index_slice(), self.distance_fn),
+        return BqSearchDistanceMeasure::new(
+            self.quantizer.quantize(query.to_index_slice()),
             query,
+            self.num_dimensions_for_neighbors,
         );
     }
 
@@ -546,13 +566,10 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         stats: &mut S,
     ) -> f32 {
         let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
-        match qdm {
-            BqSearchDistanceMeasure::Bq(_, query) => {
-                let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
-                let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
-                self.get_distance_function()(vec.to_full_slice(), query.to_full_slice())
-            }
-        }
+
+        let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
+        let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
+        self.get_distance_function()(vec.to_full_slice(), qdm.query.to_full_slice())
     }
 
     fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
@@ -565,12 +582,11 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         let archived = rn.get_archived_node();
         let q = archived.bq_vector.as_slice();
 
-        for (i, n) in rn.get_archived_node().iter_neighbors().enumerate() {
-            //let dist = unsafe { dist_state.get_distance(n, stats) };
-            assert!(i < archived.neighbor_vectors.len());
-            let neighbor_q = archived.neighbor_vectors[i].as_slice();
+        for n in rn.get_archived_node().iter_neighbors() {
+            //OPT: we can optimize this if num_dimensions_for_neighbors == num_dimensions_to_index
+            let rn1 = unsafe { BqNode::read(self.index, n, stats) };
             stats.record_quantized_distance_comparison();
-            let dist = distance_xor_optimized(q, neighbor_q);
+            let dist = distance_xor_optimized(q, rn1.get_archived_node().bq_vector.as_slice());
             result.push(NeighborWithDistance::new(n, dist as f32))
         }
     }
@@ -581,7 +597,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-        _gns: &GraphNeighborStore,
+        gns: &GraphNeighborStore,
     ) -> ListSearchNeighbor<Self::LSNPrivateData> {
         if !lsr.prepare_insert(index_pointer) {
             panic!("should not have had an init id already inserted");
@@ -590,15 +606,11 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         let rn = unsafe { BqNode::read(self.index, index_pointer, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
-        let distance = match lsr.sdm.as_ref().unwrap() {
-            BqSearchDistanceMeasure::Bq(table, _) => {
-                BqSearchDistanceMeasure::calculate_bq_distance(
-                    table,
-                    node.bq_vector.as_slice(),
-                    &mut lsr.stats,
-                )
-            }
-        };
+        let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
+            node.bq_vector.as_slice(),
+            gns,
+            &mut lsr.stats,
+        );
 
         ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>)
     }
@@ -674,6 +686,7 @@ impl BqNode {
             heap_pointer,
             meta_page.get_num_neighbors() as usize,
             meta_page.get_num_dimensions_to_index() as usize,
+            meta_page.get_num_dimensions_for_neighbors() as usize,
             bq_vector,
         )
     }
@@ -681,7 +694,8 @@ impl BqNode {
     fn new(
         heap_pointer: HeapPointer,
         num_neighbors: usize,
-        num_dimensions: usize,
+        _num_dimensions: usize,
+        num_dimensions_for_neighbors: usize,
         bq_vector: &[BqVectorElement],
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
@@ -689,9 +703,13 @@ impl BqNode {
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
-        let neighbor_vectors: Vec<_> = (0..num_neighbors)
-            .map(|_| vec![0; BqQuantizer::quantized_size(num_dimensions as _)])
-            .collect();
+        let neighbor_vectors: Vec<_> = if num_dimensions_for_neighbors > 0 {
+            (0..num_neighbors)
+                .map(|_| vec![0; BqQuantizer::quantized_size(num_dimensions_for_neighbors as _)])
+                .collect()
+        } else {
+            vec![]
+        };
 
         Self {
             heap_item_pointer: heap_pointer,
@@ -701,14 +719,27 @@ impl BqNode {
         }
     }
 
-    fn test_size(num_neighbors: usize, num_dimensions: usize) -> usize {
+    fn test_size(
+        num_neighbors: usize,
+        num_dimensions: usize,
+        num_dimensions_for_neighbors: usize,
+    ) -> usize {
         let v: Vec<BqVectorElement> = vec![0; BqQuantizer::quantized_size(num_dimensions)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(hp, num_neighbors, num_dimensions, &v);
+        let n = Self::new(
+            hp,
+            num_neighbors,
+            num_dimensions,
+            num_dimensions_for_neighbors,
+            &v,
+        );
         n.serialize_to_vec().len()
     }
 
-    pub fn get_default_num_neighbors(num_dimensions: usize) -> usize {
+    pub fn get_default_num_neighbors(
+        num_dimensions: usize,
+        num_dimensions_for_neighbors: usize,
+    ) -> usize {
         //how many neighbors can fit on one page? That's what we choose.
 
         //we first overapproximate the number of neighbors and then double check by actually calculating the size of the BqNode.
@@ -727,6 +758,7 @@ impl BqNode {
             let serialized_size = BqNode::test_size(
                 num_neighbors_overapproximate as usize,
                 num_dimensions as usize,
+                num_dimensions_for_neighbors as usize,
             );
             if serialized_size <= page_size {
                 return num_neighbors_overapproximate;
@@ -740,18 +772,12 @@ impl BqNode {
 }
 
 impl ArchivedBqNode {
-    pub fn neighbor_index_pointer(
-        self: Pin<&mut Self>,
-    ) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
+    fn neighbor_index_pointer(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    pub fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u64>>> {
+    fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u64>>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_vectors) }
-    }
-
-    pub fn bq_vector(self: Pin<&mut Self>) -> Pin<&mut Archived<Vec<BqVectorElement>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.bq_vector) }
     }
 
     fn set_neighbors(
@@ -767,12 +793,15 @@ impl ArchivedBqNode {
             a_index_pointer.block_number = ip.block_number;
             a_index_pointer.offset = ip.offset;
 
-            let quantized = cache.must_get(ip);
-
-            let mut neighbor_vector = self.as_mut().neighbor_vector().index_pin(i);
-            for (index_in_q_vec, val) in quantized.iter().enumerate() {
-                let mut x = neighbor_vector.as_mut().index_pin(index_in_q_vec);
-                *x = *val;
+            if meta_page.get_num_dimensions_for_neighbors() > 0 {
+                let quantized = &cache.must_get(ip)[..BqQuantizer::quantized_size(
+                    meta_page.get_num_dimensions_for_neighbors() as _,
+                )];
+                let mut neighbor_vector = self.as_mut().neighbor_vector().index_pin(i);
+                for (index_in_q_vec, val) in quantized.iter().enumerate() {
+                    let mut x = neighbor_vector.as_mut().index_pin(index_in_q_vec);
+                    *x = *val;
+                }
             }
         }
         //set the marker that the list ended
@@ -830,7 +859,7 @@ mod tests {
     use pgrx::*;
 
     #[pg_test]
-    unsafe fn test_bq_storage_index_creation_default_neighbors() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized",
         )?;
@@ -838,7 +867,7 @@ mod tests {
     }
 
     #[pg_test]
-    unsafe fn test_bq_storage_index_creation_few_neighbors() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = io_optimized",
@@ -847,35 +876,35 @@ mod tests {
     }
 
     #[test]
-    fn test_bq_storage_delete_vacuum_plain() {
+    fn test_bq_speedup_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
             "num_neighbors = 10, storage_layout = io_optimized",
         );
     }
 
     #[test]
-    fn test_bq_storage_delete_vacuum_full() {
+    fn test_bq_speedup_storage_delete_vacuum_full() {
         crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
             "num_neighbors = 38, storage_layout = io_optimized",
         );
     }
 
     #[pg_test]
-    unsafe fn test_bq_storage_empty_table_insert() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_empty_table_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_empty_table_insert_scaffold(
             "num_neighbors=38, storage_layout = io_optimized",
         )
     }
 
     #[pg_test]
-    unsafe fn test_bq_storage_insert_empty_insert() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_insert_empty_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_insert_empty_insert_scaffold(
             "num_neighbors=38, storage_layout = io_optimized",
         )
     }
 
     #[pg_test]
-    unsafe fn test_bq_storage_index_creation_num_dimensions() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized, num_dimensions=768",
         )?;
@@ -883,9 +912,71 @@ mod tests {
     }
 
     #[pg_test]
-    unsafe fn test_bq_storage_index_updates() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_updates() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = io_optimized, num_neighbors=10",
+            300,
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_speedup_compressed_index_creation_default_neighbors() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "storage_layout = memory_optimized",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_creation_few_neighbors() -> spi::Result<()> {
+        //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "num_neighbors=10, storage_layout = memory_optimized",
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_bq_compressed_storage_delete_vacuum_plain() {
+        crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
+            "num_neighbors = 10, storage_layout = memory_optimized",
+        );
+    }
+
+    #[test]
+    fn test_bq_compressed_storage_delete_vacuum_full() {
+        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
+            "num_neighbors = 38, storage_layout = memory_optimized",
+        );
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_empty_table_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_empty_table_insert_scaffold(
+            "num_neighbors=38, storage_layout = memory_optimized",
+        )
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_insert_empty_insert() -> spi::Result<()> {
+        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
+            "num_neighbors=38, storage_layout = memory_optimized",
+        )
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_creation_num_dimensions() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            "storage_layout = memory_optimized, num_dimensions=768",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_updates() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            "storage_layout = memory_optimized, num_neighbors=10",
             300,
         )?;
         Ok(())
