@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use pgrx::pg_sys::{pgstat_progress_update_param, AsPgCStr};
 use pgrx::*;
 
 use crate::access_method::graph::Graph;
@@ -11,6 +12,8 @@ use crate::access_method::stats::{InsertStats, WriteStats};
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
+
+use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
 use super::bq::BqSpeedupStorage;
 use super::graph_neighbor_store::BuilderNeighborCache;
@@ -216,6 +219,10 @@ fn do_heap_scan<'a>(
 
             let page_type = BqSpeedupStorage::page_type();
 
+            unsafe {
+                pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
+            }
+
             bq.start_training(&meta_page);
 
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
@@ -232,6 +239,13 @@ fn do_heap_scan<'a>(
             }
             bq.finish_training(&mut write_stats);
 
+            unsafe {
+                pgstat_progress_update_param(
+                    PROGRESS_CREATE_IDX_SUBPHASE,
+                    BUILD_PHASE_BUILDING_GRAPH,
+                );
+            }
+
             let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
 
             unsafe {
@@ -244,6 +258,12 @@ fn do_heap_scan<'a>(
                 );
             }
 
+            unsafe {
+                pgstat_progress_update_param(
+                    PROGRESS_CREATE_IDX_SUBPHASE,
+                    BUILD_PHASE_FINALIZING_GRAPH,
+                );
+            }
             finalize_index_build(&mut bq, &mut bs, write_stats)
         }
     }
@@ -418,6 +438,20 @@ fn build_callback_internal<S: Storage>(
     state
         .graph
         .insert(&index, index_pointer, vector, storage, &mut state.stats);
+}
+
+const BUILD_PHASE_TRAINING: i64 = 0;
+const BUILD_PHASE_BUILDING_GRAPH: i64 = 1;
+const BUILD_PHASE_FINALIZING_GRAPH: i64 = 2;
+
+#[pg_guard]
+pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
+    match phasenum {
+        BUILD_PHASE_TRAINING => "training quantizer".as_pg_cstr(),
+        BUILD_PHASE_BUILDING_GRAPH => "building graph".as_pg_cstr(),
+        BUILD_PHASE_FINALIZING_GRAPH => "finalizing graph".as_pg_cstr(),
+        _ => error!("Unknown phase number {}", phasenum),
+    }
 }
 
 #[cfg(any(test, feature = "pg_test"))]

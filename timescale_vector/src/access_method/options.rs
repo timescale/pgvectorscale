@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
-        assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
+        assert_eq!(options.get_storage_type(), StorageType::BqCompression);
         Ok(())
     }
 
