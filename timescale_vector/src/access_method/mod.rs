@@ -82,6 +82,8 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
     amroutine.amgetbitmap = None;
     amroutine.amendscan = Some(scan::amendscan);
 
+    amroutine.ambuildphasename = Some(build::ambuildphasename);
+
     amroutine.into_pg_boxed()
 }
 

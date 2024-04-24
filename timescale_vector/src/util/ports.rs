@@ -2,6 +2,8 @@
 //! Following pgrx conventions, we keep function names as close to Postgres as possible.
 //! Thus, we don't follow rust naming conventions.
 
+use std::os::raw::c_int;
+
 use memoffset::*;
 use pgrx::pg_sys::{Datum, ItemId, OffsetNumber, Pointer, TupleTableSlot};
 use pgrx::{pg_sys, PgBox};
@@ -35,6 +37,7 @@ pub unsafe fn PageValidateSpecialPointer(page: pgrx::pg_sys::Page) {
 
 #[allow(non_upper_case_globals)]
 const SizeOfPageHeaderData: usize = offset_of!(pgrx::pg_sys::PageHeaderData, pd_linp);
+pub const PROGRESS_CREATE_IDX_SUBPHASE: c_int = 10;
 
 #[allow(non_snake_case)]
 pub unsafe fn PageGetContents(page: pgrx::pg_sys::Page) -> *mut std::os::raw::c_char {

@@ -159,6 +159,9 @@ struct TSVResponseIterator<QDM, PD> {
     resort_size: usize,
     resort_buffer: BinaryHeap<ResortData>,
     streaming_stats: StreamingStats,
+    next_calls: i32,
+    next_calls_with_resort: i32,
+    full_distance_comparisons: i32,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -185,6 +188,9 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             resort_size,
             resort_buffer: BinaryHeap::with_capacity(resort_size),
             streaming_stats: StreamingStats::new(resort_size),
+            next_calls: 0,
+            next_calls_with_resort: 0,
+            full_distance_comparisons: 0,
         }
     }
 }
@@ -194,6 +200,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         &mut self,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
+        self.next_calls += 1;
         let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
@@ -222,6 +229,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _index: &PgRelation,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
+        self.next_calls_with_resort += 1;
         if self.resort_buffer.capacity() == 0 {
             return self.next(storage);
         }
@@ -233,6 +241,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         {
             match self.next(storage) {
                 Some((heap_pointer, index_pointer)) => {
+                    self.full_distance_comparisons += 1;
                     let distance = storage.get_full_distance_for_resort(
                         self.lsr.sdm.as_ref().unwrap(),
                         index_pointer,
@@ -433,13 +442,19 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 fn end_scan<S: Storage>(
     iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
 ) {
+    debug_assert!(iter.quantizer_stats.node_reads == 1);
+    debug_assert!(iter.quantizer_stats.node_writes == 0);
+
     debug1!(
-        "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}",
+        "Query stats - reads_index={} reads_heap={} d_total={} d_quantized={} d_full={} next={} resort={} visits={} candidate={}",
         iter.lsr.stats.get_node_reads(),
-        iter.lsr.stats.get_calls(),
+        iter.lsr.stats.get_node_heap_reads(),
         iter.lsr.stats.get_total_distance_comparisons(),
         iter.lsr.stats.get_quantized_distance_comparisons(),
-        iter.quantizer_stats.node_reads,
-        iter.quantizer_stats.node_writes,
+        iter.full_distance_comparisons,
+        iter.next_calls,
+        iter.next_calls_with_resort,
+        iter.lsr.stats.get_visited_nodes(),
+        iter.lsr.stats.get_candidate_nodes(),
     );
 }
