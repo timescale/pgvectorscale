@@ -673,7 +673,7 @@ impl BqNode {
         Self::new(
             heap_pointer,
             meta_page.get_num_neighbors() as usize,
-            meta_page.get_num_dimensions() as usize,
+            meta_page.get_num_dimensions_to_index() as usize,
             bq_vector,
         )
     }
