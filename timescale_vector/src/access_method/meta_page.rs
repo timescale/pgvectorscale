@@ -140,6 +140,16 @@ impl MetaPage {
         self.num_dimensions_to_index
     }
 
+    pub fn get_num_dimensions_for_neighbors(&self) -> u32 {
+        match StorageType::from_u8(self.storage_type) {
+            StorageType::Plain => {
+                error!("get_num_dimensions_for_neighbors should not be called for Plain storage")
+            }
+            StorageType::BqSpeedup => self.num_dimensions_to_index,
+            StorageType::BqCompression => 0,
+        }
+    }
+
     /// Maximum number of neigbors per node. Given that we pre-allocate
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
@@ -178,22 +188,26 @@ impl MetaPage {
     }
 
     pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
-        if (self.storage_type != StorageType::BqSpeedup as u8)
-            || !self.quantizer_metadata.is_valid()
-        {
+        if !self.quantizer_metadata.is_valid() {
             return None;
         }
 
-        Some(self.quantizer_metadata)
+        match self.get_storage_type() {
+            StorageType::Plain => None,
+            StorageType::BqSpeedup | StorageType::BqCompression => Some(self.quantizer_metadata),
+        }
     }
 
     fn calculate_num_neighbors(num_dimensions: u32, opt: &PgBox<TSVIndexOptions>) -> u32 {
         let num_neighbors = (*opt).get_num_neighbors();
         if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
-            if (*opt).get_storage_type() == StorageType::Plain {
-                50
-            } else {
-                BqNode::get_default_num_neighbors(num_dimensions as usize) as u32
+            match (*opt).get_storage_type() {
+                StorageType::Plain => 50,
+                StorageType::BqSpeedup => BqNode::get_default_num_neighbors(
+                    num_dimensions as usize,
+                    num_dimensions as usize,
+                ) as u32,
+                StorageType::BqCompression => 50,
             }
         } else {
             num_neighbors as u32

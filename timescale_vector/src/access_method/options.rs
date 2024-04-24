@@ -63,12 +63,11 @@ impl TSVIndexOptions {
     }
 
     pub fn get_storage_type(&self) -> StorageType {
-        let s = self.get_str(self.storage_layout_offset, || "io_optimized".to_string());
-        match s.as_str() {
-            "io_optimized" => StorageType::BqSpeedup,
-            "plain" => StorageType::Plain,
-            _ => panic!("invalid storage_layout: {}", s),
-        }
+        let s = self.get_str(self.storage_layout_offset, || {
+            super::storage::DEFAULT_STORAGE_TYPE_STR.to_owned()
+        });
+
+        StorageType::from_str(s.as_str())
     }
 
     fn get_str<F: FnOnce() -> String>(&self, offset: i32, default: F) -> String {
@@ -164,14 +163,8 @@ extern "C" fn validate_storage_layout(value: *const std::os::raw::c_char) {
 
     let value = unsafe { CStr::from_ptr(value) }
         .to_str()
-        .expect("failed to parse storage_layout value")
-        .to_lowercase();
-    if value != "io_optimized" && value != "plain" {
-        panic!(
-            "invalid storage_layout.  Must be one of 'io_optimized' or 'plain': {}",
-            value
-        )
-    }
+        .expect("failed to parse storage_layout value");
+    _ = StorageType::from_str(value);
 }
 
 pub unsafe fn init() {
@@ -180,8 +173,8 @@ pub unsafe fn init() {
     pg_sys::add_string_reloption(
         RELOPT_KIND_TSV,
         "storage_layout".as_pg_cstr(),
-        "Storage layout: either io_optimized or plain".as_pg_cstr(),
-        "io_optimized".as_pg_cstr(),
+        "Storage layout: either memory_optimized, io_optimized, or plain".as_pg_cstr(),
+        super::storage::DEFAULT_STORAGE_TYPE_STR.as_pg_cstr(),
         Some(validate_storage_layout),
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
