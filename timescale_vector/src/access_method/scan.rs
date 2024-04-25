@@ -127,6 +127,9 @@ impl StreamingStats {
     }
 
     fn update_base_stats(&mut self, distance: f32) {
+        if distance == 0.0 {
+            return;
+        }
         self.count += 1;
         let delta = distance - self.mean;
         self.mean += delta / self.count as f32;
@@ -224,6 +227,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         }
 
         while self.resort_buffer.len() < 2
+            || self.streaming_stats.count < 2
             || (self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance)
                 < self.streaming_stats.variance().sqrt() * (self.resort_size as f32 / 100.0)
         {
