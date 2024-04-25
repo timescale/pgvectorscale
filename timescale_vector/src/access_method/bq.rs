@@ -662,6 +662,7 @@ pub struct BqNode {
     pub heap_item_pointer: HeapPointer,
     pub bq_vector: Vec<u64>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
+    neighbor_vectors: Vec<Vec<u64>>,
 }
 
 impl BqNode {
@@ -693,6 +694,7 @@ impl BqNode {
             heap_item_pointer: heap_pointer,
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers: neighbor_index_pointers,
+            neighbor_vectors: vec![],
         }
     }
 
