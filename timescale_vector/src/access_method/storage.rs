@@ -135,6 +135,7 @@ impl StorageType {
         match value {
             0 => StorageType::Plain,
             1 => StorageType::BqSpeedup,
+            2 => StorageType::BqSpeedup,
             _ => panic!("Invalid storage type"),
         }
     }

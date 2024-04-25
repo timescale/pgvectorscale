@@ -178,8 +178,7 @@ impl MetaPage {
     }
 
     pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
-        if (self.storage_type != StorageType::BqSpeedup as u8)
-            || !self.quantizer_metadata.is_valid()
+        if  !self.quantizer_metadata.is_valid()
         {
             return None;
         }
