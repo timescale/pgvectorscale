@@ -257,6 +257,53 @@ impl<'a> NodeDistanceMeasure for BqNodeDistanceMeasure<'a> {
     }
 }
 
+struct DistanceCache {
+    quantized_vector_map: HashMap<ItemPointer, f32>,
+}
+
+impl DistanceCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            quantized_vector_map: HashMap::with_capacity(capacity),
+        }
+    }
+
+    fn get_and_cache_all_on_page<S: StatsNodeRead + StatsDistanceComparison>(
+        &mut self,
+        index_pointer: IndexPointer,
+        storage: &BqSpeedupStorage,
+        sdm: &BqSearchDistanceMeasure,
+        gns: &GraphNeighborStore,
+        stats: &mut S,
+    ) -> f32 {
+        if self.quantized_vector_map.contains_key(&index_pointer) {
+            return self.must_get(index_pointer);
+        } else {
+            unsafe {
+                stats.record_read();
+                let mut page = ReadablePage::read(storage.index, index_pointer.block_number);
+                let max_offset = PageGetMaxOffsetNumber(&page);
+                for offset_number in FirstOffsetNumber..(max_offset + 1) as _ {
+                    let rb = page.get_item_unchecked(offset_number);
+                    let node = ReadableBqNode::with_readable_buffer(rb);
+                    let vec = node.get_archived_node().bq_vector.as_slice();
+                    let d = sdm.calculate_bq_distance(vec, gns, stats);
+                    self.quantized_vector_map.insert(
+                        ItemPointer::new(index_pointer.block_number, offset_number),
+                        d,
+                    );
+                    page = node.get_owned_page();
+                }
+                return self.must_get(index_pointer);
+            }
+        }
+    }
+
+    fn must_get(&self, index_pointer: IndexPointer) -> f32 {
+        *self.quantized_vector_map.get(&index_pointer).unwrap()
+    }
+}
+
 struct QuantizedVectorCache {
     quantized_vector_map: HashMap<ItemPointer, Vec<BqVectorElement>>,
 }
@@ -338,6 +385,7 @@ pub struct BqSpeedupStorage<'a> {
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
+    d_cache: RefCell<DistanceCache>,
     num_dimensions_for_neighbors: usize,
 }
 
@@ -354,6 +402,7 @@ impl<'a> BqSpeedupStorage<'a> {
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            d_cache: RefCell::new(DistanceCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
@@ -379,6 +428,7 @@ impl<'a> BqSpeedupStorage<'a> {
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            d_cache: RefCell::new(DistanceCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
@@ -397,6 +447,7 @@ impl<'a> BqSpeedupStorage<'a> {
             heap_rel: heap_relation,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            d_cache: RefCell::new(DistanceCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
@@ -454,23 +505,25 @@ impl<'a> BqSpeedupStorage<'a> {
                     } else {
                         //todo: probably better as distance cache but first see if it helps
 
-                        let mut cache = self.qv_cache.borrow_mut();
-                        let bq_vector = cache.get_and_cache_all_on_page(
+                        let mut cache = self.d_cache.borrow_mut();
+                        cache.get_and_cache_all_on_page(
                             neighbor_index_pointer,
                             self,
+                            lsr.sdm.as_ref().unwrap(),
+                            gns,
                             &mut lsr.stats,
-                        );
+                        )
 
                         /*let rn_neighbor = unsafe {
                             BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
                         };
                         let node_neighbor = rn_neighbor.get_archived_node();
-                        let bq_vector = node_neighbor.bq_vector.as_slice();*/
+                        let bq_vector = node_neighbor.bq_vector.as_slice();
                         lsr.sdm.as_ref().unwrap().calculate_bq_distance(
                             bq_vector,
                             gns,
                             &mut lsr.stats,
-                        )
+                        )*/
                     };
 
                     let lsn = ListSearchNeighbor::new(
