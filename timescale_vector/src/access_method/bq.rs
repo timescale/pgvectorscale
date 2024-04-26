@@ -13,14 +13,17 @@ use super::{
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
+    pg_sys::{FirstOffsetNumber, InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 
 use crate::util::{
-    page::PageType, table_slot::TableSlot, tape::Tape, ArchivedItemPointer, HeapPointer,
-    IndexPointer, ItemPointer, ReadableBuffer,
+    page::{PageType, ReadablePage},
+    ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
+    table_slot::TableSlot,
+    tape::Tape,
+    ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer,
 };
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
@@ -281,6 +284,34 @@ impl QuantizedVectorCache {
             })
     }
 
+    fn get_and_cache_all_on_page<S: StatsNodeRead>(
+        &mut self,
+        index_pointer: IndexPointer,
+        storage: &BqSpeedupStorage,
+        stats: &mut S,
+    ) -> &[BqVectorElement] {
+        if self.quantized_vector_map.contains_key(&index_pointer) {
+            return self.must_get(index_pointer);
+        } else {
+            unsafe {
+                stats.record_read();
+                let mut page = ReadablePage::read(storage.index, index_pointer.block_number);
+                let max_offset = PageGetMaxOffsetNumber(&page);
+                for offset_number in FirstOffsetNumber..(max_offset + 1) as _ {
+                    let rb = page.get_item_unchecked(offset_number);
+                    let node = ReadableBqNode::with_readable_buffer(rb);
+                    let vec = node.get_archived_node().bq_vector.as_slice().to_vec();
+                    self.quantized_vector_map.insert(
+                        ItemPointer::new(index_pointer.block_number, offset_number),
+                        vec,
+                    );
+                    page = node.get_owned_page();
+                }
+                return self.must_get(index_pointer);
+            }
+        }
+    }
+
     fn must_get(&self, index_pointer: IndexPointer) -> &[BqVectorElement] {
         self.quantized_vector_map.get(&index_pointer).unwrap()
     }
@@ -421,11 +452,20 @@ impl<'a> BqSpeedupStorage<'a> {
                             &mut lsr.stats,
                         )
                     } else {
-                        let rn_neighbor = unsafe {
+                        //todo: probably better as distance cache but first see if it helps
+
+                        let mut cachie = self.qv_cache.borrow_mut();
+                        let bq_vector = cache.get_and_cache_all_on_page(
+                            neighbor_index_pointer,
+                            self,
+                            &mut lsr.stats,
+                        );
+
+                        /*let rn_neighbor = unsafe {
                             BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
                         };
                         let node_neighbor = rn_neighbor.get_archived_node();
-                        let bq_vector = node_neighbor.bq_vector.as_slice();
+                        let bq_vector = node_neighbor.bq_vector.as_slice();*/
                         lsr.sdm.as_ref().unwrap().calculate_bq_distance(
                             bq_vector,
                             gns,

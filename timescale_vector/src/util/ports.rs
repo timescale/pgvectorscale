@@ -67,7 +67,7 @@ pub unsafe fn PageGetItemId(page: pgrx::pg_sys::Page, offset: OffsetNumber) -> I
 }
 
 #[allow(non_snake_case)]
-pub unsafe fn PageGetMaxOffsetNumber(page: pgrx::pg_sys::Page) -> usize {
+pub unsafe fn PageGetMaxOffsetNumber(page: &pgrx::pg_sys::Page) -> usize {
     /*
     PageHeader	pageheader = (PageHeader) page;
 
