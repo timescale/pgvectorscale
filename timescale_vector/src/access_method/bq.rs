@@ -454,7 +454,7 @@ impl<'a> BqSpeedupStorage<'a> {
                     } else {
                         //todo: probably better as distance cache but first see if it helps
 
-                        let mut cachie = self.qv_cache.borrow_mut();
+                        let mut cache = self.qv_cache.borrow_mut();
                         let bq_vector = cache.get_and_cache_all_on_page(
                             neighbor_index_pointer,
                             self,
