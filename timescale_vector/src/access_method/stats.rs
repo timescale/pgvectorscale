@@ -102,6 +102,10 @@ impl GreedySearchStats {
         self.node_reads
     }
 
+    pub fn get_node_heap_reads(&self) -> usize {
+        self.node_heap_reads
+    }
+
     pub fn get_total_distance_comparisons(&self) -> usize {
         self.full_distance_comparisons + self.quantized_distance_comparisons
     }

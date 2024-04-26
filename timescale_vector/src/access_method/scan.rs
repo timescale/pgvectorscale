@@ -434,8 +434,9 @@ fn end_scan<S: Storage>(
     iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
 ) {
     debug1!(
-        "Query stats - node reads:{}, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}",
+        "Query stats - node reads:{} index/ {} heap, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}",
         iter.lsr.stats.get_node_reads(),
+        iter.lsr.stats.get_node_heap_reads(),
         iter.lsr.stats.get_calls(),
         iter.lsr.stats.get_total_distance_comparisons(),
         iter.lsr.stats.get_quantized_distance_comparisons(),
