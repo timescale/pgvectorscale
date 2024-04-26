@@ -21,6 +21,11 @@ pub trait StatsDistanceComparison {
     fn record_quantized_distance_comparison(&mut self);
 }
 
+pub trait StatsNodeVisit {
+    fn record_visit(&mut self);
+    fn record_candidate(&mut self);
+}
+
 #[derive(Debug)]
 pub struct PruneNeighborStats {
     pub calls: usize,
@@ -73,6 +78,8 @@ pub struct GreedySearchStats {
     node_reads: usize,
     node_heap_reads: usize,
     quantized_distance_comparisons: usize,
+    visited_nodes: usize,
+    candidate_nodes: usize,
 }
 
 impl GreedySearchStats {
@@ -83,6 +90,8 @@ impl GreedySearchStats {
             node_reads: 0,
             node_heap_reads: 0,
             quantized_distance_comparisons: 0,
+            visited_nodes: 0,
+            candidate_nodes: 0,
         }
     }
 
@@ -102,12 +111,24 @@ impl GreedySearchStats {
         self.node_reads
     }
 
+    pub fn get_node_heap_reads(&self) -> usize {
+        self.node_heap_reads
+    }
+
     pub fn get_total_distance_comparisons(&self) -> usize {
         self.full_distance_comparisons + self.quantized_distance_comparisons
     }
 
     pub fn get_quantized_distance_comparisons(&self) -> usize {
         self.quantized_distance_comparisons
+    }
+
+    pub fn get_visited_nodes(&self) -> usize {
+        self.visited_nodes
+    }
+
+    pub fn get_candidate_nodes(&self) -> usize {
+        self.candidate_nodes
     }
 
     pub fn get_full_distance_comparisons(&self) -> usize {
@@ -138,6 +159,16 @@ impl StatsDistanceComparison for GreedySearchStats {
 
     fn record_quantized_distance_comparison(&mut self) {
         self.quantized_distance_comparisons += 1;
+    }
+}
+
+impl StatsNodeVisit for GreedySearchStats {
+    fn record_visit(&mut self) {
+        self.visited_nodes += 1;
+    }
+
+    fn record_candidate(&mut self) {
+        self.candidate_nodes += 1;
     }
 }
 

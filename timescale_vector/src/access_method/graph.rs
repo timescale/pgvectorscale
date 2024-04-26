@@ -11,7 +11,7 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 use super::graph_neighbor_store::GraphNeighborStore;
 
 use super::pg_vector::PgVector;
-use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats};
+use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
 use super::storage::Storage;
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
@@ -108,6 +108,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
 
     /// Internal function
     pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
+        self.stats.record_candidate();
         self.candidates.push(Reverse(n));
     }
 
@@ -318,6 +319,7 @@ impl<'a> Graph<'a> {
                     ));
                 }
             }
+            lsr.stats.record_visit();
             storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store);
         }
     }
