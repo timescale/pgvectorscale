@@ -443,7 +443,7 @@ fn end_scan<S: Storage>(
     iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
 ) {
     debug1!(
-        "Query stats - node reads:{} index/ {} heap, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}, next calls: {}, next calls with resort: {} full distance comparisons: {}",
+        "Query stats - node reads:{} index/ {} heap, calls: {}, total distance comparisons: {}, quantized distance comparisons: {}, quantizer r/w: {}/{}, next calls: {}, next calls with resort: {} full distance comparisons: {}. visit {}, candidate {}",
         iter.lsr.stats.get_node_reads(),
         iter.lsr.stats.get_node_heap_reads(),
         iter.lsr.stats.get_calls(),
@@ -454,5 +454,7 @@ fn end_scan<S: Storage>(
         iter.next_calls,
         iter.next_calls_with_resort,
         iter.full_distance_comparisons
+        iter.lsr.stats.visited_nodes,
+        iter.lsr.stats.candidate_nodes,
     );
 }

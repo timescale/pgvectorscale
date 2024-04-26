@@ -108,6 +108,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
 
     /// Internal function
     pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
+        self.stats.candidate_nodes += 1;
         self.candidates.push(Reverse(n));
     }
 
@@ -318,6 +319,7 @@ impl<'a> Graph<'a> {
                     ));
                 }
             }
+            lsr.stats.visited_nodes += 1;
             storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store);
         }
     }

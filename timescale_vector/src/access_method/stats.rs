@@ -73,6 +73,8 @@ pub struct GreedySearchStats {
     node_reads: usize,
     node_heap_reads: usize,
     quantized_distance_comparisons: usize,
+    pub visited_nodes: usize,
+    pub candidate_nodes: usize,
 }
 
 impl GreedySearchStats {
@@ -83,6 +85,8 @@ impl GreedySearchStats {
             node_reads: 0,
             node_heap_reads: 0,
             quantized_distance_comparisons: 0,
+            visited_nodes: 0,
+            candidate_nodes: 0,
         }
     }
 
