@@ -453,7 +453,7 @@ fn end_scan<S: Storage>(
         iter.quantizer_stats.node_writes,
         iter.next_calls,
         iter.next_calls_with_resort,
-        iter.full_distance_comparisons
+        iter.full_distance_comparisons,
         iter.lsr.stats.visited_nodes,
         iter.lsr.stats.candidate_nodes,
     );
