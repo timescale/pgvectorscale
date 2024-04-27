@@ -250,13 +250,8 @@ impl<'a> ReadablePage<'a> {
     }
 
     pub fn get_type(&self) -> PageType {
-        unsafe {
-            let opaque_data =
-            //safe to do because self.page was already verified during construction
-            TsvPageOpaqueData::with_page(self.page);
-
-            PageType::from_u8((*opaque_data).page_type)
-        }
+        let opaque_data = TsvPageOpaqueData::read_from_page(&self.page);
+        PageType::from_u8((*opaque_data).page_type)
     }
 
     pub fn get_buffer(&self) -> &LockedBufferShare {

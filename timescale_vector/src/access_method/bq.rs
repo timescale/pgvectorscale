@@ -35,6 +35,7 @@ const BITS_STORE_TYPE_SIZE: usize = 64;
 pub struct BqMeans {
     count: u64,
     means: Vec<f32>,
+    m2: Vec<f32>,
 }
 
 impl BqMeans {
@@ -43,7 +44,7 @@ impl BqMeans {
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
     ) -> BqQuantizer {
-        let mut quantizer = BqQuantizer::new();
+        let mut quantizer = BqQuantizer::new(meta_page);
         if quantizer.use_mean {
             if meta_page.get_quantizer_metadata_pointer().is_none() {
                 pgrx::error!("No BQ pointer found in meta page");
@@ -52,7 +53,11 @@ impl BqMeans {
             let bq = BqMeans::read(index, quantizer_item_pointer, stats);
             let archived = bq.get_archived_node();
 
-            quantizer.load(archived.count, archived.means.to_vec());
+            quantizer.load(
+                archived.count,
+                archived.means.to_vec(),
+                archived.m2.to_vec(),
+            );
         }
         quantizer
     }
@@ -66,6 +71,7 @@ impl BqMeans {
         let node = BqMeans {
             count: quantizer.count,
             means: quantizer.mean.to_vec(),
+            m2: quantizer.m2.to_vec(),
         };
         let ptr = node.write(&mut tape, stats);
         tape.close();
@@ -79,49 +85,88 @@ pub struct BqQuantizer {
     training: bool,
     pub count: u64,
     pub mean: Vec<f32>,
+    pub m2: Vec<f32>,
+    pub num_bits_per_dimension: u8,
 }
 
 impl BqQuantizer {
-    fn new() -> BqQuantizer {
+    fn new(meta_page: &super::meta_page::MetaPage) -> BqQuantizer {
         Self {
             use_mean: true,
             training: false,
             count: 0,
             mean: vec![],
+            m2: vec![],
+            num_bits_per_dimension: meta_page.get_bq_num_bits_per_dimension(),
         }
     }
 
-    fn load(&mut self, count: u64, mean: Vec<f32>) {
+    fn load(&mut self, count: u64, mean: Vec<f32>, m2: Vec<f32>) {
         self.count = count;
         self.mean = mean;
+        self.m2 = m2
     }
 
-    fn quantized_size(full_vector_size: usize) -> usize {
-        if full_vector_size % BITS_STORE_TYPE_SIZE == 0 {
-            full_vector_size / BITS_STORE_TYPE_SIZE
+    fn quantized_size(&self, full_vector_size: usize) -> usize {
+        Self::quantized_size_internal(full_vector_size, self.num_bits_per_dimension)
+    }
+
+    fn quantized_size_internal(full_vector_size: usize, num_bits_per_dimension: u8) -> usize {
+        let num_bits = full_vector_size * num_bits_per_dimension as usize;
+
+        if num_bits % BITS_STORE_TYPE_SIZE == 0 {
+            num_bits / BITS_STORE_TYPE_SIZE
         } else {
-            (full_vector_size / BITS_STORE_TYPE_SIZE) + 1
+            (num_bits / BITS_STORE_TYPE_SIZE) + 1
         }
     }
 
-    fn quantized_size_bytes(num_dimensions: usize) -> usize {
-        Self::quantized_size(num_dimensions) * std::mem::size_of::<BqVectorElement>()
+    fn quantized_size_bytes(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
+        Self::quantized_size_internal(num_dimensions, num_bits_per_dimension)
+            * std::mem::size_of::<BqVectorElement>()
     }
 
     fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
         assert!(!self.training);
         if self.use_mean {
-            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
+            let mut res_vector = vec![0; self.quantized_size(full_vector.len())];
 
-            for (i, &v) in full_vector.iter().enumerate() {
-                if v > self.mean[i] {
-                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+            if self.num_bits_per_dimension == 1 {
+                for (i, &v) in full_vector.iter().enumerate() {
+                    if v > self.mean[i] {
+                        res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+                    }
+                }
+            } else {
+                for (i, &v) in full_vector.iter().enumerate() {
+                    let mean = self.mean[i];
+                    let variance = self.m2[i] / self.count as f32;
+                    let std_dev = variance.sqrt();
+                    let ranges = self.num_bits_per_dimension + 1;
+
+                    let v_z_score = (v - mean) / std_dev;
+                    let index = (v_z_score + 2.0) / (4.0 / ranges as f32); //we consider z scores between -2 and 2 and divide them into {ranges} ranges
+
+                    let bit_position = i * self.num_bits_per_dimension as usize;
+                    if index < 1.0 {
+                        //all zeros
+                    } else {
+                        let count_ones =
+                            (index.floor() as usize).min(self.num_bits_per_dimension as usize);
+                        //fill in count_ones bits from the left
+                        // ex count_ones=1: 100
+                        // ex count_ones=2: 110
+                        // ex count_ones=3: 111
+                        for j in 0..count_ones {
+                            res_vector[(bit_position + j) / BITS_STORE_TYPE_SIZE] |=
+                                1 << ((bit_position + j) % BITS_STORE_TYPE_SIZE);
+                        }
+                    }
                 }
             }
-
             res_vector
         } else {
-            let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
+            let mut res_vector = vec![0; self.quantized_size(full_vector.len())];
 
             for (i, &v) in full_vector.iter().enumerate() {
                 if v > 0.0 {
@@ -138,6 +183,9 @@ impl BqQuantizer {
         if self.use_mean {
             self.count = 0;
             self.mean = vec![0.0; meta_page.get_num_dimensions_to_index() as _];
+            if self.num_bits_per_dimension > 1 {
+                self.m2 = vec![0.0; meta_page.get_num_dimensions_to_index() as _];
+            }
         }
     }
 
@@ -146,10 +194,33 @@ impl BqQuantizer {
             self.count += 1;
             assert!(self.mean.len() == sample.len());
 
-            self.mean
-                .iter_mut()
-                .zip(sample.iter())
-                .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
+            if self.num_bits_per_dimension > 1 {
+                assert!(self.m2.len() == sample.len());
+                let delta: Vec<_> = self
+                    .mean
+                    .iter()
+                    .zip(sample.iter())
+                    .map(|(m, s)| s - *m)
+                    .collect();
+
+                self.mean
+                    .iter_mut()
+                    .zip(sample.iter())
+                    .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
+
+                let delta2 = self.mean.iter().zip(sample.iter()).map(|(m, s)| s - *m);
+
+                self.m2
+                    .iter_mut()
+                    .zip(delta.iter())
+                    .zip(delta2)
+                    .for_each(|((m2, d), d2)| *m2 += d * d2);
+            } else {
+                self.mean
+                    .iter_mut()
+                    .zip(sample.iter())
+                    .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
+            }
         }
     }
 
@@ -170,18 +241,20 @@ pub struct BqSearchDistanceMeasure {
     quantized_vector: Vec<BqVectorElement>,
     query: PgVector,
     num_dimensions_for_neighbors: usize,
+    quantized_dimensions: usize,
 }
 
 impl BqSearchDistanceMeasure {
     pub fn new(
-        quantized_vector: Vec<BqVectorElement>,
+        quantizer: &BqQuantizer,
         query: PgVector,
         num_dimensions_for_neighbors: usize,
     ) -> BqSearchDistanceMeasure {
         BqSearchDistanceMeasure {
-            quantized_vector,
+            quantized_vector: quantizer.quantize(query.to_index_slice()),
             query,
             num_dimensions_for_neighbors,
+            quantized_dimensions: quantizer.quantized_size(num_dimensions_for_neighbors),
         }
     }
 
@@ -196,13 +269,11 @@ impl BqSearchDistanceMeasure {
         let (a, b) = match gns {
             GraphNeighborStore::Disk => {
                 if self.num_dimensions_for_neighbors > 0 {
-                    let quantized_dimensions =
-                        BqQuantizer::quantized_size(self.num_dimensions_for_neighbors);
-                    debug_assert!(self.quantized_vector.len() >= quantized_dimensions);
-                    debug_assert!(bq_vector.len() >= quantized_dimensions);
+                    debug_assert!(self.quantized_vector.len() >= self.quantized_dimensions);
+                    debug_assert!(bq_vector.len() >= self.quantized_dimensions);
                     (
-                        &self.quantized_vector.as_slice()[..quantized_dimensions],
-                        &bq_vector[..quantized_dimensions],
+                        &self.quantized_vector.as_slice()[..self.quantized_dimensions],
+                        &bq_vector[..self.quantized_dimensions],
                     )
                 } else {
                     debug_assert!(self.quantized_vector.len() == bq_vector.len());
@@ -319,7 +390,7 @@ impl<'a> BqSpeedupStorage<'a> {
         Self {
             index: index,
             distance_fn: meta_page.get_distance_function(),
-            quantizer: BqQuantizer::new(),
+            quantizer: BqQuantizer::new(meta_page),
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
@@ -499,7 +570,12 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
-        let node = BqNode::with_meta(heap_pointer, &meta_page, bq_vector.as_slice());
+        let node = BqNode::with_meta(
+            &self.quantizer,
+            heap_pointer,
+            &meta_page,
+            bq_vector.as_slice(),
+        );
 
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
@@ -551,7 +627,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
 
     fn get_query_distance_measure(&self, query: PgVector) -> BqSearchDistanceMeasure {
         return BqSearchDistanceMeasure::new(
-            self.quantizer.quantize(query.to_index_slice()),
+            &self.quantizer,
             query,
             self.num_dimensions_for_neighbors,
         );
@@ -678,6 +754,7 @@ pub struct BqNode {
 
 impl BqNode {
     pub fn with_meta(
+        quantizer: &BqQuantizer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[BqVectorElement],
@@ -687,6 +764,7 @@ impl BqNode {
             meta_page.get_num_neighbors() as usize,
             meta_page.get_num_dimensions_to_index() as usize,
             meta_page.get_num_dimensions_for_neighbors() as usize,
+            quantizer.num_bits_per_dimension,
             bq_vector,
         )
     }
@@ -696,6 +774,7 @@ impl BqNode {
         num_neighbors: usize,
         _num_dimensions: usize,
         num_dimensions_for_neighbors: usize,
+        num_bits_per_dimension: u8,
         bq_vector: &[BqVectorElement],
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
@@ -705,7 +784,15 @@ impl BqNode {
 
         let neighbor_vectors: Vec<_> = if num_dimensions_for_neighbors > 0 {
             (0..num_neighbors)
-                .map(|_| vec![0; BqQuantizer::quantized_size(num_dimensions_for_neighbors as _)])
+                .map(|_| {
+                    vec![
+                        0;
+                        BqQuantizer::quantized_size_internal(
+                            num_dimensions_for_neighbors as _,
+                            num_bits_per_dimension
+                        )
+                    ]
+                })
                 .collect()
         } else {
             vec![]
@@ -723,14 +810,17 @@ impl BqNode {
         num_neighbors: usize,
         num_dimensions: usize,
         num_dimensions_for_neighbors: usize,
+        num_bits_per_dimension: u8,
     ) -> usize {
-        let v: Vec<BqVectorElement> = vec![0; BqQuantizer::quantized_size(num_dimensions)];
+        let v: Vec<BqVectorElement> =
+            vec![0; BqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
         let n = Self::new(
             hp,
             num_neighbors,
             num_dimensions,
             num_dimensions_for_neighbors,
+            num_bits_per_dimension,
             &v,
         );
         n.serialize_to_vec().len()
@@ -739,6 +829,7 @@ impl BqNode {
     pub fn get_default_num_neighbors(
         num_dimensions: usize,
         num_dimensions_for_neighbors: usize,
+        num_bits_per_dimension: u8,
     ) -> usize {
         //how many neighbors can fit on one page? That's what we choose.
 
@@ -747,7 +838,8 @@ impl BqNode {
         //blocksize - 100 bytes for the padding/header/etc.
         let page_size = BLCKSZ as usize - 50;
         //one quantized_vector takes this many bytes
-        let vec_size = BqQuantizer::quantized_size_bytes(num_dimensions as usize) + 1;
+        let vec_size =
+            BqQuantizer::quantized_size_bytes(num_dimensions as usize, num_bits_per_dimension) + 1;
         //start from the page size then subtract the heap_item_pointer and bq_vector elements of BqNode.
         let starting = BLCKSZ as usize - std::mem::size_of::<HeapPointer>() - vec_size;
         //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in BqNode.
@@ -759,6 +851,7 @@ impl BqNode {
                 num_neighbors_overapproximate as usize,
                 num_dimensions as usize,
                 num_dimensions_for_neighbors as usize,
+                num_bits_per_dimension,
             );
             if serialized_size <= page_size {
                 return num_neighbors_overapproximate;
@@ -794,8 +887,9 @@ impl ArchivedBqNode {
             a_index_pointer.offset = ip.offset;
 
             if meta_page.get_num_dimensions_for_neighbors() > 0 {
-                let quantized = &cache.must_get(ip)[..BqQuantizer::quantized_size(
+                let quantized = &cache.must_get(ip)[..BqQuantizer::quantized_size_internal(
                     meta_page.get_num_dimensions_for_neighbors() as _,
+                    meta_page.get_bq_num_bits_per_dimension(),
                 )];
                 let mut neighbor_vector = self.as_mut().neighbor_vector().index_pin(i);
                 for (index_in_q_vec, val) in quantized.iter().enumerate() {
