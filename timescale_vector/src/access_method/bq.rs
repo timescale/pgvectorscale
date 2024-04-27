@@ -35,6 +35,7 @@ const BITS_STORE_TYPE_SIZE: usize = 64;
 pub struct BqMeans {
     count: u64,
     means: Vec<f32>,
+    m2: Vec<f32>,
 }
 
 impl BqMeans {
@@ -52,7 +53,11 @@ impl BqMeans {
             let bq = BqMeans::read(index, quantizer_item_pointer, stats);
             let archived = bq.get_archived_node();
 
-            quantizer.load(archived.count, archived.means.to_vec());
+            quantizer.load(
+                archived.count,
+                archived.means.to_vec(),
+                archived.m2.to_vec(),
+            );
         }
         quantizer
     }
@@ -66,6 +71,7 @@ impl BqMeans {
         let node = BqMeans {
             count: quantizer.count,
             means: quantizer.mean.to_vec(),
+            m2: quantizer.m2.to_vec(),
         };
         let ptr = node.write(&mut tape, stats);
         tape.close();
@@ -73,12 +79,15 @@ impl BqMeans {
     }
 }
 
+const BITS_PER_DIMENSION: u8 = 3;
+
 #[derive(Clone)]
 pub struct BqQuantizer {
     pub use_mean: bool,
     training: bool,
     pub count: u64,
     pub mean: Vec<f32>,
+    pub m2: Vec<f32>,
 }
 
 impl BqQuantizer {
@@ -88,19 +97,23 @@ impl BqQuantizer {
             training: false,
             count: 0,
             mean: vec![],
+            m2: vec![],
         }
     }
 
-    fn load(&mut self, count: u64, mean: Vec<f32>) {
+    fn load(&mut self, count: u64, mean: Vec<f32>, m2: Vec<f32>) {
         self.count = count;
         self.mean = mean;
+        self.m2 = m2
     }
 
     fn quantized_size(full_vector_size: usize) -> usize {
-        if full_vector_size % BITS_STORE_TYPE_SIZE == 0 {
-            full_vector_size / BITS_STORE_TYPE_SIZE
+        let num_bits = full_vector_size * BITS_PER_DIMENSION as usize;
+
+        if num_bits % BITS_STORE_TYPE_SIZE == 0 {
+            num_bits / BITS_STORE_TYPE_SIZE
         } else {
-            (full_vector_size / BITS_STORE_TYPE_SIZE) + 1
+            (num_bits / BITS_STORE_TYPE_SIZE) + 1
         }
     }
 
@@ -113,9 +126,36 @@ impl BqQuantizer {
         if self.use_mean {
             let mut res_vector = vec![0; Self::quantized_size(full_vector.len())];
 
-            for (i, &v) in full_vector.iter().enumerate() {
-                if v > self.mean[i] {
-                    res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+            if BITS_PER_DIMENSION == 1 {
+                for (i, &v) in full_vector.iter().enumerate() {
+                    if v > self.mean[i] {
+                        res_vector[i / BITS_STORE_TYPE_SIZE] |= 1 << (i % BITS_STORE_TYPE_SIZE);
+                    }
+                }
+            } else if BITS_PER_DIMENSION == 3 {
+                for (i, &v) in full_vector.iter().enumerate() {
+                    let mean = self.mean[i];
+                    let variance = self.m2[i] / self.count as f32;
+                    let std_dev = variance.sqrt();
+
+                    let bit_position = i * BITS_PER_DIMENSION as usize;
+                    if v > mean + std_dev {
+                        // 100
+                        res_vector[bit_position / BITS_STORE_TYPE_SIZE] |=
+                            1 << (bit_position % BITS_STORE_TYPE_SIZE);
+                    } else if v > mean {
+                        // 000
+                    } else if v > mean - std_dev {
+                        // 001
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                    } else {
+                        //011
+                        res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                    };
                 }
             }
 
@@ -138,6 +178,7 @@ impl BqQuantizer {
         if self.use_mean {
             self.count = 0;
             self.mean = vec![0.0; meta_page.get_num_dimensions_to_index() as _];
+            self.m2 = vec![0.0; meta_page.get_num_dimensions_to_index() as _];
         }
     }
 
@@ -145,11 +186,27 @@ impl BqQuantizer {
         if self.use_mean {
             self.count += 1;
             assert!(self.mean.len() == sample.len());
+            assert!(self.m2.len() == sample.len());
+
+            let delta: Vec<_> = self
+                .mean
+                .iter()
+                .zip(sample.iter())
+                .map(|(m, s)| s - *m)
+                .collect();
 
             self.mean
                 .iter_mut()
                 .zip(sample.iter())
                 .for_each(|(m, s)| *m += (s - *m) / self.count as f32);
+
+            let delta2 = self.mean.iter().zip(sample.iter()).map(|(m, s)| s - *m);
+
+            self.m2
+                .iter_mut()
+                .zip(delta.iter())
+                .zip(delta2)
+                .for_each(|((m2, d), d2)| *m2 += d * d2);
         }
     }
 
