@@ -146,6 +146,8 @@ pub mod tests {
     #[cfg(test)]
     pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
         //do not run this test in parallel. (pgrx tests run in a txn rolled back after each test, but we do not have that luxury here).
+
+        use rand::Rng;
         let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
 
         //we need to run vacuum in this test which cannot be run from SPI.
@@ -160,16 +162,11 @@ pub mod tests {
         )
         .unwrap();
 
-        let suffix = (1..=253)
-            .map(|i| format!("{}", i))
-            .collect::<Vec<String>>()
-            .join(", ");
-
         let (mut client, _) = pgrx_tests::client().unwrap();
 
         client
             .batch_execute(&format!(
-                "CREATE TABLE test_vac(embedding vector(256));
+                "CREATE TABLE test_vac(id INT GENERATED ALWAYS AS IDENTITY, embedding vector(256));
 
         select setseed(0.5);
         -- generate 300 vectors
@@ -178,14 +175,12 @@ pub mod tests {
          *
         FROM (
             SELECT
-        ('[ 0 , ' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+        ('[ ' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
         FROM
-         generate_series(1, 255 * 300) i
+         generate_series(1, 256 * 303) i
         GROUP BY
-        i % 300) g;
+        i % 303) g;
 
-
-        INSERT INTO test_vac(embedding) VALUES ('[1,2,3,{suffix}]'), ('[4,5,6,{suffix}]'), ('[7,8,10,{suffix}]');
 
         CREATE INDEX idxtest_vac
               ON test_vac
@@ -195,16 +190,29 @@ pub mod tests {
             ))
             .unwrap();
 
+        let test_vec: Option<Vec<f32>> = client
+            .query_one(
+                &format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+        FROM generate_series(1, 256)"
+        ),
+                &[],
+            )
+            .unwrap()
+            .get(0);
+        let test_vec = test_vec
+            .unwrap()
+            .into_iter()
+            .map(|x| Some(x))
+            .collect::<Vec<_>>();
+
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
 
         assert_eq!(cnt, 303, "initial count");
 
         client
-            .execute(
-                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
-                &[],
-            )
+            .execute(&format!("DELETE FROM test_vac WHERE id = 301;"), &[])
             .unwrap();
 
         client.close().unwrap();
@@ -213,29 +221,31 @@ pub mod tests {
 
         client.execute("VACUUM test_vac", &[]).unwrap();
 
+        let mut rng = rand::thread_rng();
+        let rand_vec = (1..=256)
+            .map(|_i| format!("{}", rng.gen::<f32>()))
+            .collect::<Vec<String>>()
+            .join(", ");
         //inserts into the previous 1,2,3 spot that was deleted
         client
             .execute(
-                &format!("INSERT INTO test_vac(embedding) VALUES ('[10,12,13,{suffix}]');"),
+                &format!("INSERT INTO test_vac(embedding) VALUES ('[{rand_vec}]');"),
                 &[],
             )
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
         //if the old index is still used the count is 304
         assert_eq!(cnt, 303, "count after vacuum");
 
         //do another delete for same items (noop)
         client
-            .execute(
-                &format!("DELETE FROM test_vac WHERE embedding = '[1,2,3,{suffix}]';"),
-                &[],
-            )
+            .execute(&format!("DELETE FROM test_vac WHERE id=301;"), &[])
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
         //if the old index is still used the count is 304
         assert_eq!(cnt, 303, "count after delete");
 

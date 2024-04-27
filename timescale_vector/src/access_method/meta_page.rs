@@ -10,7 +10,10 @@ use crate::util::*;
 
 use super::bq::BqNode;
 use super::distance;
-use super::options::{NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL};
+use super::options::{
+    BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL, NUM_DIMENSIONS_DEFAULT_SENTINEL,
+    NUM_NEIGHBORS_DEFAULT_SENTINEL,
+};
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -66,6 +69,7 @@ impl MetaPageV1 {
             distance_type: DistanceType::L2 as u16,
             num_dimensions: self.num_dimensions,
             num_dimensions_to_index: self.num_dimensions,
+            bq_num_bits_per_dimension: 1,
             num_neighbors: self.num_neighbors,
             storage_type: StorageType::Plain as u8,
             search_list_size: self.search_list_size,
@@ -119,6 +123,7 @@ pub struct MetaPage {
     num_dimensions: u32,
     //number of dimensions in the vectors stored in the index
     num_dimensions_to_index: u32,
+    bq_num_bits_per_dimension: u8,
     /// the value of the TSVStorageLayout enum
     storage_type: u8,
     /// max number of outgoing edges a node in the graph can have (R in the papers)
@@ -138,6 +143,10 @@ impl MetaPage {
 
     pub fn get_num_dimensions_to_index(&self) -> u32 {
         self.num_dimensions_to_index
+    }
+
+    pub fn get_bq_num_bits_per_dimension(&self) -> u8 {
+        self.bq_num_bits_per_dimension
     }
 
     pub fn get_num_dimensions_for_neighbors(&self) -> u32 {
@@ -198,7 +207,11 @@ impl MetaPage {
         }
     }
 
-    fn calculate_num_neighbors(num_dimensions: u32, opt: &PgBox<TSVIndexOptions>) -> u32 {
+    fn calculate_num_neighbors(
+        num_dimensions: u32,
+        num_bits_per_dimension: u8,
+        opt: &PgBox<TSVIndexOptions>,
+    ) -> u32 {
         let num_neighbors = (*opt).get_num_neighbors();
         if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
             match (*opt).get_storage_type() {
@@ -206,6 +219,7 @@ impl MetaPage {
                 StorageType::BqSpeedup => BqNode::get_default_num_neighbors(
                     num_dimensions as usize,
                     num_dimensions as usize,
+                    num_bits_per_dimension,
                 ) as u32,
                 StorageType::BqCompression => 50,
             }
@@ -229,6 +243,30 @@ impl MetaPage {
             (*opt).num_dimensions
         };
 
+        let bq_num_bits_per_dimension =
+            if (*opt).bq_num_bits_per_dimension == BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
+                if (*opt).get_storage_type() == StorageType::BqCompression
+                    && num_dimensions_to_index < 900
+                {
+                    3
+                } else {
+                    1
+                }
+            } else {
+                (*opt).bq_num_bits_per_dimension as u8
+            };
+
+        if bq_num_bits_per_dimension > 1 && num_dimensions_to_index > 930 {
+            //limited by BqMeans fitting on a page
+            pgrx::error!("BQ with more than 1 bit per dimension is not supported for more than 900 dimensions");
+        }
+        if bq_num_bits_per_dimension > 1 && (*opt).get_storage_type() != StorageType::BqCompression
+        {
+            pgrx::error!(
+                "BQ with more than 1 bit per dimension is only supported with the memory_optimized storage layout"
+            );
+        }
+
         let meta = MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
@@ -237,7 +275,12 @@ impl MetaPage {
             num_dimensions,
             num_dimensions_to_index,
             storage_type: (*opt).get_storage_type() as u8,
-            num_neighbors: Self::calculate_num_neighbors(num_dimensions, &opt),
+            num_neighbors: Self::calculate_num_neighbors(
+                num_dimensions,
+                bq_num_bits_per_dimension,
+                &opt,
+            ),
+            bq_num_bits_per_dimension,
             search_list_size: (*opt).search_list_size,
             max_alpha: (*opt).max_alpha,
             init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
