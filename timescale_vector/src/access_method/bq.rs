@@ -79,7 +79,7 @@ impl BqMeans {
     }
 }
 
-const BITS_PER_DIMENSION: u8 = 3;
+const BITS_PER_DIMENSION: u8 = 5;
 
 #[derive(Clone)]
 pub struct BqQuantizer {
@@ -155,6 +155,57 @@ impl BqQuantizer {
                             1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                    };
+                }
+            } else if BITS_PER_DIMENSION == 5 {
+                for (i, &v) in full_vector.iter().enumerate() {
+                    let mean = self.mean[i];
+                    let variance = self.m2[i] / self.count as f32;
+                    let std_dev = variance.sqrt();
+
+                    let bit_position = i * BITS_PER_DIMENSION as usize;
+                    if v > mean + 2.0 * std_dev {
+                        // 00000
+                    } else if v > mean + std_dev {
+                        // 10000
+                        res_vector[bit_position / BITS_STORE_TYPE_SIZE] |=
+                            1 << (bit_position % BITS_STORE_TYPE_SIZE);
+                    } else if v > mean {
+                        // 11000
+                        res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                    } else if v > mean - std_dev {
+                        // 11100
+                        res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 3) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
+                    } else if v > mean - 2.0 * std_dev {
+                        // 11110
+                        res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 3) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 4) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 4) % BITS_STORE_TYPE_SIZE);
+                    } else {
+                        //11111
+                        res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 3) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 4) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 4) % BITS_STORE_TYPE_SIZE);
+                        res_vector[(bit_position + 5) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 5) % BITS_STORE_TYPE_SIZE);
                     };
                 }
             }
