@@ -172,30 +172,32 @@ impl BqQuantizer {
                             1 << (bit_position % BITS_STORE_TYPE_SIZE);
                     } else if v > mean {
                         // 11000
+                        res_vector[(bit_position + 0) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 0) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
-                        res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
-                            1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
                     } else if v > mean - std_dev {
                         // 11100
+                        res_vector[(bit_position + 0) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 0) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
-                        res_vector[(bit_position + 3) / BITS_STORE_TYPE_SIZE] |=
-                            1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
                     } else if v > mean - 2.0 * std_dev {
                         // 11110
+                        res_vector[(bit_position + 0) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 0) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 2) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 3) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
-                        res_vector[(bit_position + 4) / BITS_STORE_TYPE_SIZE] |=
-                            1 << ((bit_position + 4) % BITS_STORE_TYPE_SIZE);
                     } else {
                         //11111
+                        res_vector[(bit_position + 0) / BITS_STORE_TYPE_SIZE] |=
+                            1 << ((bit_position + 0) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 1) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 1) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 2) / BITS_STORE_TYPE_SIZE] |=
@@ -204,8 +206,6 @@ impl BqQuantizer {
                             1 << ((bit_position + 3) % BITS_STORE_TYPE_SIZE);
                         res_vector[(bit_position + 4) / BITS_STORE_TYPE_SIZE] |=
                             1 << ((bit_position + 4) % BITS_STORE_TYPE_SIZE);
-                        res_vector[(bit_position + 5) / BITS_STORE_TYPE_SIZE] |=
-                            1 << ((bit_position + 5) % BITS_STORE_TYPE_SIZE);
                     };
                 }
             }
