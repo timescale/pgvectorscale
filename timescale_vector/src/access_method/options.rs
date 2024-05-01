@@ -17,10 +17,12 @@ pub struct TSVIndexOptions {
     pub search_list_size: u32,
     pub num_dimensions: u32,
     pub max_alpha: f64,
+    pub bq_num_bits_per_dimension: u32,
 }
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
 pub const NUM_DIMENSIONS_DEFAULT_SENTINEL: u32 = 0;
+pub const BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL: u32 = 0;
 const DEFAULT_MAX_ALPHA: f64 = 1.2;
 
 impl TSVIndexOptions {
@@ -37,6 +39,7 @@ impl TSVIndexOptions {
             ops.search_list_size = 100;
             ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
+            ops.bq_num_bits_per_dimension = BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -83,7 +86,7 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 5;
+const NUM_REL_OPTS: usize = 6;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
@@ -122,6 +125,11 @@ pub unsafe extern "C" fn amoptions(
             optname: "num_dimensions".as_pg_cstr(),
             opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_dimensions) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "num_bits_per_dimension".as_pg_cstr(),
+            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            offset: offset_of!(TSVIndexOptions, bq_num_bits_per_dimension) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "max_alpha".as_pg_cstr(),
@@ -216,6 +224,16 @@ pub unsafe fn init() {
         0,
         0,
         5000,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+
+    pg_sys::add_int_reloption(
+        RELOPT_KIND_TSV,
+        "num_bits_per_dimension".as_pg_cstr(),
+        "The number of bits to use per dimension for compressed storage".as_pg_cstr(),
+        BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
+        0,
+        32,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
 }
