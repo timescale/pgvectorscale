@@ -248,7 +248,7 @@ impl MetaPage {
                 if (*opt).get_storage_type() == StorageType::BqCompression
                     && num_dimensions_to_index < 900
                 {
-                    3
+                    2
                 } else {
                     1
                 }
