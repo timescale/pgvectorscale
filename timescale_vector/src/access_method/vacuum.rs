@@ -137,11 +137,11 @@ pub extern "C" fn amvacuumcleanup(
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 pub mod tests {
-    use once_cell::sync::Lazy;
     use pgrx::*;
-    use std::sync::Mutex;
 
-    static VAC_PLAIN_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+    #[cfg(test)]
+    static VAC_PLAIN_MUTEX: once_cell::sync::Lazy<std::sync::Mutex<()>> =
+        once_cell::sync::Lazy::new(std::sync::Mutex::default);
 
     #[cfg(test)]
     pub fn test_delete_vacuum_plain_scaffold(index_options: &str) {
@@ -253,7 +253,9 @@ pub mod tests {
         client.execute("DROP TABLE test_vac", &[]).unwrap();
     }
 
-    static VAC_FULL_MUTEX: Lazy<Mutex<()>> = Lazy::new(Mutex::default);
+    #[cfg(test)]
+    static VAC_FULL_MUTEX: once_cell::sync::Lazy<std::sync::Mutex<()>> =
+        once_cell::sync::Lazy::new(std::sync::Mutex::default);
 
     #[cfg(test)]
     pub fn test_delete_vacuum_full_scaffold(index_options: &str) {

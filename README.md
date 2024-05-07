@@ -52,6 +52,12 @@ You can run tests against a postgres version pg16 using
 ```shell
 cargo pgrx test ${postgres_version}
 ```
+
+To run all tests run:
+```shell
+cargo test -- --ignored && cargo pgrx test ${postgres_version}
+```
+
 🐯 About Timescale
 TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 million of metrics per second, supports native compression, handles high cardinality, and offers native time-series capabilities, such as data retention policies, continuous aggregate views, downsampling, data gap-filling and interpolation.
 

@@ -1,3 +1,5 @@
+use std::ptr::addr_of_mut;
+
 use pgrx::pg_sys::{Datum, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
@@ -29,7 +31,7 @@ impl TableSlot {
         fetch_row_version(
             heap_rel.as_ptr(),
             &mut ctid,
-            &mut pg_sys::SnapshotAnyData,
+            addr_of_mut!(pg_sys::SnapshotAnyData),
             slot.as_ptr(),
         );
         stats.record_heap_read();
