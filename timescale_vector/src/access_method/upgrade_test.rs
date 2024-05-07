@@ -1,4 +1,4 @@
-#[cfg(any(test, feature = "pg_test"))]
+#[cfg(test)]
 #[pgrx::pg_schema]
 pub mod tests {
     use pgrx::*;

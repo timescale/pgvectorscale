@@ -243,8 +243,8 @@ pub unsafe fn init() {
 mod tests {
     use crate::access_method::{
         options::{
-            TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_DIMENSIONS_DEFAULT_SENTINEL,
-            NUM_NEIGHBORS_DEFAULT_SENTINEL,
+            TSVIndexOptions, BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL, DEFAULT_MAX_ALPHA,
+            NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
         },
         storage::StorageType,
     };
@@ -266,6 +266,10 @@ mod tests {
         let options = TSVIndexOptions::from_relation(&indexrel);
         assert_eq!(options.num_neighbors, 30);
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
+        assert_eq!(
+            options.bq_num_bits_per_dimension,
+            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
+        );
         Ok(())
     }
 
@@ -287,6 +291,10 @@ mod tests {
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
         assert_eq!(options.get_storage_type(), StorageType::BqCompression);
+        assert_eq!(
+            options.bq_num_bits_per_dimension,
+            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
+        );
         Ok(())
     }
 
@@ -352,6 +360,33 @@ mod tests {
         assert_eq!(options.max_alpha, 1.4);
         assert_eq!(options.get_storage_type(), StorageType::Plain);
         assert_eq!(options.num_dimensions, 20);
+        assert_eq!(
+            options.bq_num_bits_per_dimension,
+            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL
+        );
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_index_options_custom_mem_optimized() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(encoding vector(3));
+        CREATE INDEX idxtest
+                  ON test
+               USING tsv(encoding)
+               WITH (storage_layout = memory_optimized, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4, num_bits_per_dimension=5);",
+        ))?;
+
+        let index_oid =
+            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
+        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+        let options = TSVIndexOptions::from_relation(&indexrel);
+        assert_eq!(options.get_num_neighbors(), 40);
+        assert_eq!(options.search_list_size, 18);
+        assert_eq!(options.max_alpha, 1.4);
+        assert_eq!(options.get_storage_type(), StorageType::BqCompression);
+        assert_eq!(options.num_dimensions, 20);
+        assert_eq!(options.bq_num_bits_per_dimension, 5);
         Ok(())
     }
 }
