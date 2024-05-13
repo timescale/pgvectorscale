@@ -306,14 +306,14 @@ fn finalize_index_build<S: Storage>(
         }
     }
 
-    info!("write done");
+    debug1!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
         .as_secs_f64();
     if write_stats.num_nodes > 0 {
-        info!(
+        debug1!(
             "Writing took {}s or {}s/tuple.  Avg neighbors: {}",
             writing_took,
             writing_took / write_stats.num_nodes as f64,
@@ -321,7 +321,7 @@ fn finalize_index_build<S: Storage>(
         );
     }
     if write_stats.prune_stats.calls > 0 {
-        info!(
+        debug1!(
             "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
             write_stats.prune_stats.num_neighbors_before_prune / write_stats.prune_stats.calls,
             write_stats.prune_stats.num_neighbors_after_prune / write_stats.prune_stats.calls,
@@ -416,7 +416,7 @@ fn build_callback_internal<S: Storage>(
     state.ntuples = state.ntuples + 1;
 
     if state.ntuples % 1000 == 0 {
-        info!(
+        debug1!(
             "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
             state.ntuples,
             Instant::now().duration_since(state.started).as_secs_f64(),
