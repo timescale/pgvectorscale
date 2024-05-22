@@ -8,12 +8,12 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::bq::BqNode;
 use super::distance;
 use super::options::{
-    BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL, NUM_DIMENSIONS_DEFAULT_SENTINEL,
-    NUM_NEIGHBORS_DEFAULT_SENTINEL,
+    NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
+    SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
+use super::sbq::SbqNode;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -154,8 +154,8 @@ impl MetaPage {
             StorageType::Plain => {
                 error!("get_num_dimensions_for_neighbors should not be called for Plain storage")
             }
-            StorageType::BqSpeedup => self.num_dimensions_to_index,
-            StorageType::BqCompression => 0,
+            StorageType::SbqSpeedup => self.num_dimensions_to_index,
+            StorageType::SbqCompression => 0,
         }
     }
 
@@ -203,7 +203,7 @@ impl MetaPage {
 
         match self.get_storage_type() {
             StorageType::Plain => None,
-            StorageType::BqSpeedup | StorageType::BqCompression => Some(self.quantizer_metadata),
+            StorageType::SbqSpeedup | StorageType::SbqCompression => Some(self.quantizer_metadata),
         }
     }
 
@@ -216,12 +216,12 @@ impl MetaPage {
         if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
             match (*opt).get_storage_type() {
                 StorageType::Plain => 50,
-                StorageType::BqSpeedup => BqNode::get_default_num_neighbors(
+                StorageType::SbqSpeedup => SbqNode::get_default_num_neighbors(
                     num_dimensions as usize,
                     num_dimensions as usize,
                     num_bits_per_dimension,
                 ) as u32,
-                StorageType::BqCompression => 50,
+                StorageType::SbqCompression => 50,
             }
         } else {
             num_neighbors as u32
@@ -244,8 +244,8 @@ impl MetaPage {
         };
 
         let bq_num_bits_per_dimension =
-            if (*opt).bq_num_bits_per_dimension == BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
-                if (*opt).get_storage_type() == StorageType::BqCompression
+            if (*opt).bq_num_bits_per_dimension == SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
+                if (*opt).get_storage_type() == StorageType::SbqCompression
                     && num_dimensions_to_index < 900
                 {
                     2
@@ -257,13 +257,13 @@ impl MetaPage {
             };
 
         if bq_num_bits_per_dimension > 1 && num_dimensions_to_index > 930 {
-            //limited by BqMeans fitting on a page
-            pgrx::error!("BQ with more than 1 bit per dimension is not supported for more than 900 dimensions");
+            //limited by SbqMeans fitting on a page
+            pgrx::error!("SBQ with more than 1 bit per dimension is not supported for more than 900 dimensions");
         }
-        if bq_num_bits_per_dimension > 1 && (*opt).get_storage_type() != StorageType::BqCompression
+        if bq_num_bits_per_dimension > 1 && (*opt).get_storage_type() != StorageType::SbqCompression
         {
             pgrx::error!(
-                "BQ with more than 1 bit per dimension is only supported with the memory_optimized storage layout"
+                "SBQ with more than 1 bit per dimension is only supported with the memory_optimized storage layout"
             );
         }
 

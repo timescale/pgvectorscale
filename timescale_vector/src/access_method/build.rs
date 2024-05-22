@@ -15,8 +15,8 @@ use crate::util::*;
 
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
-use super::bq::BqSpeedupStorage;
 use super::graph_neighbor_store::BuilderNeighborCache;
+use super::sbq::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
 
@@ -24,7 +24,7 @@ use super::plain_storage::PlainStorage;
 use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
-    BqSpeedup(&'a mut BqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
+    SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
     Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
 }
 
@@ -130,8 +130,8 @@ pub unsafe extern "C" fn aminsert(
                 &mut stats,
             );
         }
-        StorageType::BqSpeedup | StorageType::BqCompression => {
-            let bq = BqSpeedupStorage::load_for_insert(
+        StorageType::SbqSpeedup | StorageType::SbqCompression => {
+            let bq = SbqSpeedupStorage::load_for_insert(
                 &heap_relation,
                 &index_relation,
                 &meta_page,
@@ -214,10 +214,11 @@ fn do_heap_scan<'a>(
 
             finalize_index_build(&mut plain, &mut bs, write_stats)
         }
-        StorageType::BqSpeedup | StorageType::BqCompression => {
-            let mut bq = BqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
+        StorageType::SbqSpeedup | StorageType::SbqCompression => {
+            let mut bq =
+                SbqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
 
-            let page_type = BqSpeedupStorage::page_type();
+            let page_type = SbqSpeedupStorage::page_type();
 
             unsafe {
                 pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
@@ -226,7 +227,7 @@ fn do_heap_scan<'a>(
             bq.start_training(&meta_page);
 
             let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
-            let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
+            let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
 
             unsafe {
                 pg_sys::IndexBuildHeapScan(
@@ -246,7 +247,7 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            let mut state = StorageBuildState::BqSpeedup(&mut bq, &mut bs);
+            let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
 
             unsafe {
                 pg_sys::IndexBuildHeapScan(
@@ -346,7 +347,7 @@ unsafe extern "C" fn build_callback_bq_train(
 ) {
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
-        StorageBuildState::BqSpeedup(bq, state) => {
+        StorageBuildState::SbqSpeedup(bq, state) => {
             let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
             if let Some(vec) = vec {
                 bq.add_sample(vec.to_index_slice());
@@ -370,7 +371,7 @@ unsafe extern "C" fn build_callback(
     let index_relation = unsafe { PgRelation::from_pg(index) };
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
-        StorageBuildState::BqSpeedup(bq, state) => {
+        StorageBuildState::SbqSpeedup(bq, state) => {
             let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
             if let Some(vec) = vec {
                 let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);

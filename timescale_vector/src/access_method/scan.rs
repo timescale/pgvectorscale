@@ -4,16 +4,16 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        bq::BqSpeedupStorage, graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage,
-        pg_vector::PgVector,
+        graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage, pg_vector::PgVector,
+        sbq::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, HeapPointer, IndexPointer},
 };
 
 use super::{
-    bq::{BqMeans, BqQuantizer, BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData},
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
+    sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -21,9 +21,9 @@ use super::{
 /* Be very careful not to transfer PgRelations in the state, as they can change between calls. That means we shouldn't be
 using lifetimes here. Everything should be owned */
 enum StorageState {
-    BqSpeedup(
-        BqQuantizer,
-        TSVResponseIterator<BqSearchDistanceMeasure, BqSpeedupStorageLsnPrivateData>,
+    SbqSpeedup(
+        SbqQuantizer,
+        TSVResponseIterator<SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData>,
     ),
     Plain(TSVResponseIterator<PlainDistanceMeasure, PlainStorageLsnPrivateData>),
 }
@@ -66,13 +66,13 @@ impl TSVScanState {
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
-            StorageType::BqSpeedup | StorageType::BqCompression => {
+            StorageType::SbqSpeedup | StorageType::SbqCompression => {
                 let mut stats = QuantizerStats::new();
-                let quantizer = unsafe { BqMeans::load(index, &meta_page, &mut stats) };
-                let bq = BqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
+                let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
+                let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
-                StorageState::BqSpeedup(quantizer, it)
+                StorageState::SbqSpeedup(quantizer, it)
             }
         };
 
@@ -366,9 +366,13 @@ pub extern "C" fn amgettuple(
 
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
     match &mut storage {
-        StorageState::BqSpeedup(quantizer, iter) => {
-            let bq =
-                BqSpeedupStorage::load_for_search(&indexrel, &heaprel, quantizer, &state.meta_page);
+        StorageState::SbqSpeedup(quantizer, iter) => {
+            let bq = SbqSpeedupStorage::load_for_search(
+                &indexrel,
+                &heaprel,
+                quantizer,
+                &state.meta_page,
+            );
             let next = iter.next_with_resort(&indexrel, &bq);
             get_tuple(state, next, scan)
         }
@@ -433,7 +437,7 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
-            StorageState::BqSpeedup(_bq, iter) => end_scan::<BqSpeedupStorage>(iter),
+            StorageState::SbqSpeedup(_bq, iter) => end_scan::<SbqSpeedupStorage>(iter),
             StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
         }
     }
