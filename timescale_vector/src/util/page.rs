@@ -30,8 +30,8 @@ pub enum PageType {
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
-    BqMeans = 4,
-    BqNode = 5,
+    SbqMeans = 4,
+    SbqNode = 5,
     Meta = 6,
 }
 
@@ -42,8 +42,8 @@ impl PageType {
             1 => PageType::Node,
             2 => PageType::PqQuantizerDef,
             3 => PageType::PqQuantizerVector,
-            4 => PageType::BqMeans,
-            5 => PageType::BqNode,
+            4 => PageType::SbqMeans,
+            5 => PageType::SbqNode,
             6 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
         }

@@ -26,31 +26,31 @@ use crate::util::{
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
-type BqVectorElement = u64;
+type SbqVectorElement = u64;
 const BITS_STORE_TYPE_SIZE: usize = 64;
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 #[repr(C)]
-pub struct BqMeans {
+pub struct SbqMeans {
     count: u64,
     means: Vec<f32>,
     m2: Vec<f32>,
 }
 
-impl BqMeans {
+impl SbqMeans {
     pub unsafe fn load<S: StatsNodeRead>(
         index: &PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
-    ) -> BqQuantizer {
-        let mut quantizer = BqQuantizer::new(meta_page);
+    ) -> SbqQuantizer {
+        let mut quantizer = SbqQuantizer::new(meta_page);
         if quantizer.use_mean {
             if meta_page.get_quantizer_metadata_pointer().is_none() {
-                pgrx::error!("No BQ pointer found in meta page");
+                pgrx::error!("No SBQ pointer found in meta page");
             }
             let quantizer_item_pointer = meta_page.get_quantizer_metadata_pointer().unwrap();
-            let bq = BqMeans::read(index, quantizer_item_pointer, stats);
+            let bq = SbqMeans::read(index, quantizer_item_pointer, stats);
             let archived = bq.get_archived_node();
 
             quantizer.load(
@@ -64,11 +64,11 @@ impl BqMeans {
 
     pub unsafe fn store<S: StatsNodeWrite>(
         index: &PgRelation,
-        quantizer: &BqQuantizer,
+        quantizer: &SbqQuantizer,
         stats: &mut S,
     ) -> ItemPointer {
-        let mut tape = Tape::new(index, PageType::BqMeans);
-        let node = BqMeans {
+        let mut tape = Tape::new(index, PageType::SbqMeans);
+        let node = SbqMeans {
             count: quantizer.count,
             means: quantizer.mean.to_vec(),
             m2: quantizer.m2.to_vec(),
@@ -80,7 +80,7 @@ impl BqMeans {
 }
 
 #[derive(Clone)]
-pub struct BqQuantizer {
+pub struct SbqQuantizer {
     pub use_mean: bool,
     training: bool,
     pub count: u64,
@@ -89,8 +89,8 @@ pub struct BqQuantizer {
     pub num_bits_per_dimension: u8,
 }
 
-impl BqQuantizer {
-    fn new(meta_page: &super::meta_page::MetaPage) -> BqQuantizer {
+impl SbqQuantizer {
+    fn new(meta_page: &super::meta_page::MetaPage) -> SbqQuantizer {
         Self {
             use_mean: true,
             training: false,
@@ -123,10 +123,10 @@ impl BqQuantizer {
 
     fn quantized_size_bytes(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
         Self::quantized_size_internal(num_dimensions, num_bits_per_dimension)
-            * std::mem::size_of::<BqVectorElement>()
+            * std::mem::size_of::<SbqVectorElement>()
     }
 
-    fn quantize(&self, full_vector: &[f32]) -> Vec<BqVectorElement> {
+    fn quantize(&self, full_vector: &[f32]) -> Vec<SbqVectorElement> {
         assert!(!self.training);
         if self.use_mean {
             let mut res_vector = vec![0; self.quantized_size(full_vector.len())];
@@ -232,25 +232,25 @@ impl BqQuantizer {
         &self,
         _meta_page: &super::meta_page::MetaPage,
         full_vector: &[f32],
-    ) -> Vec<BqVectorElement> {
+    ) -> Vec<SbqVectorElement> {
         self.quantize(&full_vector)
     }
 }
 
-pub struct BqSearchDistanceMeasure {
-    quantized_vector: Vec<BqVectorElement>,
+pub struct SbqSearchDistanceMeasure {
+    quantized_vector: Vec<SbqVectorElement>,
     query: PgVector,
     num_dimensions_for_neighbors: usize,
     quantized_dimensions: usize,
 }
 
-impl BqSearchDistanceMeasure {
+impl SbqSearchDistanceMeasure {
     pub fn new(
-        quantizer: &BqQuantizer,
+        quantizer: &SbqQuantizer,
         query: PgVector,
         num_dimensions_for_neighbors: usize,
-    ) -> BqSearchDistanceMeasure {
-        BqSearchDistanceMeasure {
+    ) -> SbqSearchDistanceMeasure {
+        SbqSearchDistanceMeasure {
             quantized_vector: quantizer.quantize(query.to_index_slice()),
             query,
             num_dimensions_for_neighbors,
@@ -260,7 +260,7 @@ impl BqSearchDistanceMeasure {
 
     pub fn calculate_bq_distance<S: StatsDistanceComparison>(
         &self,
-        bq_vector: &[BqVectorElement],
+        bq_vector: &[SbqVectorElement],
         gns: &GraphNeighborStore,
         stats: &mut S,
     ) -> f32 {
@@ -294,14 +294,14 @@ impl BqSearchDistanceMeasure {
     }
 }
 
-pub struct BqNodeDistanceMeasure<'a> {
-    vec: Vec<BqVectorElement>,
-    storage: &'a BqSpeedupStorage<'a>,
+pub struct SbqNodeDistanceMeasure<'a> {
+    vec: Vec<SbqVectorElement>,
+    storage: &'a SbqSpeedupStorage<'a>,
 }
 
-impl<'a> BqNodeDistanceMeasure<'a> {
+impl<'a> SbqNodeDistanceMeasure<'a> {
     pub unsafe fn with_index_pointer<T: StatsNodeRead>(
-        storage: &'a BqSpeedupStorage<'a>,
+        storage: &'a SbqSpeedupStorage<'a>,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
@@ -313,7 +313,7 @@ impl<'a> BqNodeDistanceMeasure<'a> {
     }
 }
 
-impl<'a> NodeDistanceMeasure for BqNodeDistanceMeasure<'a> {
+impl<'a> NodeDistanceMeasure for SbqNodeDistanceMeasure<'a> {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -326,7 +326,7 @@ impl<'a> NodeDistanceMeasure for BqNodeDistanceMeasure<'a> {
 }
 
 struct QuantizedVectorCache {
-    quantized_vector_map: HashMap<ItemPointer, Vec<BqVectorElement>>,
+    quantized_vector_map: HashMap<ItemPointer, Vec<SbqVectorElement>>,
 }
 
 /* should be a LRU cache for quantized vector. For now cheat and never evict
@@ -342,9 +342,9 @@ impl QuantizedVectorCache {
     fn get<S: StatsNodeRead>(
         &mut self,
         index_pointer: IndexPointer,
-        storage: &BqSpeedupStorage,
+        storage: &SbqSpeedupStorage,
         stats: &mut S,
-    ) -> &[BqVectorElement] {
+    ) -> &[SbqVectorElement] {
         self.quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
@@ -352,7 +352,7 @@ impl QuantizedVectorCache {
             })
     }
 
-    fn must_get(&self, index_pointer: IndexPointer) -> &[BqVectorElement] {
+    fn must_get(&self, index_pointer: IndexPointer) -> &[SbqVectorElement] {
         self.quantized_vector_map.get(&index_pointer).unwrap()
     }
 
@@ -362,7 +362,7 @@ impl QuantizedVectorCache {
     fn preload<I: Iterator<Item = IndexPointer>, S: StatsNodeRead>(
         &mut self,
         index_pointers: I,
-        storage: &BqSpeedupStorage,
+        storage: &SbqSpeedupStorage,
         stats: &mut S,
     ) {
         for index_pointer in index_pointers {
@@ -371,26 +371,26 @@ impl QuantizedVectorCache {
     }
 }
 
-pub struct BqSpeedupStorage<'a> {
+pub struct SbqSpeedupStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: fn(&[f32], &[f32]) -> f32,
-    quantizer: BqQuantizer,
+    quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
     num_dimensions_for_neighbors: usize,
 }
 
-impl<'a> BqSpeedupStorage<'a> {
+impl<'a> SbqSpeedupStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         meta_page: &super::meta_page::MetaPage,
-    ) -> BqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a> {
         Self {
             index: index,
             distance_fn: meta_page.get_distance_function(),
-            quantizer: BqQuantizer::new(meta_page),
+            quantizer: SbqQuantizer::new(meta_page),
             heap_rel: heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
@@ -402,8 +402,8 @@ impl<'a> BqSpeedupStorage<'a> {
         index_relation: &PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
-    ) -> BqQuantizer {
-        unsafe { BqMeans::load(&index_relation, meta_page, stats) }
+    ) -> SbqQuantizer {
+        unsafe { SbqMeans::load(&index_relation, meta_page, stats) }
     }
 
     pub fn load_for_insert<S: StatsNodeRead>(
@@ -411,7 +411,7 @@ impl<'a> BqSpeedupStorage<'a> {
         index_relation: &'a PgRelation,
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
-    ) -> BqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
@@ -426,9 +426,9 @@ impl<'a> BqSpeedupStorage<'a> {
     pub fn load_for_search(
         index_relation: &'a PgRelation,
         heap_relation: &'a PgRelation,
-        quantizer: &BqQuantizer,
+        quantizer: &SbqQuantizer,
         meta_page: &super::meta_page::MetaPage,
-    ) -> BqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
@@ -445,15 +445,15 @@ impl<'a> BqSpeedupStorage<'a> {
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> Vec<BqVectorElement> {
-        let rn = unsafe { BqNode::read(self.index, index_pointer, stats) };
+    ) -> Vec<SbqVectorElement> {
+        let rn = unsafe { SbqNode::read(self.index, index_pointer, stats) };
         let node = rn.get_archived_node();
         node.bq_vector.as_slice().to_vec()
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
         if self.quantizer.use_mean {
-            let index_pointer = unsafe { BqMeans::store(&self.index, &self.quantizer, stats) };
+            let index_pointer = unsafe { SbqMeans::store(&self.index, &self.quantizer, stats) };
             super::meta_page::MetaPage::update_quantizer_metadata_pointer(
                 &self.index,
                 index_pointer,
@@ -465,8 +465,8 @@ impl<'a> BqSpeedupStorage<'a> {
     fn visit_lsn_internal(
         &self,
         lsr: &mut ListSearchResult<
-            <BqSpeedupStorage<'a> as Storage>::QueryDistanceMeasure,
-            <BqSpeedupStorage<'a> as Storage>::LSNPrivateData,
+            <SbqSpeedupStorage<'a> as Storage>::QueryDistanceMeasure,
+            <SbqSpeedupStorage<'a> as Storage>::LSNPrivateData,
         >,
         lsn_index_pointer: IndexPointer,
         gns: &GraphNeighborStore,
@@ -474,7 +474,7 @@ impl<'a> BqSpeedupStorage<'a> {
         match gns {
             GraphNeighborStore::Disk => {
                 let rn_visiting =
-                    unsafe { BqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
+                    unsafe { SbqNode::read(self.index, lsn_index_pointer, &mut lsr.stats) };
                 let node_visiting = rn_visiting.get_archived_node();
                 //OPT: get neighbors from private data just like plain storage in the self.num_dimensions_for_neighbors == 0 case
                 let neighbors = node_visiting.get_index_pointer_to_neighbors();
@@ -493,7 +493,7 @@ impl<'a> BqSpeedupStorage<'a> {
                         )
                     } else {
                         let rn_neighbor = unsafe {
-                            BqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
+                            SbqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
                         };
                         let node_neighbor = rn_neighbor.get_archived_node();
                         let bq_vector = node_neighbor.bq_vector.as_slice();
@@ -548,16 +548,16 @@ impl<'a> BqSpeedupStorage<'a> {
     }
 }
 
-pub type BqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
+pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
-impl<'a> Storage for BqSpeedupStorage<'a> {
-    type QueryDistanceMeasure = BqSearchDistanceMeasure;
-    type NodeDistanceMeasure<'b> = BqNodeDistanceMeasure<'b> where Self: 'b;
-    type ArchivedType = ArchivedBqNode;
-    type LSNPrivateData = BqSpeedupStorageLsnPrivateData; //no data stored
+impl<'a> Storage for SbqSpeedupStorage<'a> {
+    type QueryDistanceMeasure = SbqSearchDistanceMeasure;
+    type NodeDistanceMeasure<'b> = SbqNodeDistanceMeasure<'b> where Self: 'b;
+    type ArchivedType = ArchivedSbqNode;
+    type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
     fn page_type() -> PageType {
-        PageType::BqNode
+        PageType::SbqNode
     }
 
     fn create_node<S: StatsNodeWrite>(
@@ -570,7 +570,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
-        let node = BqNode::with_meta(
+        let node = SbqNode::with_meta(
             &self.quantizer,
             heap_pointer,
             &meta_page,
@@ -603,14 +603,14 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     ) {
         let mut cache = self.qv_cache.borrow_mut();
         /* It's important to preload cache with all the items since you can run into deadlocks
-        if you try to fetch a quantized vector while holding the BqNode::modify lock */
+        if you try to fetch a quantized vector while holding the SbqNode::modify lock */
         let iter = neighbors
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
         cache.preload(iter, self, stats);
 
-        let node = unsafe { BqNode::modify(self.index, index_pointer, stats) };
+        let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
 
@@ -621,12 +621,12 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> BqNodeDistanceMeasure<'b> {
-        BqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
+    ) -> SbqNodeDistanceMeasure<'b> {
+        SbqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(&self, query: PgVector) -> BqSearchDistanceMeasure {
-        return BqSearchDistanceMeasure::new(
+    fn get_query_distance_measure(&self, query: PgVector) -> SbqSearchDistanceMeasure {
+        return SbqSearchDistanceMeasure::new(
             &self.quantizer,
             query,
             self.num_dimensions_for_neighbors,
@@ -654,13 +654,13 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
     ) {
-        let rn = unsafe { BqNode::read(self.index, neighbors_of, stats) };
+        let rn = unsafe { SbqNode::read(self.index, neighbors_of, stats) };
         let archived = rn.get_archived_node();
         let q = archived.bq_vector.as_slice();
 
         for n in rn.get_archived_node().iter_neighbors() {
             //OPT: we can optimize this if num_dimensions_for_neighbors == num_dimensions_to_index
-            let rn1 = unsafe { BqNode::read(self.index, n, stats) };
+            let rn1 = unsafe { SbqNode::read(self.index, n, stats) };
             stats.record_quantized_distance_comparison();
             let dist = distance_xor_optimized(q, rn1.get_archived_node().bq_vector.as_slice());
             result.push(NeighborWithDistance::new(n, dist as f32))
@@ -668,7 +668,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
     }
 
     /* get_lsn and visit_lsn are different because the distance
-    comparisons for BQ get the vector from different places */
+    comparisons for SBQ get the vector from different places */
     fn create_lsn_for_init_id(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
@@ -679,7 +679,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
             panic!("should not have had an init id already inserted");
         }
 
-        let rn = unsafe { BqNode::read(self.index, index_pointer, &mut lsr.stats) };
+        let rn = unsafe { SbqNode::read(self.index, index_pointer, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
         let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
@@ -707,7 +707,7 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         stats: &mut GreedySearchStats,
     ) -> HeapPointer {
         let lsn_index_pointer = lsn.index_pointer;
-        let rn = unsafe { BqNode::read(self.index, lsn_index_pointer, stats) };
+        let rn = unsafe { SbqNode::read(self.index, lsn_index_pointer, stats) };
         let node = rn.get_archived_node();
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         heap_pointer
@@ -723,14 +723,14 @@ impl<'a> Storage for BqSpeedupStorage<'a> {
         let mut cache = QuantizedVectorCache::new(neighbors.len() + 1);
 
         /* It's important to preload cache with all the items since you can run into deadlocks
-        if you try to fetch a quantized vector while holding the BqNode::modify lock */
+        if you try to fetch a quantized vector while holding the SbqNode::modify lock */
         let iter = neighbors
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
         cache.preload(iter, self, stats);
 
-        let node = unsafe { BqNode::modify(self.index, index_pointer, stats) };
+        let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, &meta, &cache);
         node.commit();
@@ -745,19 +745,19 @@ use timescale_vector_derive::{Readable, Writeable};
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-pub struct BqNode {
+pub struct SbqNode {
     pub heap_item_pointer: HeapPointer,
-    pub bq_vector: Vec<u64>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
+    pub bq_vector: Vec<u64>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_vectors: Vec<Vec<u64>>, //don't use BqVectorElement because we don't want to change the size in on-disk format by accident
+    neighbor_vectors: Vec<Vec<u64>>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
 }
 
-impl BqNode {
+impl SbqNode {
     pub fn with_meta(
-        quantizer: &BqQuantizer,
+        quantizer: &SbqQuantizer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
-        bq_vector: &[BqVectorElement],
+        bq_vector: &[SbqVectorElement],
     ) -> Self {
         Self::new(
             heap_pointer,
@@ -775,7 +775,7 @@ impl BqNode {
         _num_dimensions: usize,
         num_dimensions_for_neighbors: usize,
         num_bits_per_dimension: u8,
-        bq_vector: &[BqVectorElement],
+        bq_vector: &[SbqVectorElement],
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
         let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
@@ -787,7 +787,7 @@ impl BqNode {
                 .map(|_| {
                     vec![
                         0;
-                        BqQuantizer::quantized_size_internal(
+                        SbqQuantizer::quantized_size_internal(
                             num_dimensions_for_neighbors as _,
                             num_bits_per_dimension
                         )
@@ -812,8 +812,8 @@ impl BqNode {
         num_dimensions_for_neighbors: usize,
         num_bits_per_dimension: u8,
     ) -> usize {
-        let v: Vec<BqVectorElement> =
-            vec![0; BqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
+        let v: Vec<SbqVectorElement> =
+            vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
         let n = Self::new(
             hp,
@@ -833,21 +833,21 @@ impl BqNode {
     ) -> usize {
         //how many neighbors can fit on one page? That's what we choose.
 
-        //we first overapproximate the number of neighbors and then double check by actually calculating the size of the BqNode.
+        //we first overapproximate the number of neighbors and then double check by actually calculating the size of the SbqNode.
 
         //blocksize - 100 bytes for the padding/header/etc.
         let page_size = BLCKSZ as usize - 50;
         //one quantized_vector takes this many bytes
         let vec_size =
-            BqQuantizer::quantized_size_bytes(num_dimensions as usize, num_bits_per_dimension) + 1;
-        //start from the page size then subtract the heap_item_pointer and bq_vector elements of BqNode.
+            SbqQuantizer::quantized_size_bytes(num_dimensions as usize, num_bits_per_dimension) + 1;
+        //start from the page size then subtract the heap_item_pointer and bq_vector elements of SbqNode.
         let starting = BLCKSZ as usize - std::mem::size_of::<HeapPointer>() - vec_size;
-        //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in BqNode.
+        //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in SbqNode.
         let one_neighbor = vec_size + std::mem::size_of::<ItemPointer>();
 
         let mut num_neighbors_overapproximate: usize = starting / one_neighbor;
         while num_neighbors_overapproximate > 0 {
-            let serialized_size = BqNode::test_size(
+            let serialized_size = SbqNode::test_size(
                 num_neighbors_overapproximate as usize,
                 num_dimensions as usize,
                 num_dimensions_for_neighbors as usize,
@@ -864,7 +864,7 @@ impl BqNode {
     }
 }
 
-impl ArchivedBqNode {
+impl ArchivedSbqNode {
     fn neighbor_index_pointer(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
@@ -887,7 +887,7 @@ impl ArchivedBqNode {
             a_index_pointer.offset = ip.offset;
 
             if meta_page.get_num_dimensions_for_neighbors() > 0 {
-                let quantized = &cache.must_get(ip)[..BqQuantizer::quantized_size_internal(
+                let quantized = &cache.must_get(ip)[..SbqQuantizer::quantized_size_internal(
                     meta_page.get_num_dimensions_for_neighbors() as _,
                     meta_page.get_bq_num_bits_per_dimension(),
                 )];
@@ -922,9 +922,9 @@ impl ArchivedBqNode {
     }
 }
 
-impl ArchivedData for ArchivedBqNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedBqNode> {
-        ArchivedBqNode::with_data(data)
+impl ArchivedData for ArchivedSbqNode {
+    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedSbqNode> {
+        ArchivedSbqNode::with_data(data)
     }
 
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {

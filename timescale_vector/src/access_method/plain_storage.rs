@@ -248,7 +248,7 @@ impl<'a> Storage for PlainStorage<'a> {
     }
 
     /* get_lsn and visit_lsn are different because the distance
-    comparisons for BQ get the vector from different places */
+    comparisons for SBQ get the vector from different places */
     fn create_lsn_for_init_id(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,

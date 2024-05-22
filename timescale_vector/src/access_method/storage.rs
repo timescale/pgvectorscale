@@ -127,8 +127,8 @@ pub trait Storage {
 #[derive(PartialEq, Debug)]
 pub enum StorageType {
     Plain = 0,
-    BqSpeedup = 1,
-    BqCompression = 2,
+    SbqSpeedup = 1,
+    SbqCompression = 2,
 }
 
 pub const DEFAULT_STORAGE_TYPE_STR: &str = "memory_optimized";
@@ -137,8 +137,8 @@ impl StorageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => StorageType::Plain,
-            1 => StorageType::BqSpeedup,
-            2 => StorageType::BqCompression,
+            1 => StorageType::SbqSpeedup,
+            2 => StorageType::SbqCompression,
             _ => panic!("Invalid storage type"),
         }
     }
@@ -146,8 +146,8 @@ impl StorageType {
     pub fn from_str(value: &str) -> Self {
         match value.to_lowercase().as_str() {
             "plain" => StorageType::Plain,
-            "bq_speedup" | "io_optimized" => StorageType::BqSpeedup,
-            "bq_compression" | "memory_optimized" => StorageType::BqCompression,
+            "bq_speedup" | "io_optimized" => StorageType::SbqSpeedup,
+            "bq_compression" | "memory_optimized" => StorageType::SbqCompression,
             _ => panic!(
                 "Invalid storage type. Must be one of 'plain', 'bq_speedup', 'bq_compression'"
             ),

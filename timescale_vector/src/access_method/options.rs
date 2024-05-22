@@ -22,7 +22,7 @@ pub struct TSVIndexOptions {
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
 pub const NUM_DIMENSIONS_DEFAULT_SENTINEL: u32 = 0;
-pub const BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL: u32 = 0;
+pub const SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL: u32 = 0;
 const DEFAULT_MAX_ALPHA: f64 = 1.2;
 
 impl TSVIndexOptions {
@@ -39,7 +39,7 @@ impl TSVIndexOptions {
             ops.search_list_size = 100;
             ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
-            ops.bq_num_bits_per_dimension = BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
+            ops.bq_num_bits_per_dimension = SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
             unsafe {
                 set_varsize(
                     ops.as_ptr().cast(),
@@ -231,7 +231,7 @@ pub unsafe fn init() {
         RELOPT_KIND_TSV,
         "num_bits_per_dimension".as_pg_cstr(),
         "The number of bits to use per dimension for compressed storage".as_pg_cstr(),
-        BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
+        SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
         0,
         32,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
@@ -243,8 +243,8 @@ pub unsafe fn init() {
 mod tests {
     use crate::access_method::{
         options::{
-            TSVIndexOptions, BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL, DEFAULT_MAX_ALPHA,
-            NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
+            TSVIndexOptions, DEFAULT_MAX_ALPHA, NUM_DIMENSIONS_DEFAULT_SENTINEL,
+            NUM_NEIGHBORS_DEFAULT_SENTINEL, SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         },
         storage::StorageType,
     };
@@ -268,7 +268,7 @@ mod tests {
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
         assert_eq!(
             options.bq_num_bits_per_dimension,
-            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
+            SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         );
         Ok(())
     }
@@ -290,10 +290,10 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
-        assert_eq!(options.get_storage_type(), StorageType::BqCompression);
+        assert_eq!(options.get_storage_type(), StorageType::SbqCompression);
         assert_eq!(
             options.bq_num_bits_per_dimension,
-            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
+            SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         );
         Ok(())
     }
@@ -316,7 +316,7 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
-        assert_eq!(options.get_storage_type(), StorageType::BqSpeedup);
+        assert_eq!(options.get_storage_type(), StorageType::SbqSpeedup);
         Ok(())
     }
 
@@ -362,7 +362,7 @@ mod tests {
         assert_eq!(options.num_dimensions, 20);
         assert_eq!(
             options.bq_num_bits_per_dimension,
-            BQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL
+            SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL
         );
         Ok(())
     }
@@ -384,7 +384,7 @@ mod tests {
         assert_eq!(options.get_num_neighbors(), 40);
         assert_eq!(options.search_list_size, 18);
         assert_eq!(options.max_alpha, 1.4);
-        assert_eq!(options.get_storage_type(), StorageType::BqCompression);
+        assert_eq!(options.get_storage_type(), StorageType::SbqCompression);
         assert_eq!(options.num_dimensions, 20);
         assert_eq!(options.bq_num_bits_per_dimension, 5);
         Ok(())
