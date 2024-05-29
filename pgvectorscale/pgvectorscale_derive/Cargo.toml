@@ -1,5 +1,5 @@
 [package]
-name = "timescale_vector_derive"
+name = "pgvectorscale_derive"
 version = "0.1.0"
 edition = "2021"
 

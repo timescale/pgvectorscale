@@ -26,7 +26,7 @@ jobs:
       MAKE_JOBS: 6
       PG_CONFIG_PATH: postgresql/bin/pg_config
       TAG: ${{ github.event.inputs.tag }}
-      TAG_DIR: timescale_vector
+      TAG_DIR: pgvectorscale
 
     steps:
     - name: Checkout Timescale Vector

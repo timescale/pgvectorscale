@@ -5,7 +5,7 @@ DEBHELPER_COMPAT=11
 set -ex
 
 OS_NAME="${3}"
-BASEDIR="${2}"/timescale_vector
+BASEDIR="${2}"/pgvectorscale
 DEBDIR="${PWD}"/pkgdump
 TIMESCALE_VECTOR_VERSION="${1}"
 PG_VERSIONS="${4}"
@@ -61,8 +61,8 @@ Depends: postgresql-$pg
 Description: Timescale Vector Extension for Cloud
 EOF
 
-    echo "target/release/timescale_vector-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
-    echo "target/release/timescale_vector-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
+    echo "target/release/pgvectorscale-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
+    echo "target/release/pgvectorscale-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
 done
 
 dpkg-buildpackage --build=binary --no-sign --post-clean

@@ -1,8 +1,8 @@
 use pgrx::pg_sys::{BufferGetBlockNumber, InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
+use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::{Archive, Deserialize, Serialize};
 use semver::Version;
-use timescale_vector_derive::{Readable, Writeable};
 
 use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;

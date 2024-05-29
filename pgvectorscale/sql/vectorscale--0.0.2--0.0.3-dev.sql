@@ -5,9 +5,9 @@ The ordering of items is not stable, it is driven by a dependency graph.
 */
 
 -- src/access_method/mod.rs:48
--- timescale_vector::access_method::amhandler
+-- pgvectorscale::access_method::amhandler
 
-    CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '$libdir/timescale_vector-0.0.3-dev', 'amhandler_wrapper';
+    CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '$libdir/pgvectorscale-0.0.3-dev', 'amhandler_wrapper';
 
     DO $$
     DECLARE

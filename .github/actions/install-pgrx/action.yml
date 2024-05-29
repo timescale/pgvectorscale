@@ -33,7 +33,7 @@ runs:
       working-directory: ${{ inputs.vector-dir }}
       # rustup show active-toolchain installs the toolchain specified via rust-toolchain.yaml if it is not installed
       run: |
-        cd timescale_vector
+        cd pgvectorscale
         RUST_VERSION=`rustup show active-toolchain -v | grep rustc | cut -d' ' -f2`
         echo "version=$RUST_VERSION" >> $GITHUB_OUTPUT
 

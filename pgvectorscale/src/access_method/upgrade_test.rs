@@ -10,6 +10,9 @@ pub mod tests {
             let entry = entry?;
             let ty = entry.file_type()?;
             if ty.is_dir() {
+                if entry.file_name() == "target" {
+                    continue;
+                }
                 copy_dir_all(entry.path(), dst.as_ref().join(entry.file_name()))?;
             } else {
                 fs::copy(entry.path(), dst.as_ref().join(entry.file_name()))?;
@@ -33,7 +36,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!("DROP EXTENSION IF EXISTS timescale_vector CASCADE;"),
+                &format!("DROP EXTENSION IF EXISTS vectorscale CASCADE;"),
                 &[],
             )
             .unwrap();
@@ -98,7 +101,7 @@ pub mod tests {
             .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
-        //let contents = fs::read_to_string(temp_path.join("timescale_vector/Cargo.toml")).unwrap();
+        //let contents = fs::read_to_string(temp_path.join("pgvectorscale/Cargo.toml")).unwrap();
         //print!("cargo {}", contents);
 
         let res = std::process::Command::new("cargo")
@@ -172,12 +175,21 @@ pub mod tests {
             .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
+        client
+            .execute(
+                &format!(
+                    "UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';",
+                ),
+                &[],
+            )
+            .unwrap();
+
         //need to recreate the client to avoid double load of GUC. Look into this later.
         let (mut client, _) = pgrx_tests::client().unwrap();
         client
             .execute(
                 &format!(
-                    "ALTER EXTENSION timescale_vector UPDATE TO '{}'",
+                    "ALTER EXTENSION vectorscale UPDATE TO '{}'",
                     env!("CARGO_PKG_VERSION")
                 ),
                 &[],

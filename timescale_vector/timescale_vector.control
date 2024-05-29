@@ -1,6 +1,0 @@
-comment = 'timescale_vector:  Advanced indexing for vector data'
-default_version = '@CARGO_VERSION@'
-#module_pathname = '$libdir/timescale_vector'
-relocatable = false
-superuser = true
-requires = 'vector'
