@@ -8,11 +8,8 @@ jobs:
       image: timescaledev/rust-builder:ubuntu-1.65
 
     steps:
-      - name: Checkout Timescale Vector
+      - name: Checkout
         uses: actions/checkout@v3
-        # extension is small so we do the hacky thing.
-#      - name: Run Cargo tests
-#        run: cd pgvectorscale && cargo install --locked cargo-pgrx && cargo pgrx init && cargo pgrx test && cd ..
 
       - name: Verify formatting
         run: cd pgvectorscale && cargo fmt --check

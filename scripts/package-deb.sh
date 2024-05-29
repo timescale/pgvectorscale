@@ -7,7 +7,7 @@ set -ex
 OS_NAME="${3}"
 BASEDIR="${2}"/pgvectorscale
 DEBDIR="${PWD}"/pkgdump
-TIMESCALE_VECTOR_VERSION="${1}"
+PGVECTORSCALE_VERSION="${1}"
 PG_VERSIONS="${4}"
 
 echo "$BASEDIR"
@@ -16,7 +16,7 @@ if [ ! -d "$DEBDIR" ]; then
     mkdir -p "${DEBDIR}"
 fi
 
-DEB_VERSION=${TIMESCALE_VECTOR_VERSION}-${OS_NAME}
+DEB_VERSION=${PGVECTORSCALE_VERSION}-${OS_NAME}
 
 # Show what we got to aid debugging.
 git log -1
@@ -30,15 +30,15 @@ cd "${BASEDIR}"
 
 # deb-changelog(5)
 cat >"${BASEDIR}"/debian/changelog <<EOF
-timescale-vector (1:$DEB_VERSION) unused; urgency=medium
-  * See https://github.com/timescale/timescale-vector/releases/tag/$TIMESCALE_VECTOR_VERSION
+pgvectorscale (1:$DEB_VERSION) unused; urgency=medium
+  * See https://github.com/timescale/pgvectorscale/releases/tag/$PGVECTORSCALE_VERSION
  -- $maintainer  $date
 EOF
 # deb-src-control(5)
 cat >"${BASEDIR}"/debian/control <<EOF
-Source: timescale-vector
+Source: pgvectorscale
 Maintainer: $maintainer
-Homepage: https://github.com/timescale/timescale-vector
+Homepage: https://github.com/timescale/pgvectorscale
 Rules-Requires-Root: no
 Section: vector
 Priority: extra
@@ -55,14 +55,14 @@ for pg in $PG_VERSIONS; do
     #    cargo pgrx package
     cat >>"${BASEDIR}"/debian/control <<EOF
 
-Package: timescale-vector-postgresql-$pg
+Package: pgvectorscale-postgresql-$pg
 Architecture: any
 Depends: postgresql-$pg
-Description: Timescale Vector Extension for Cloud
+Description: pgvectorscale for speeding up ANN search
 EOF
 
-    echo "target/release/pgvectorscale-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
-    echo "target/release/pgvectorscale-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/timescale-vector-postgresql-"$pg".install
+    echo "target/release/pgvectorscale-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
+    echo "target/release/pgvectorscale-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
 done
 
 dpkg-buildpackage --build=binary --no-sign --post-clean
@@ -71,11 +71,11 @@ cd ..
 
 # packagecloud.io doesn't support `.ddeb` files?  Like `.udeb`, they're just
 # deb packages by another name, so:
-for i in timescale-vector*.ddeb; do
+for i in pgvectorscale*.ddeb; do
     # But it's only on Ubuntu that dpkg-buildpackage creates dbgsym packages
-    # with the suffix `.ddeb`.  On Debian, 'timescale-vector*.ddeb'
-    # evaluates to 'timescale-vector*.ddeb' so there's nothing to do.
-    [ "$i" = 'timescale-vector*.ddeb' ] || mv "$i" "${i%.ddeb}".deb
+    # with the suffix `.ddeb`.  On Debian, 'pgvectorscale*.ddeb'
+    # evaluates to 'pgvectorscale*.ddeb' so there's nothing to do.
+    [ "$i" = 'pgvectorscale*.ddeb' ] || mv "$i" "${i%.ddeb}".deb
 done
 
-cp timescale-vector*.deb "$DEBDIR"
+cp pgvectorscale*.deb "$DEBDIR"
