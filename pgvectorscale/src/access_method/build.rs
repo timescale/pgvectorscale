@@ -48,7 +48,7 @@ impl<'a, 'b> BuildState<'a, 'b> {
         let tape = unsafe { Tape::new(index_relation, page_type) };
 
         BuildState {
-            memcxt: PgMemoryContexts::new("tsv build context"),
+            memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
             meta_page: meta_page,
             tape,
@@ -488,7 +488,7 @@ pub mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX idx_tsv_bq ON test_data USING tsv (embedding) WITH ({index_options});
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -513,7 +513,7 @@ pub mod tests {
                     "
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
-            SET tsv.query_search_list_size = 2;
+            SET diskann.query_search_list_size = 2;
             WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
             ",
                 ),
@@ -573,7 +573,7 @@ pub mod tests {
                 "
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
-        SET tsv.query_search_list_size = 25;
+        SET diskann.query_search_list_size = 25;
         WITH cte AS (
             SELECT
                 ctid
@@ -660,7 +660,7 @@ pub mod tests {
                 "
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
-        SET tsv.query_search_list_size = 2;
+        SET diskann.query_search_list_size = 2;
         WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
         ",
             ),
@@ -683,7 +683,7 @@ pub mod tests {
 
             CREATE INDEX idxtest
                   ON test
-               USING tsv(embedding)
+               USING diskann(embedding)
                 WITH ({index_options});
 
             INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
@@ -715,7 +715,7 @@ pub mod tests {
 
             CREATE INDEX idxtest
                   ON test
-               USING tsv(embedding)
+               USING diskann(embedding)
                 WITH ({index_options});
 
             INSERT INTO test(embedding) VALUES ('[1,2,3]'), ('[4,5,6]'), ('[7,8,10]');
@@ -757,7 +757,7 @@ pub mod tests {
                 GROUP BY
                     i % {expected_cnt}) g;
 
-            CREATE INDEX idx_tsv_bq ON test_data USING tsv (embedding) WITH ({index_options});
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -782,7 +782,7 @@ pub mod tests {
                     "
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
-            SET tsv.query_search_list_size = 2;
+            SET diskann.query_search_list_size = 2;
             WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
             ",
                 ),
@@ -821,7 +821,7 @@ pub mod tests {
                 "
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
-        SET tsv.query_search_list_size = 2;
+        SET diskann.query_search_list_size = 2;
         WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
         ",
             ),

@@ -49,14 +49,14 @@ impl PageType {
         }
     }
 }
-/// This is the Tsv-specific data that goes on every "tsv-owned" page
+/// This is the Tsv-specific data that goes on every "diskann-owned" page
 /// It is placed at the end of a page in the "special" area
 
 #[repr(C)]
 struct TsvPageOpaqueData {
     page_type: u8, // stores the PageType enum as an integer (u8 because we doubt we'll have more than 256 types).
     _reserved: u8, // don't waste bytes, may be able to reuse later. For now: 0
-    page_id: u16, //  A magic ID for debuging to identify the page as a "tsv-owned". Should be last.
+    page_id: u16, //  A magic ID for debuging to identify the page as a "diskann-owned". Should be last.
 }
 
 impl TsvPageOpaqueData {

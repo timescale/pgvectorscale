@@ -26,7 +26,7 @@ mod distance_x86;
 mod sbq;
 
 #[pg_extern(sql = "
-    CREATE OR REPLACE FUNCTION tsv_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '@MODULE_PATHNAME@', '@FUNCTION_NAME@';
+    CREATE OR REPLACE FUNCTION diskann_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '@MODULE_PATHNAME@', '@FUNCTION_NAME@';
 
     DO $$
     DECLARE
@@ -35,10 +35,10 @@ mod sbq;
         SELECT count(*)
         INTO c
         FROM pg_catalog.pg_am a
-        WHERE a.amname = 'tsv';
+        WHERE a.amname = 'diskann';
 
         IF c = 0 THEN
-            CREATE ACCESS METHOD tsv TYPE INDEX HANDLER tsv_amhandler;
+            CREATE ACCESS METHOD diskann TYPE INDEX HANDLER diskann_amhandler;
         END IF;
     END;
     $$;
@@ -98,18 +98,18 @@ BEGIN
     INTO c
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_cosine_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'tsv');
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
 
     IF c = 0 THEN
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-        FOR TYPE vector USING tsv AS
+        FOR TYPE vector USING diskann AS
 	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops;
     END IF;
 END;
 $$;
 
 "#,
-    name = "tsv_ops_operator"
+    name = "diskann_ops_operator"
 );
 
 #[pg_guard]
