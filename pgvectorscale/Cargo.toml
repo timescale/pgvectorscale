@@ -1,5 +1,5 @@
 [package]
-name = "timescale_vector"
+name = "vectorscale"
 version = "0.0.3-dev"
 edition = "2021"
 
@@ -26,7 +26,7 @@ rand_chacha = "0.3"
 rand_core = "0.6"
 rand_xorshift = "0.3"
 rayon = "1"
-timescale_vector_derive = { path = "timescale_vector_derive" }
+pgvectorscale_derive = { path = "pgvectorscale_derive" }
 semver = "1.0.22"
 
 [dev-dependencies]

@@ -1,5 +1,5 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use timescale_vector::access_method::distance::{
+use pgvectorscale::access_method::distance::{
     distance_cosine, distance_l2, distance_l2_optimized_for_few_dimensions,
     distance_l2_unoptimized, distance_xor_optimized,
 };

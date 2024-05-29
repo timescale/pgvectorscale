@@ -2,9 +2,9 @@ use std::pin::Pin;
 
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgrx::*;
+use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
-use timescale_vector_derive::{Readable, Writeable};
 
 use super::neighbor_with_distance::NeighborWithDistance;
 use super::storage::ArchivedData;

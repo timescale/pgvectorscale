@@ -741,7 +741,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
     }
 }
 
-use timescale_vector_derive::{Readable, Writeable};
+use pgvectorscale_derive::{Readable, Writeable};
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]

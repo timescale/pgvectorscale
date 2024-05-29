@@ -33,7 +33,7 @@ Installing from source is also available on macOS and requires the same set of p
 Download or clone this repository, and switch to the extension subdirectory, e.g.
 ```shell
 git clone https://github.com/timescale/timescale-vector && \
-cd timescale-vector/timescale_vector
+cd timescale-vector/pgvectorscale
 ```
 
 Then run
@@ -44,7 +44,7 @@ cargo pgrx install --release
 To initialize the extension after installation, enter the following into psql:
 
 ```sql
-CREATE EXTENSION timescale_vector;
+CREATE EXTENSION vectorscale;
 ```
 
 ✏️ Get Involved
