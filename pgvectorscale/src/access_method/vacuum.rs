@@ -184,7 +184,7 @@ pub mod tests {
 
         CREATE INDEX idxtest_vac
               ON test_vac
-           USING tsv(embedding)
+           USING diskann(embedding)
             WITH ({index_options});
             "
             ))
@@ -302,7 +302,7 @@ pub mod tests {
 
         CREATE INDEX idxtest_vac_full
               ON test_vac_full
-           USING tsv(embedding)
+           USING diskann(embedding)
             WITH ({index_options});
             "
             ))
