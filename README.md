@@ -17,23 +17,6 @@ offering the PostgreSQL community a new avenue for contributing to vector suppor
 ## pgvectorscale Prerequisites
 
 * Create a [pgvectorscale developer environment](./DEVELOPMENT.md)
-* 
-
-##  Test pgvectorscale
-
-Want to see how vast pgvectorscale really is:
-
-- Run tests against a postgres version pg16 using
-
-  ```shell
-  cargo pgrx test ${postgres_version}
-  ```
-
-- Run all tests:
-  ```shell
-  cargo test -- --ignored && cargo pgrx test ${postgres_version}
-  ```
-
 
 ## Get involved
 
