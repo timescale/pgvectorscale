@@ -17,8 +17,9 @@ offering the PostgreSQL community a new avenue for contributing to vector suppor
 ## pgvectorscale Prerequisites
 
 * Create a [pgvectorscale developer environment](./DEVELOPMENT.md)
+* 
 
-##  Testing
+##  Test pgvectorscale
 
 Want to see how vast pgvectorscale really is:
 
@@ -36,18 +37,24 @@ Want to see how vast pgvectorscale really is:
 
 ## Get involved
 
-The pgvectorscale project is still in it's early stage. Now is a great time to help shape the 
-directin of this project; we are currently deciding our priorities and what to implement.  
-Have a look at the list of features we're thinking of working on. Feel free to comment, expand 
-the list, or hop on the Discussions forum for more in-depth discussions.
+pgvectorscale is still at an early stage. Now is a great time to help shape the 
+direction of this project; we are currently deciding priorities. Have a look at the 
+list of features we're thinking of working on. Feel free to comment, expand 
+the list, or hop on the Discussions forum.
 
 ## About Timescale
 
-TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 million of metrics per second, supports native compression, handles high cardinality, and offers native time-series capabilities, such as data retention policies, continuous aggregate views, downsampling, data gap-filling and interpolation.
+Timescale Cloud is a high-performance developer focused cloud that provides PostgreSQL services 
+enhanced with our blazing fast vector search. Timescale services are built with TimescaleDB and
+Timescale PostgreSQL extensions, like this one. Timescale Cloud provides high availability,
+streaming backups, upgrades over time, roles and permissions, and security.
 
-TimescaleDB also supports full SQL, a variety of data types (numerics, text, arrays, JSON, booleans), and ACID semantics. Operationally mature capabilities include high availability, streaming backups, upgrades over time, roles and permissions, and security.
+TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 
+million of metrics per second, supports native compression, handles high cardinality, and offers 
+native time-series capabilities, such as data retention policies, continuous aggregate views, 
+downsampling, data gap-filling and interpolation.
 
-TimescaleDB has a large and active user community (tens of millions of downloads, hundreds of thousands of active deployments, Slack channels with thousands of members).
+TimescaleDB supports full SQL, a variety of data types, and ACID semantics.
 
 
 [pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
