@@ -1,76 +1,97 @@
-# pgvectorscale
 
-A vector index for speeding up ANN search in `pgvector`.
+<p></p>
+<div align=center>
+<picture align=center>
+    <source media="(prefers-color-scheme: dark)" srcset="https://assets.timescale.com/docs/images/timescale-logo-dark-mode.svg">
+    <source media="(prefers-color-scheme: light)" srcset="https://assets.timescale.com/docs/images/timescale-logo-light-mode.svg">
+    <img alt="Timescale logo" >
+</picture>
 
-## 💾 Building and Installing pgvectorscale
+<h3>Use pgvectorscale to build scalable AI applications with higher performance,
+embedding search and cost-efficient storage. </h3>
 
-### From source
+[![Docs](https://img.shields.io/badge/Read_the_Timescale_docs-black?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.timescale.com/)
+[![SLACK](https://img.shields.io/badge/Ask_the_Timescale_community-black?style=for-the-badge&logo=slack&logoColor=white)](https://timescaledb.slack.com/archives/C4GT3N90X)
+[![Try Timescale for free](https://img.shields.io/badge/Try_Timescale_for_free-black?style=for-the-badge&logo=timescale&logoColor=white)](https://console.cloud.timescale.com/signup)
+</div>
 
-#### Prerequisites
 
-Building the extension requires valid rust, along with the postgres headers for whichever version of postgres you are running, and pgrx. We recommend installing rust using the official instructions:
-```shell
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-```
- 
-You should install the appropriate build tools and postgres headers in the preferred manner for your system. You may also need to install OpenSSL. For Ubuntu you can follow the postgres install instructions then run
+pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations: 
+- A DiskANN index: based on research from Microsoft  
+- Statistical Binary Quantization: developed by Timescale researchers, This feature improves on standard 
+  Binary Quantization. 
 
-```shell
-sudo apt-get install make gcc pkg-config clang postgresql-server-dev-16 libssl-dev
-```
+Timescale’s benchmarks reveal that with pgvectorscale, PostgreSQL achieves **28x lower p95 latency**, and 
+**16x higher query throughput** for approximate nearest neighbor queries at 99% recall.
 
-Next you need cargo-pgrx, which can be installed with
-```shell
-cargo install --locked cargo-pgrx
-```
+<div align=center>
 
-You must reinstall cargo-pgrx whenever you update your Rust compiler, since cargo-pgrx needs to be built with the same compiler as pgvectorscale.
+![Benchmarks](https://assets.timescale.com/docs/images/benchmark-comparison-pgvectorscale-pinecone.png)
 
-Finally, setup the pgrx development environment with
-```shell
-cargo pgrx init --pg16 pg_config
-```
+PostgreSQL costs are 21% those of Pinecone s1, just saying. 
+</div>
 
-#### Building and installing the extension 
+In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language], 
+offering the PostgreSQL community a new avenue for contributing to vector support.
 
-Download or clone this repository, and switch to the extension subdirectory, e.g.
-```shell
-git clone https://github.com/timescale/pgvectorscale && \
-cd pgvectorscale/pgvectorscale
-```
+Timescale offers the following high performance journeys:
 
-Then run
-```shell
-cargo pgrx install --release
-```
+* **App developer and DBA**: try out pgvectorscale functionality in Timescale Cloud.
+  * [Enable pgvectorscale in a Timescale service](#enable-pgvectorscale-in-a-timescale-service)
+* **Extension contributor**: contribute to pgvectorscale.
+  * [Build pgvectorscale from source in a developer environment](./DEVELOPMENT.md)
+* **Everyone**: check the benchmark results for yourself. 
+  * [Test pgvectorscale performance](#test-pgvectorscale-performance)
 
-To initialize the extension after installation, enter the following into psql:
+## Enable pgvectorscale in a Timescale service
 
-```sql
-CREATE EXTENSION vectorscale;
-```
+To enable pgvectorscale:
 
-## ✏️ Get Involved
+1. Create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services).
 
-The pgvectorscale project is still in it's early stage as we decide our priorities and what to implement. As such, now is a great time to help shape the project's direction! Have a look at the list of features we're thinking of working on and feel free to comment on the features, expand the list, or hop on the Discussions forum for more in-depth discussions.
+   If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
+   after the pgvectorscale release date.
 
-### 🔨 Testing
-See above for prerequisites and installation instructions.
+1. Connect to your Timescale service:
+   ```bash
+   psql -d "postgres://<username>:<password>@<host>:<port>/<database-name>"
+   ```
 
-You can run tests against a postgres version pg16 using
-```shell
-cargo pgrx test ${postgres_version}
-```
+1. Create the pgvectorscale extension:
 
-To run all tests run:
-```shell
-cargo test -- --ignored && cargo pgrx test ${postgres_version}
-```
+    ```postgresql
+    CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
+    ```
 
-### 🐯 About Timescale
+   The `CASCADE` automatically installs the dependencies.
 
-TimescaleDB is a distributed time-series database built on PostgreSQL that scales to over 10 million of metrics per second, supports native compression, handles high cardinality, and offers native time-series capabilities, such as data retention policies, continuous aggregate views, downsampling, data gap-filling and interpolation.
+## Test pgvectorscale performance
 
-TimescaleDB also supports full SQL, a variety of data types (numerics, text, arrays, JSON, booleans), and ACID semantics. Operationally mature capabilities include high availability, streaming backups, upgrades over time, roles and permissions, and security.
+To check the Timescale benchmarks in your pgvectorscale environment:
 
-TimescaleDB has a large and active user community (tens of millions of downloads, hundreds of thousands of active deployments, Slack channels with thousands of members).
+1. Jonetas, this is for you :-). 
+
+## Get involved
+
+pgvectorscale is still at an early stage. Now is a great time to help shape the 
+direction of this project; we are currently deciding priorities. Have a look at the 
+list of features we're thinking of working on. Feel free to comment, expand 
+the list, or hop on the Discussions forum.
+
+## About Timescale
+
+Timescale Cloud is a high-performance developer focused cloud that provides PostgreSQL services
+enhanced with our blazing fast vector search. Timescale services are built using TimescaleDB and
+PostgreSQL extensions, like this one. Timescale Cloud provides high availability, streaming
+backups, upgrades over time, roles and permissions, and great security.
+
+TimescaleDB is an open-source time-series database designed for scalability and performance,
+built on top of PostgreSQL. It provides SQL support for time-series data, allowing users to
+leverage PostgreSQL's rich ecosystem while optimizing for high ingest rates and fast query
+performance. TimescaleDB includes features like automated data retention policies, compression
+and continuous aggregates, making it ideal for applications like monitoring, IoT, AI and
+real-time analytics.
+
+
+[pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
+[rust-language]: https://www.rust-lang.org/
