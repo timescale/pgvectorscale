@@ -56,7 +56,7 @@ To enable pgvectorscale:
 
 1. Create the pgvectorscale extension:
 
-    ```sql
+    ```postgresql
     CREATE EXTENSION IF NOT EXISTS pgvectorscale CASCADE;
     ```
 
