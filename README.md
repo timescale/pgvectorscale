@@ -22,11 +22,14 @@ pgvectorscale complements [pgvector][pgvector], the open-source vector data exte
   Binary Quantization. 
 
 Timescale’s benchmarks reveal that with pgvectorscale, PostgreSQL achieves **28x lower p95 latency**, and 
-**16x higher query throughput** for approximate nearest neighbor queries at 99% recall. 
+**16x higher query throughput** for approximate nearest neighbor queries at 99% recall.
+
+<div align=center>
 
 ![Benchmarks](https://assets.timescale.com/docs/images/benchmark-comparison-pgvectorscale-pinecone.png)
 
 PostgreSQL costs are 21% those of Pinecone s1, just saying. 
+</div>
 
 In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language], 
 offering the PostgreSQL community a new avenue for contributing to vector support.
