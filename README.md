@@ -60,7 +60,7 @@ To enable pgvectorscale:
 1. Create the pgvectorscale extension:
 
     ```postgresql
-    CREATE EXTENSION IF NOT EXISTS pgvectorscale CASCADE;
+    CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
     ```
 
    The `CASCADE` automatically installs the dependencies.
