@@ -15,7 +15,7 @@ runs:
   steps:
     - name: Cache PostgreSQL ${{ inputs.pg-version }}
       id: cache-postgresql
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
        path: ${{ inputs.pg-src-dir }}
        key: ${{ runner.os }}-postgresql-${{ inputs.pg-version }}
