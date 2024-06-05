@@ -47,7 +47,7 @@ jobs:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
 
     - name: Checkout ${{ env.TAG }}
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         repository: timescale/pgvectorscale
         ref: '${{ env.TAG }}'
@@ -71,5 +71,5 @@ jobs:
     - name: Upload deb as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: vector-${{ env.TAG }}-pg${{ env.PG_VER }}
+        name: pgvectorscale-${{ env.TAG }}-pg${{ env.PG_VER }}
         path: pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
