@@ -2,7 +2,7 @@
 
 DEBHELPER_COMPAT=11
 
-set -ex
+set -eux
 
 OS_NAME="${3}"
 BASEDIR="${2}"/pgvectorscale

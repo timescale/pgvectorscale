@@ -1,5 +1,8 @@
 name: Run code checks
 on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+
 jobs:
   fmt:
     runs-on: ubuntu-latest
@@ -9,7 +12,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
       - name: Verify formatting
         run: cd pgvectorscale && cargo fmt --check

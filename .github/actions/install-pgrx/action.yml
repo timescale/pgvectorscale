@@ -39,7 +39,7 @@ runs:
 
     - name: Cache cargo-pgrx installation ${{ inputs.pgrx-version }}
       id: cache-cargo-pgrx
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cargo/bin/cargo-pgrx
         key: ${{runner.os}}-cargo-pgrx-${{ inputs.pgrx-version }}-pg${{ steps.pg-config.outputs.version }}-${{ steps.rustc.outputs.version }}
@@ -60,7 +60,7 @@ runs:
 
     - name: Cache cargo-grcov installation ${{ inputs.grcov-version }}
       id: cache-cargo-grcov
-      uses: actions/cache@v3
+      uses: actions/cache@v4
       with:
         path: ~/.cargo/bin/grcov
         key: ${{runner.os}}-cargo-grcov-${{ inputs.grcov-version }}-${{ steps.rustc.outputs.version }}
