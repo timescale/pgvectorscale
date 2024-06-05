@@ -1,10 +1,14 @@
 # Setup your pgvectorscale developer environment
 
-You build pgvectorscale from source, then integrate the extension into each database in your PostgreSQL environment.
+This page shows you how to build pgvectorscale from source, then integrate the 
+extension into a database in your PostgreSQL environment.
 
-This page shows you how to install and validate pgvector. 
+This page shows you how to:
 
-## pgvectorscale Prerequisites
+* [Build and install pgvectorscale on your database](#build-and-install-pgvectorscale-on-your-database)
+* [Test pgvectorscale](#test-pgvectorscale)
+
+## pgvectorscale prerequisites
 
 To create a pgvectorscale developer environment, you need the following on your local machine:
 
@@ -44,7 +48,7 @@ To create a pgvectorscale developer environment, you need the following on your 
 1. Build pgvectorscale:
 
     ```shell
-    cargo pgrx install --release
+    RUSTFLAGS="-C target-feature=+avx2,+fma" cargo pgrx install --release
     ```
 
 1. Connect to the database:
@@ -56,7 +60,7 @@ To create a pgvectorscale developer environment, you need the following on your 
 1. Add pgvectorscale to your database:
 
     ```sql
-    CREATE EXTENSION vectorscale;
+    CREATE EXTENSION IF NOT EXISTS pgvectorscale CASCADE;
     ```
 
 
@@ -64,7 +68,7 @@ To create a pgvectorscale developer environment, you need the following on your 
 
 To validate your pgvectorscale installation:
 
-- Run tests against a postgres version pg16 using
+- Run tests against a postgres version pg16:
 
   ```shell
   cargo pgrx test ${postgres_version}
