@@ -1,7 +1,7 @@
 # Setup your pgvectorscale developer environment
 
-This page shows you how to build pgvectorscale from source, then integrate the 
-extension into a database in your PostgreSQL environment.
+You build pgvectorscale from source, then integrate the extension into a database 
+in your PostgreSQL environment.
 
 This page shows you how to:
 
@@ -60,7 +60,7 @@ To create a pgvectorscale developer environment, you need the following on your 
 1. Add pgvectorscale to your database:
 
     ```sql
-    CREATE EXTENSION IF NOT EXISTS pgvectorscale CASCADE;
+    CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
     ```
 
 
