@@ -1,11 +1,8 @@
 
 <p></p>
 <div align=center>
-<picture align=center>
-    <source media="(prefers-color-scheme: dark)" srcset="https://assets.timescale.com/docs/images/timescale-logo-dark-mode.svg">
-    <source media="(prefers-color-scheme: light)" srcset="https://assets.timescale.com/docs/images/timescale-logo-light-mode.svg">
-    <img alt="Timescale logo" >
-</picture>
+
+# pgvectorscale
 
 <h3>Use pgvectorscale to build scalable AI applications with higher performance,
 embedding search and cost-efficient storage. </h3>
@@ -16,43 +13,66 @@ embedding search and cost-efficient storage. </h3>
 </div>
 
 
-pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations: 
-- A DiskANN index: based on research from Microsoft  
-- Statistical Binary Quantization: developed by Timescale researchers, This feature improves on standard 
-  Binary Quantization. 
+pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations:
+- A new index type called StreamingDiskANN,  inspired by the [DiskANN](https://github.com/microsoft/DiskANN) algorithm, based on research from Microsoft
+- Statistical Binary Quantization: developed by Timescale researchers, This compression method improves on standard Binary Quantization.
 
-Timescale’s benchmarks reveal that with pgvectorscale, PostgreSQL achieves **28x lower p95 latency**, and 
-**16x higher query throughput** for approximate nearest neighbor queries at 99% recall.
+Timescale’s benchmarks reveal that with pgvectorscale, PostgreSQL achieves **28x lower p95 latency**, and
+**16x higher query throughput** than Pinecone for approximate nearest neighbor queries at 99% recall.
 
 <div align=center>
 
 ![Benchmarks](https://assets.timescale.com/docs/images/benchmark-comparison-pgvectorscale-pinecone.png)
 
-PostgreSQL costs are 21% those of Pinecone s1, just saying. 
+PostgreSQL costs are 21% those of Pinecone s1, just saying.
 </div>
 
-In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language], 
+In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language] using the [PGRX framework](https://github.com/pgcentralfoundation/pgrx),
 offering the PostgreSQL community a new avenue for contributing to vector support.
 
-Timescale offers the following high performance journeys:
+If you are an **App developer or DBA**, see the rest of this document for how to install and use vectorscale's StreamingDiskANN index.
 
-* **App developer and DBA**: try out pgvectorscale functionality in Timescale Cloud.
-  * [Enable pgvectorscale in a Timescale service](#enable-pgvectorscale-in-a-timescale-service)
-* **Extension contributor**: contribute to pgvectorscale.
-  * [Build pgvectorscale from source in a developer environment](./DEVELOPMENT.md)
-* **Everyone**: check the benchmark results for yourself. 
-  * [Test pgvectorscale performance](#test-pgvectorscale-performance)
+If you **want to contribute** to this extension, see how to [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md).
 
-## Enable pgvectorscale in a Timescale service
+For more information about **pgvectorscale performance**, see our [benchmarking blog post](TODO).
 
-To enable pgvectorscale:
+## Installation
 
-1. Create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services).
+Currently, we offer docker images as well as source installation for Linux or Mac for self-hosted installs. We also offer the ability to enable pgvectorscale in a Timescale cloud service.
 
-   If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
+### Docker
+
+pgvectorscale comes installed in our [docker image](https://hub.docker.com/r/timescale/timescaledb-ha). See [these instruction](https://docs.timescale.com/self-hosted/latest/install/installation-docker/) for details on how to use the image.
+
+
+
+### Installing from source into an existing PostgreSQL instance
+
+```
+# install prerequisites
+## rust
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+## pgrx
+cargo install --locked cargo-pgrx
+cargo pgrx init --pg16 pg_config
+
+#download, build and install pgvectorscale
+cd /tmp
+git clone --branch <version> https://github.com/timescale/pgvectorscale
+cd pgvectorscale/pgvectorscale
+cargo pgrx install --release
+```
+
+You can also take a look at [our documentation for extension developers](./DEVELOPMENT.md) for more complete instructions.
+
+### Enable pgvectorscale in a Timescale service
+
+To enable pgvectorscale create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services). If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
    after the pgvectorscale release date.
 
-1. Connect to your Timescale service:
+
+## Getting Started
+1. Connect to your PostgreSQL server:
    ```bash
    psql -d "postgres://<username>:<password>@<host>:<port>/<database-name>"
    ```
@@ -63,19 +83,96 @@ To enable pgvectorscale:
     CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
     ```
 
-   The `CASCADE` automatically installs the dependencies.
+   The `CASCADE` automatically installs `pgvector`.
 
-## Test pgvectorscale performance
+1. Create a table with an embedding column. For example:
 
-To check the Timescale benchmarks in your pgvectorscale environment:
+    ```postgresql
+    CREATE TABLE IF NOT EXISTS document_embedding  (
+        id BIGINT PRIMARY KEY GENERATED BY DEFAULT AS IDENTITY,
+        document_id BIGINT FOREIGN KEY(document.id)
+        metadata JSONB,
+        contents TEXT,
+        embedding VECTOR(1538)
+    )
+    ```
 
-1. Jonetas, this is for you :-). 
+1. Populate the table any way you like. Please see the [pgvector instructions](https://github.com/pgvector/pgvector/blob/master/README.md#storing) and [list of clients](https://github.com/pgvector/pgvector/blob/master/README.md#languages) for more information.
+1. Create a StreamingDiskANN index on the embedding column
+    ```postgresql
+    CREATE INDEX document_embedding_idx ON document_embedding
+    USING diskann (embedding);
+    ```
+1. Use the following query to find the 10 closest embeddings using the index
+
+    ```postgresql
+    SELECT *
+    FROM document_embedding
+    ORDER BY embedding <=> $1
+    LIMIT 10
+    ```
+
+    Note: as of now we only support cosine distance (`<=>`) queries. Please file an issue to request additional distance types.
+
+## Tunning
+
+The StreamingDiskANN index comes with **smart defaults** but also the ability to customize it's behavior. There are two types of parameters: index build-time parameters that are specified when an index is created and query-time parameters that can be tuned when querying an index.
+
+We suggest setting the index build-time paramers for major changes to index operations while query-time parameters can be used to tune the accuracy/performancy tradeoff for individual queries.
+
+ We expect most people to tune the query-time parameters (if any) and leave the index build time parameters set to default.
+
+### StreamingDiskANN index build-time parameters
+
+These parameters can be set when an index is created.
+
+| Parameter name   | Description                                                                                                                                                    | Default value |
+|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| `storage_layout` | `memory_optimized` which uses SBQ to compress vector data or `plain` which stores data uncompressed | memory_optimized
+| `num_neighbors`    | Sets the maximum number of neighbors per node. Higher values increase accuracy but make the graph traversal slower.                                           | 50            |
+| `search_list_size` | This is the S parameter used in the greedy search algorithm used during construction. Higher values improve graph quality at the cost of slower index builds. | 100           |
+| `max_alpha`        | Is the alpha parameter in the algorithm. Higher values improve graph quality at the cost of slower index builds.                                              | 1.2           |
+| `num_dimensions` | The number of dimensions to index. By default, all dimensions are indexed. But you can also index less dimensions to make use of Matryoshka embeddings | 0 (all dimensions)
+| `num_bits_per_dimension` | Number of bits used to encode each dimension when using SBQ | 2 for less than 900 dimensions, 1 otherwise
+
+An example of how to set the `num_neighbors` parameter is:
+
+```sql
+CREATE INDEX document_embedding_idx ON document_embedding
+USING diskann (embedding) WITH(num_neighbors=50);
+```
+
+#### StreamingDiskANN query-time parameters
+
+You can also set two parameter to control the accuracy vs. query speed trade-off at query time. We suggest adjusting `diskann.query_rescore` to fine-tune accuracy.
+
+| Parameter name   | Description                                                                                                                                                    | Default value |
+|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| `diskann.query_search_list_size` | The number of additional candidates considered during the graph search. | 100
+| `diskann.query_rescore` | The number of elements rescored (0 to disable rescoring) | 50
+
+
+You can set the value by using `SET` before executing a query. For example:
+
+```sql
+SET diskann.query_rescore = 400;
+```
+
+Note the [SET command](https://www.postgresql.org/docs/current/sql-set.html) applies to the entire session (database connection) from the point of execution. You can use a transaction-local variant using `LOCAL` which will
+be reset after the end of the transaction:
+
+```sql
+BEGIN;
+SET LOCAL diskann.query_search_list_size= 10;
+SELECT * FROM document_embedding ORDER BY embedding <=> $1 LIMIT 10
+COMMIT;
+```
 
 ## Get involved
 
-pgvectorscale is still at an early stage. Now is a great time to help shape the 
-direction of this project; we are currently deciding priorities. Have a look at the 
-list of features we're thinking of working on. Feel free to comment, expand 
+pgvectorscale is still at an early stage. Now is a great time to help shape the
+direction of this project; we are currently deciding priorities. Have a look at the
+list of features we're thinking of working on. Feel free to comment, expand
 the list, or hop on the Discussions forum.
 
 ## About Timescale
