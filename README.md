@@ -7,13 +7,12 @@
 <h3>Use pgvectorscale to build scalable AI applications with higher performance,
 embedding search and cost-efficient storage. </h3>
 
-[![Docs](https://img.shields.io/badge/Read_the_Timescale_docs-black?style=for-the-badge&logo=readthedocs&logoColor=white)](https://docs.timescale.com/)
 [![SLACK](https://img.shields.io/badge/Ask_the_Timescale_community-black?style=for-the-badge&logo=slack&logoColor=white)](https://timescaledb.slack.com/archives/C4GT3N90X)
-[![Try Timescale for free](https://img.shields.io/badge/Try_Timescale_for_free-black?style=for-the-badge&logo=timescale&logoColor=white)](https://console.cloud.timescale.com/signup)
+[![Try Timescale for free](https://img.shields.io/badge/Try_Timescale_for_free-black?style=for-the-badge&logo=timescale&logoColor=white)](https://tsdb.co/gh-pgvector-signup)
 </div>
 
 
-pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations:
+   pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations:
 - A new index type called StreamingDiskANN,  inspired by the [DiskANN](https://github.com/microsoft/DiskANN) algorithm, based on research from Microsoft
 - Statistical Binary Quantization: developed by Timescale researchers, This compression method improves on standard Binary Quantization.
 
@@ -27,52 +26,62 @@ Timescale’s benchmarks reveal that with pgvectorscale, PostgreSQL achieves **2
 PostgreSQL costs are 21% those of Pinecone s1, just saying.
 </div>
 
-In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language] using the [PGRX framework](https://github.com/pgcentralfoundation/pgrx),
-offering the PostgreSQL community a new avenue for contributing to vector support.
+For more information about pgvectorscale performance, see the [benchmarking blog post](TODO).
 
-If you are an **App developer or DBA**, see the rest of this document for how to install and use vectorscale's StreamingDiskANN index.
+Timescale offers the following performance journeys:
 
-If you **want to contribute** to this extension, see how to [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md).
+* **App developer or DBA**: use pgvectorscale directly from SQL on your data.
+   * [Create a pgvectorscale environment](#create-a-pgvectorscale-environment)
+   * [Get started with pgvectorscale](#get-started-with-pgvectorscale)
+* **Extension contributor**: contribute to pgvectorscale.
+   * [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md).
 
-For more information about **pgvectorscale performance**, see our [benchmarking blog post](TODO).
-
-## Installation
-
-Currently, we offer docker images as well as source installation for Linux or Mac for self-hosted installs. We also offer the ability to enable pgvectorscale in a Timescale cloud service.
-
-### Docker
-
-pgvectorscale comes installed in our [docker image](https://hub.docker.com/r/timescale/timescaledb-ha). See [these instruction](https://docs.timescale.com/self-hosted/latest/install/installation-docker/) for details on how to use the image.
+   In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language] using the [PGRX framework](https://github.com/pgcentralfoundation/pgrx),
+   offering the PostgreSQL community a new avenue for contributing to vector support.
 
 
+## pgvectorscale Prerequisites
 
-### Installing from source into an existing PostgreSQL instance
+Before you start working with pgai, you need:
 
-```
-# install prerequisites
-## rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-## pgrx
-cargo install --locked cargo-pgrx
-cargo pgrx init --pg16 pg_config
+* A postgres client like [psql v16](https://docs.timescale.com/use-timescale/latest/integrations/query-admin/psql/) or [PopSQL](https://docs.timescale.com/use-timescale/latest/popsql/)
+* [Docker](https://docs.docker.com/get-docker/) - if you prefer to use pgvectorscale locally
 
-#download, build and install pgvectorscale
-cd /tmp
-git clone --branch <version> https://github.com/timescale/pgvectorscale
-cd pgvectorscale/pgvectorscale
-cargo pgrx install --release
-```
 
-You can also take a look at [our documentation for extension developers](./DEVELOPMENT.md) for more complete instructions.
+## Create a pgvectorscale environment
 
-### Enable pgvectorscale in a Timescale service
+The fastest ways to run PostgreSQL with TimescaleDB and pgvectorscale are:
 
-To enable pgvectorscale create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services). If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
+* [Enable pgvectorscale in a pre-built Docker container](#enable-pgai-in-a-pre-built-docker-container)
+* [Enable pgvectorscale in a Timescale Cloud service](#enable-pgai-in-a-timescale-cloud-service)
+
+### Enable pgvectorscale in a pre-built Docker container
+
+1.  [Run the TimescaleDB Docker image](https://docs.timescale.com/self-hosted/latest/install/installation-docker/).
+
+1. Connect to your database:
+   ```bash
+   psql -d "postgres://<username>:<password>@<host>:<port>/<database-name>"
+   ```
+
+1. Create the pgvectorscale extension:
+
+    ```sql
+    CREATE EXTENSION IF NOT EXISTS vectorscale CASCADE;
+    ```
+
+   The `CASCADE` automatically installs `pgvector`.
+
+### Enable pgvectorscale in a Timescale Cloud service
+
+To enable pgvectorscale:
+
+1. Create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services).
+
+   If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
    after the pgvectorscale release date.
 
-
-## Getting Started
-1. Connect to your PostgreSQL server:
+1. Connect to your Timescale service:
    ```bash
    psql -d "postgres://<username>:<password>@<host>:<port>/<database-name>"
    ```
@@ -84,6 +93,10 @@ To enable pgvectorscale create a new [Timescale Service](https://console.cloud.t
     ```
 
    The `CASCADE` automatically installs `pgvector`.
+
+
+## Get started with pgvectorscale
+
 
 1. Create a table with an embedding column. For example:
 
@@ -97,13 +110,15 @@ To enable pgvectorscale create a new [Timescale Service](https://console.cloud.t
     )
     ```
 
-1. Populate the table any way you like. Please see the [pgvector instructions](https://github.com/pgvector/pgvector/blob/master/README.md#storing) and [list of clients](https://github.com/pgvector/pgvector/blob/master/README.md#languages) for more information.
-1. Create a StreamingDiskANN index on the embedding column
+1. Populate the table. 
+
+   For more information, see the [pgvector instructions](https://github.com/pgvector/pgvector/blob/master/README.md#storing) and [list of clients](https://github.com/pgvector/pgvector/blob/master/README.md#languages).
+1. Create a StreamingDiskANN index on the embedding column:
     ```postgresql
     CREATE INDEX document_embedding_idx ON document_embedding
     USING diskann (embedding);
     ```
-1. Use the following query to find the 10 closest embeddings using the index
+1. Find the 10 closest embeddings using the index. 
 
     ```postgresql
     SELECT *
@@ -112,7 +127,8 @@ To enable pgvectorscale create a new [Timescale Service](https://console.cloud.t
     LIMIT 10
     ```
 
-    Note: as of now we only support cosine distance (`<=>`) queries. Please file an issue to request additional distance types.
+    Note: pgvectorscale currently support cosine distance (`<=>`) queries. If you would like additional distance types, 
+    [create an issue](https://github.com/timescale/pgvectorscale/issues).
 
 ## Tunning
 
