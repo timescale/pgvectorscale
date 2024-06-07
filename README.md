@@ -174,7 +174,7 @@ These parameters can be set when an index is created.
 | `num_neighbors`    | Sets the maximum number of neighbors per node. Higher values increase accuracy but make the graph traversal slower.                                           | 50            |
 | `search_list_size` | This is the S parameter used in the greedy search algorithm used during construction. Higher values improve graph quality at the cost of slower index builds. | 100           |
 | `max_alpha`        | Is the alpha parameter in the algorithm. Higher values improve graph quality at the cost of slower index builds.                                              | 1.2           |
-| `num_dimensions` | The number of dimensions to index. By default, all dimensions are indexed. But you can also index less dimensions to make use of Matryoshka embeddings | 0 (all dimensions)
+| `num_dimensions` | The number of dimensions to index. By default, all dimensions are indexed. But you can also index less dimensions to make use of [Matryoshka embeddings](https://huggingface.co/blog/matryoshka) | 0 (all dimensions)
 | `num_bits_per_dimension` | Number of bits used to encode each dimension when using SBQ | 2 for less than 900 dimensions, 1 otherwise
 
 An example of how to set the `num_neighbors` parameter is:
@@ -186,7 +186,7 @@ USING diskann (embedding) WITH(num_neighbors=50);
 
 #### StreamingDiskANN query-time parameters
 
-You can also set two parameter to control the accuracy vs. query speed trade-off at query time. We suggest adjusting `diskann.query_rescore` to fine-tune accuracy.
+You can also set two parameters to control the accuracy vs. query speed trade-off at query time. We suggest adjusting `diskann.query_rescore` to fine-tune accuracy.
 
 | Parameter name   | Description                                                                                                                                                    | Default value |
 |------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
