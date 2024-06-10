@@ -7,7 +7,7 @@
 <h3>Use pgvectorscale to build scalable AI applications with higher performance,
 embedding search and cost-efficient storage. </h3>
 
-[![Discord](https://img.shields.io/badge/Ask_the_Timescale_community-black?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QedVDxRb)
+[![Discord](https://img.shields.io/badge/Join_us_on_Discord-black?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/QedVDxRb)
 [![Try Timescale for free](https://img.shields.io/badge/Try_Timescale_for_free-black?style=for-the-badge&logo=timescale&logoColor=white)](https://tsdb.co/gh-pgvector-signup)
 </div>
 
