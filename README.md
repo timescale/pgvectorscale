@@ -102,7 +102,7 @@ You can install pgvectorscale from source and install it in an existing PostgreS
 
 ### Enable pgvectorscale in a Timescale Cloud service
 
-Note: the instructions below are for Timescale's standrd compute instance. For production vector workloads, we’re offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
+Note: the instructions below are for Timescale's standard compute instance. For production vector workloads, we’re offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
 
 To enable pgvectorscale:
 
