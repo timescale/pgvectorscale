@@ -106,7 +106,7 @@ Note: the instructions below are for Timescale's standard compute instance. For 
 
 To enable pgvectorscale:
 
-1. Create a new [Timescale Service](https://console.cloud.timescale.com/dashboard/create_services).
+1. Create a new [Timescale account](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch).
 
    If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
    after the pgvectorscale release date.
@@ -222,7 +222,7 @@ the list, or hop on the Discussions forum.
 
 ## About Timescale
 
-Timescale Cloud is a high-performance developer focused cloud that provides PostgreSQL services
+[Timescale Cloud](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch) is a high-performance developer focused cloud that provides PostgreSQL services
 enhanced with our blazing fast vector search. Timescale services are built using TimescaleDB and
 PostgreSQL extensions, like this one. Timescale Cloud provides high availability, streaming
 backups, upgrades over time, roles and permissions, and great security.
