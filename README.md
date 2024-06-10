@@ -37,6 +37,7 @@ offering the PostgreSQL community a new avenue for contributing to vector suppor
 
 If you **want to contribute** to this extension, see how to [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md).
 
+For production vector workloads, we’re offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
 
 ## Installation
 
@@ -100,6 +101,8 @@ You can install pgvectorscale from source and install it in an existing PostgreS
    The `CASCADE` automatically installs `pgvector`.
 
 ### Enable pgvectorscale in a Timescale Cloud service
+
+Note: the instructions below are for Timescale's standrd compute instance. For production vector workloads, we’re offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
 
 To enable pgvectorscale:
 
