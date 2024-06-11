@@ -103,7 +103,7 @@ Note: the instructions below are for Timescale's standard compute instance. For 
 
 To enable pgvectorscale:
 
-1. Create a new [Timescale account](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch).
+1. Create a new [Timescale Service](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch).
 
    If you want to use an existing service, pgvectorscale is added as an available extension on the first maintenance window
    after the pgvectorscale release date.
