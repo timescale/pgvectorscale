@@ -156,7 +156,7 @@ To enable pgvectorscale:
     Note: pgvectorscale currently support cosine distance (`<=>`) queries. If you would like additional distance types,
     [create an issue](https://github.com/timescale/pgvectorscale/issues).
 
-## Tunning
+## Tuning
 
 The StreamingDiskANN index comes with **smart defaults** but also the ability to customize it's behavior. There are two types of parameters: index build-time parameters that are specified when an index is created and query-time parameters that can be tuned when querying an index.
 
