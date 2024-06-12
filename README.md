@@ -28,7 +28,7 @@ To learn more about the performance impact of pgvectorscale, and details about b
 In contrast to pgvector, which is written in C, pgvectorscale is developed in [Rust][rust-language] using the [PGRX framework](https://github.com/pgcentralfoundation/pgrx),
 offering the PostgreSQL community a new avenue for contributing to vector support.
 
-**Application developer or DBAs** can use pgvectorscale with their PostgreSQL databases.
+**Application developers or DBAs** can use pgvectorscale with their PostgreSQL databases.
    * [Install pgvectorscale](#installation)
    * [Get started using pgvectorscale](#get-started-with-pgvectorscale)
 
@@ -156,11 +156,11 @@ To enable pgvectorscale:
     Note: pgvectorscale currently support cosine distance (`<=>`) queries. If you would like additional distance types,
     [create an issue](https://github.com/timescale/pgvectorscale/issues).
 
-## Tunning
+## Tuning
 
 The StreamingDiskANN index comes with **smart defaults** but also the ability to customize it's behavior. There are two types of parameters: index build-time parameters that are specified when an index is created and query-time parameters that can be tuned when querying an index.
 
-We suggest setting the index build-time paramers for major changes to index operations while query-time parameters can be used to tune the accuracy/performancy tradeoff for individual queries.
+We suggest setting the index build-time paramers for major changes to index operations while query-time parameters can be used to tune the accuracy/performance tradeoff for individual queries.
 
  We expect most people to tune the query-time parameters (if any) and leave the index build time parameters set to default.
 
