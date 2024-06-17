@@ -21,7 +21,20 @@ on:
 
 jobs:
   packager:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runs_on }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ amd64, arm64 ]
+        include:
+          - platform: amd64
+            runs_on: ubuntu-latest
+            rustflags: '-C target-feature=+avx2,+fma'
+          - platform: arm64
+            runs_on: cloud-image-runner-arm64
+            rustflags: ''
+
     env:
       PG_VER: ${{ github.event.inputs.PG }}
       PG_MIN_VER: ${{ github.event.inputs.PG_MIN }}
@@ -42,7 +55,7 @@ jobs:
 
     - name: Install Deb builder specific packages
       run: |
-        sudo apt-get install dpkg-dev debhelper
+        sudo apt-get install dpkg-dev debhelper build-essential
 
     - name: Install PostgreSQL ${{ env.PG_VER }}
       uses: ./.github/actions/install-postgres
@@ -68,7 +81,7 @@ jobs:
       id: debbuild
       run: |
         export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-        (cd ${{ env.TAG_DIR }} && make package)
+        (cd ${{ env.TAG_DIR }} &&  ${{ matrix.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.rustflags) || '' }} make package)
         bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ env.PG_VER }}"
 
   # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
@@ -76,5 +89,5 @@ jobs:
     - name: Upload deb as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: pgvectorscale-${{ env.TAG }}-pg${{ env.PG_VER }}
+        name: pgvectorscale-${{ env.TAG }}-pg${{ env.PG_VER }}-${{ matrix.platform }}
         path: pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
