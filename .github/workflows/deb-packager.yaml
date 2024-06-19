@@ -6,14 +6,6 @@ on:
         description: 'Tag'
         required: true
         default: ''
-      PG:
-        description: 'PG major version. Default: 16'
-        required: false
-        default: '16'
-      PG_MIN:
-        description: 'PG minor version. Default: 1'
-        required: false
-        default: '1'
       TAG_GIT_REF:
         description: 'Tag git Ref (leave empty for same as Tag)'
         required: false
@@ -21,23 +13,25 @@ on:
 
 jobs:
   packager:
-    runs-on: ${{ matrix.runs_on }}
+    runs-on: ${{ matrix.platform.runs_on }}
 
     strategy:
       fail-fast: false
       matrix:
-        platform: [ amd64, arm64 ]
-        include:
-          - platform: amd64
+        pg:
+          - major: 15
+            minor: 7
+          - major: 16
+            minor: 3
+        platform:
+          - type: amd64
             runs_on: ubuntu-latest
             rustflags: '-C target-feature=+avx2,+fma'
-          - platform: arm64
+          - type: arm64
             runs_on: cloud-image-runner-arm64
             rustflags: ''
 
     env:
-      PG_VER: ${{ github.event.inputs.PG }}
-      PG_MIN_VER: ${{ github.event.inputs.PG_MIN }}
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
       MAKE_JOBS: 6
@@ -57,10 +51,10 @@ jobs:
       run: |
         sudo apt-get install dpkg-dev debhelper build-essential
 
-    - name: Install PostgreSQL ${{ env.PG_VER }}
+    - name: Install PostgreSQL ${{ matrix.pg.major }}
       uses: ./.github/actions/install-postgres
       with:
-        pg-version: ${{ env.PG_VER }}.${{ env.PG_MIN_VER }}
+        pg-version: ${{ matrix.pg.major }}.${{ matrix.pg.minor }}
         pg-src-dir: ~/${{ env.PG_SRC_DIR }}
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
 
@@ -81,13 +75,13 @@ jobs:
       id: debbuild
       run: |
         export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-        (cd ${{ env.TAG_DIR }} &&  ${{ matrix.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.rustflags) || '' }} make package)
-        bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ env.PG_VER }}"
+        (cd ${{ env.TAG_DIR }} &&  ${{ matrix.platform.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} make package)
+        bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ matrix.pg.major }}"
 
   # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
   # The artifact will have a TTL of 90 days
     - name: Upload deb as Artifact
       uses: actions/upload-artifact@v4
       with:
-        name: pgvectorscale-${{ env.TAG }}-pg${{ env.PG_VER }}-${{ matrix.platform }}
+        name: pgvectorscale-${{ env.TAG }}-pg${{ matrix.pg.major }}-${{ matrix.platform.type }}
         path: pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
