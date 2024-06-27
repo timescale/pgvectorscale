@@ -18,8 +18,6 @@ mod storage_common;
 mod upgrade_test;
 mod vacuum;
 
-extern crate blas_src;
-
 pub mod distance;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
