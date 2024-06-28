@@ -8,6 +8,9 @@ crate-type = ["cdylib", "rlib"]
 
 [features]
 default = ["pg16"]
+pg12 = ["pgrx/pg12", "pgrx-tests/pg12"]
+pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
+pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]
 pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg_test = []
@@ -17,10 +20,6 @@ memoffset = "0.9.0"
 pgrx = "=0.11.4"
 rkyv = { version="0.7.42", features=["validation"]}
 simdeez = {version = "1.0.8"}
-reductive = { version = "0.9.0"}
-ndarray = { version = "0.15.0", features = ["blas"] }
-blas-src = { version = "0.8", features = ["openblas"] }
-openblas-src = { version = "0.10", features = ["cblas", "system"] }
 rand = { version = "0.8", features = [ "small_rng" ] }
 rand_chacha = "0.3"
 rand_core = "0.6"
