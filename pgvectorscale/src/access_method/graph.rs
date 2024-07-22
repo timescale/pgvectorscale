@@ -18,11 +18,18 @@ use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
     distance: f32,
+    distance_tie_break: usize, /* only used if distance = 0. This ensures a consistent order of results when distance = 0 */
     private_data: PD,
 }
 
 impl<PD> PartialOrd for ListSearchNeighbor<PD> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self.distance == 0.0 && other.distance == 0.0 {
+            /* this logic should be consistent with what's used during pruning */
+            return self
+                .distance_tie_break
+                .partial_cmp(&other.distance_tie_break);
+        }
         self.distance.partial_cmp(&other.distance)
     }
 }
@@ -49,6 +56,7 @@ impl<PD> ListSearchNeighbor<PD> {
             index_pointer,
             private_data,
             distance,
+            distance_tie_break: 0,
         }
     }
 
@@ -62,6 +70,7 @@ pub struct ListSearchResult<QDM, PD> {
     visited: Vec<ListSearchNeighbor<PD>>,
     inserted: HashSet<ItemPointer>,
     pub sdm: Option<QDM>,
+    tie_break_item_pointer: Option<ItemPointer>, /* This records the item pointer of the query. It's used for tie-breaking when the distance = 0 */
     pub stats: GreedySearchStats,
 }
 
@@ -72,6 +81,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             visited: vec![],
             inserted: HashSet::new(),
             sdm: None,
+            tie_break_item_pointer: None,
             stats: GreedySearchStats::new(),
         }
     }
@@ -79,6 +89,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
     fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         init_ids: Vec<ItemPointer>,
         sdm: S::QueryDistanceMeasure,
+        tie_break_item_pointer: Option<ItemPointer>,
         search_list_size: usize,
         meta_page: &MetaPage,
         gns: &GraphNeighborStore,
@@ -86,6 +97,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
     ) -> Self {
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
+            tie_break_item_pointer,
             candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
             visited: Vec::with_capacity(search_list_size * 2),
             //candidate_storage: Vec::with_capacity(search_list_size * neigbors),
@@ -107,8 +119,15 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
     }
 
     /// Internal function
-    pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
+    pub fn insert_neighbor(&mut self, mut n: ListSearchNeighbor<PD>) {
         self.stats.record_candidate();
+        if n.distance == 0.0 {
+            /* record the tie break if distance is 0 */
+            if let Some(tie_break_item_pointer) = self.tie_break_item_pointer {
+                let d = tie_break_item_pointer.ip_distance(n.index_pointer);
+                n.distance_tie_break = d;
+            }
+        }
         self.candidates.push(Reverse(n));
     }
 
@@ -213,7 +232,7 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(candidates, storage, stats);
+                let new_list = self.prune_neighbors(neighbors_of, candidates, storage, stats);
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -248,6 +267,7 @@ impl<'a> Graph<'a> {
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     fn greedy_search_for_build<S: Storage>(
         &self,
+        index_pointer: IndexPointer,
         query: PgVector,
         meta_page: &MetaPage,
         storage: &S,
@@ -264,6 +284,7 @@ impl<'a> Graph<'a> {
         let mut l = ListSearchResult::new(
             init_ids.unwrap(),
             dm,
+            Some(index_pointer),
             search_list_size,
             meta_page,
             self.get_neighbor_store(),
@@ -293,6 +314,7 @@ impl<'a> Graph<'a> {
         ListSearchResult::new(
             init_ids.unwrap(),
             dm,
+            None,
             search_list_size,
             &self.meta_page,
             self.get_neighbor_store(),
@@ -331,6 +353,7 @@ impl<'a> Graph<'a> {
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
         &self,
+        neighbors_of: ItemPointer,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -419,17 +442,43 @@ impl<'a> Graph<'a> {
                     debug_assert!(distance_between_candidate_and_existing_neighbor >= 0.0);
 
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
-                    let factor =
-                        if distance_between_candidate_and_existing_neighbor < 0.0 + f32::EPSILON {
-                            if distance_between_candidate_and_point < 0.0 + f32::EPSILON {
-                                1.0
+                    let factor = if distance_between_candidate_and_existing_neighbor
+                        < 0.0 + f32::EPSILON
+                    {
+                        if distance_between_candidate_and_point < 0.0 + f32::EPSILON {
+                            /* Both distances are 0. This is a special and interesting case because the neighbors of all
+                            other nodes will be the same on both nodes. This, in turn means, that we would have the same
+                            nieghbors on both. But, if the num_neighbors is small, we risk creating a unconnected subgraph all
+                            pointing to each other (all nodes at the same point). For this reason, we create a consistent way
+                            to rank the distance even at the same point (by using the item-pointer distance), and determine
+                            the factor according to this new distance. This means that some 0-distance node will be pruned at alpha=1.0
+
+                            Note: with sbq these equivalence relations are actually not uncommon */
+                            let ip_distance_between_candidate_and_point = candidate_neighbor
+                                .get_index_pointer_to_neighbor()
+                                .ip_distance(neighbors_of);
+
+                            let ip_distance_between_candidate_and_existing_neighbor =
+                                candidate_neighbor
+                                    .get_index_pointer_to_neighbor()
+                                    .ip_distance(existing_neighbor.get_index_pointer_to_neighbor());
+
+                            if ip_distance_between_candidate_and_point
+                                <= ip_distance_between_candidate_and_existing_neighbor
+                            {
+                                0.99
                             } else {
-                                f64::MAX
+                                /* make sure this gets pruned for alpha=1.0 to make room for other nodes at higher distances */
+                                1.01
                             }
                         } else {
-                            distance_between_candidate_and_point as f64
-                                / distance_between_candidate_and_existing_neighbor as f64
-                        };
+                            f64::MAX
+                        }
+                    } else {
+                        distance_between_candidate_and_point as f64
+                            / distance_between_candidate_and_existing_neighbor as f64
+                    };
+
                     max_factors[j] = max_factors[j].max(factor)
                 }
             }
@@ -466,8 +515,13 @@ impl<'a> Graph<'a> {
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
-        let v =
-            self.greedy_search_for_build(vec, meta_page, storage, &mut stats.greedy_search_stats);
+        let v = self.greedy_search_for_build(
+            index_pointer,
+            vec,
+            meta_page,
+            storage,
+            &mut stats.greedy_search_stats,
+        );
 
         let (_, neighbor_list) = self.add_neighbors(
             storage,

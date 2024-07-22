@@ -121,6 +121,16 @@ impl ItemPointer {
             len: len as _,
         }
     }
+
+    pub fn ip_distance(self, other: Self) -> usize {
+        /* distance measure based on on-disk distance */
+        /* The two abs() give better results than taking one abs() at the end. Not quite sure why but I think
+         * It creates more links within the equivalence class  */
+        let block_diff = (self.block_number as isize - other.block_number as isize).abs() as usize;
+        let offset_diff = (self.offset as isize - other.offset as isize).abs() as usize;
+        debug_assert!(offset_diff < pgrx::pg_sys::MaxOffsetNumber as _);
+        (block_diff * (pgrx::pg_sys::MaxOffsetNumber as usize) + offset_diff) as usize
+    }
 }
 
 pub type IndexPointer = ItemPointer;
