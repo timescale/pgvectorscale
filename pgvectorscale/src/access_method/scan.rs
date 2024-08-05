@@ -226,6 +226,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 
     fn next_with_resort<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         &mut self,
+        scan: &PgBox<pg_sys::IndexScanDescData>,
         _index: &PgRelation,
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
@@ -243,6 +244,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                 Some((heap_pointer, index_pointer)) => {
                     self.full_distance_comparisons += 1;
                     let distance = storage.get_full_distance_for_resort(
+                        scan,
                         self.lsr.sdm.as_ref().unwrap(),
                         index_pointer,
                         heap_pointer,
@@ -250,16 +252,24 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
                         &mut self.lsr.stats,
                     );
 
-                    if self.resort_buffer.len() > 1 {
-                        self.streaming_stats
-                            .update(distance, distance - self.streaming_stats.max_distance);
-                    }
+                    match distance {
+                        None => {
+                            /* No entry found in heap */
+                            continue;
+                        }
+                        Some(distance) => {
+                            if self.resort_buffer.len() > 1 {
+                                self.streaming_stats
+                                    .update(distance, distance - self.streaming_stats.max_distance);
+                            }
 
-                    self.resort_buffer.push(ResortData {
-                        heap_pointer,
-                        index_pointer,
-                        distance,
-                    });
+                            self.resort_buffer.push(ResortData {
+                                heap_pointer,
+                                index_pointer,
+                                distance,
+                            });
+                        }
+                    }
                 }
                 None => {
                     break;
@@ -373,7 +383,7 @@ pub extern "C" fn amgettuple(
                 quantizer,
                 &state.meta_page,
             );
-            let next = iter.next_with_resort(&indexrel, &bq);
+            let next = iter.next_with_resort(&scan, &indexrel, &bq);
             get_tuple(state, next, scan)
         }
         StorageState::Plain(iter) => {
@@ -385,7 +395,7 @@ pub extern "C" fn amgettuple(
                 /* no need to resort */
                 iter.next(&storage)
             } else {
-                iter.next_with_resort(&indexrel, &storage)
+                iter.next_with_resort(&scan, &indexrel, &storage)
             };
             get_tuple(state, next, scan)
         }

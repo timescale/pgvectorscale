@@ -1,5 +1,7 @@
 use std::pin::Pin;
 
+use pgrx::{pg_sys, PgBox};
+
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
@@ -74,12 +76,13 @@ pub trait Storage {
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
+        scan: &PgBox<pg_sys::IndexScanDescData>,
         query: &Self::QueryDistanceMeasure,
         index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         stats: &mut S,
-    ) -> f32;
+    ) -> Option<f32>;
 
     fn visit_lsn(
         &self,
