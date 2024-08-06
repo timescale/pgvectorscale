@@ -969,6 +969,7 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized",
+            "bq_speedup_default_neighbors",
         )?;
         Ok(())
     }
@@ -978,6 +979,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = io_optimized",
+            "bq_speedup_few_neighbors",
         )?;
         Ok(())
     }
@@ -1014,6 +1016,7 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized, num_dimensions=768",
+            "bq_speedup_num_dimensions",
         )?;
         Ok(())
     }
@@ -1023,14 +1026,16 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = io_optimized, num_neighbors=10",
             300,
+            "bq_speedup",
         )?;
         Ok(())
     }
 
     #[pg_test]
-    unsafe fn test_bq_speedup_compressed_index_creation_default_neighbors() -> spi::Result<()> {
+    unsafe fn test_bq_compressed_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = memory_optimized",
+            "bq_compressed_default_neighbors",
         )?;
         Ok(())
     }
@@ -1040,6 +1045,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = memory_optimized",
+            "bq_compressed_few_neighbors",
         )?;
         Ok(())
     }
@@ -1082,6 +1088,7 @@ mod tests {
     unsafe fn test_bq_compressed_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = memory_optimized, num_dimensions=768",
+            "bq_compressed_num_dimensions",
         )?;
         Ok(())
     }
@@ -1091,6 +1098,7 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = memory_optimized, num_neighbors=10",
             300,
+            "bq_compressed",
         )?;
         Ok(())
     }

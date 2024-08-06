@@ -361,6 +361,7 @@ mod tests {
     unsafe fn test_plain_storage_index_creation_many_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, storage_layout = plain",
+            "plain_many_neighbors",
         )?;
         Ok(())
     }
@@ -370,6 +371,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = plain",
+            "plain_few_neighbors",
         )?;
         Ok(())
     }
@@ -413,6 +415,7 @@ mod tests {
     unsafe fn test_plain_storage_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
+            "plain_num_dimensions",
         )?;
         Ok(())
     }
@@ -422,6 +425,7 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = plain, num_neighbors=30",
             50,
+            "plain",
         )?;
         Ok(())
     }
