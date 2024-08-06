@@ -470,15 +470,17 @@ pub mod tests {
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_creation_and_accuracy_scaffold(
         index_options: &str,
+        name: &str,
     ) -> spi::Result<()> {
+        let table_name = format!("test_data_icaa_{}", name);
         Spi::run(&format!(
-            "CREATE TABLE test_data (
+            "CREATE TABLE {table_name} (
                 embedding vector (1536)
             );
 
             select setseed(0.5);
            -- generate 300 vectors
-            INSERT INTO test_data (embedding)
+            INSERT INTO {table_name} (embedding)
             SELECT
                 *
             FROM (
@@ -489,7 +491,7 @@ pub mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -497,7 +499,7 @@ pub mod tests {
             SELECT
                 *
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> (
                     SELECT
@@ -515,7 +517,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -531,7 +533,7 @@ pub mod tests {
 
         Spi::run(&format!("
             -- test insert 2 vectors
-            INSERT INTO test_data (embedding)
+            INSERT INTO {table_name} (embedding)
             SELECT
                 *
             FROM (
@@ -547,7 +549,7 @@ pub mod tests {
             SELECT
                 *
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> (
                     SELECT
@@ -555,7 +557,7 @@ pub mod tests {
             FROM generate_series(1, 1536));
 
             -- test insert 10 vectors to search for that aren't random
-            INSERT INTO test_data (embedding)
+            INSERT INTO {table_name} (embedding)
             SELECT
                 *
             FROM (
@@ -579,7 +581,7 @@ pub mod tests {
             SELECT
                 ctid
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> $1::vector
             LIMIT 10
@@ -602,7 +604,7 @@ pub mod tests {
             SELECT
                 ctid
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> $1::vector
             LIMIT 10
@@ -626,7 +628,7 @@ pub mod tests {
             SELECT
                 ctid
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> $1::vector
             LIMIT 10
@@ -662,7 +664,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(
@@ -737,16 +739,21 @@ pub mod tests {
     }
 
     #[cfg(any(test, feature = "pg_test"))]
-    pub unsafe fn test_index_updates(index_options: &str, expected_cnt: i64) -> spi::Result<()> {
+    pub unsafe fn test_index_updates(
+        index_options: &str,
+        expected_cnt: i64,
+        name: &str,
+    ) -> spi::Result<()> {
+        let table_name = format!("test_data_index_updates_{}", name);
         Spi::run(&format!(
-            "CREATE TABLE test_data (
+            "CREATE TABLE {table_name} (
                 id int,
                 embedding vector (1536)
             );
 
             select setseed(0.5);
            -- generate 300 vectors
-            INSERT INTO test_data (id, embedding)
+            INSERT INTO {table_name} (id, embedding)
             SELECT
                 *
             FROM (
@@ -758,7 +765,7 @@ pub mod tests {
                 GROUP BY
                     i % {expected_cnt}) g;
 
-            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -766,7 +773,7 @@ pub mod tests {
             SELECT
                 *
             FROM
-                test_data
+                {table_name}
             ORDER BY
                 embedding <=> (
                     SELECT
@@ -784,7 +791,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -798,7 +805,7 @@ pub mod tests {
         Spi::run(&format!(
             "
 
-        --CREATE INDEX idx_id ON test_data(id);
+        --CREATE INDEX idx_id ON {table_name}(id);
 
         WITH CTE as (
             SELECT
@@ -809,9 +816,9 @@ pub mod tests {
             GROUP BY
             i % {expected_cnt}
         )
-        UPDATE test_data SET embedding = cte.embedding
+        UPDATE {table_name} SET embedding = cte.embedding
         FROM cte
-        WHERE test_data.id = cte.id;
+        WHERE {table_name}.id = cte.id;
 
         --DROP INDEX idx_id;
             ",
@@ -823,7 +830,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(
