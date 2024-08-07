@@ -14,13 +14,16 @@ pgvectorscale complements [pgvector][pgvector], the open-source vector data exte
 - A new index type called StreamingDiskANN, inspired by the [DiskANN](https://github.com/microsoft/DiskANN) algorithm, based on research from Microsoft.
 - Statistical Binary Quantization: developed by Timescale researchers, This compression method improves on standard Binary Quantization.
 
-On benchmark dataset of 50 million Cohere embeddings (768 dimensions each), PostgreSQL with pgvector and pgvectorscale achieves **28x lower p95 latency** and **16x higher query throughput** compared to Pinecone's storage optimized (s1) index for approximate nearest neighbor queries at 99% recall, all at 75% less cost when self-hosted on AWS EC2. 
+On a benchmark dataset of 50 million Cohere embeddings with 768 dimensions
+each, PostgreSQL with `pgvector` and `pgvectorscale` achieves **28x lower p95
+latency** and **16x higher query throughput** compared to Pinecone's storage
+optimized (s1) index for approximate nearest neighbor queries at 99% recall,
+all at 75% less cost when self-hosted on AWS EC2.
 
 <div align=center>
 
 ![Benchmarks](https://assets.timescale.com/docs/images/benchmark-comparison-pgvectorscale-pinecone.png)
 
-PostgreSQL with pgvector and pgvectorscale extensions outperformed Pinecone’s storage optimized (s1) and performance-optimized (p2) pod-based index types. 
 </div>
 
 To learn more about the performance impact of pgvectorscale, and details about benchmark methodology and results, see the [pgvector vs Pinecone comparison blog post](http://www.timescale.com/blog/pgvector-vs-pinecone).
@@ -67,7 +70,7 @@ You can install pgvectorscale from source and install it in an existing PostgreS
 
 1. Compile and install the extension
 
-    ```
+    ```bash
     # install prerequisites
     ## rust
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -88,6 +91,16 @@ You can install pgvectorscale from source and install it in an existing PostgreS
    ```bash
    psql -d "postgres://<username>:<password>@<host>:<port>/<database-name>"
    ```
+
+1. Ensure the pgvector extension is available:
+
+   ```sql
+   SELECT * FROM pg_available_extensions WHERE name = 'vector';
+   ```
+
+   If pgvector is not available, install it using the [pgvector installation
+   instructions][pgvector-install].
+
 
 1. Create the pgvectorscale extension:
 
@@ -226,3 +239,4 @@ Timescale is a PostgreSQL cloud company. To learn more visit the [timescale.com]
 
 [pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
 [rust-language]: https://www.rust-lang.org/
+[pgvector-install]: https://github.com/pgvector/pgvector?tab=readme-ov-file#installation

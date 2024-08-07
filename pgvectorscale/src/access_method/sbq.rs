@@ -14,7 +14,7 @@ use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, 
 
 use pgrx::{
     pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
-    PgRelation,
+    PgBox, PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 
@@ -276,12 +276,22 @@ impl SbqSearchDistanceMeasure {
                         &bq_vector[..self.quantized_dimensions],
                     )
                 } else {
-                    debug_assert!(self.quantized_vector.len() == bq_vector.len());
+                    debug_assert!(
+                        self.quantized_vector.len() == bq_vector.len(),
+                        "self.quantized_vector.len()={} bq_vector.len()={}",
+                        self.quantized_vector.len(),
+                        bq_vector.len()
+                    );
                     (self.quantized_vector.as_slice(), bq_vector)
                 }
             }
             GraphNeighborStore::Builder(_b) => {
-                debug_assert!(self.quantized_vector.len() == bq_vector.len());
+                debug_assert!(
+                    self.quantized_vector.len() == bq_vector.len(),
+                    "self.quantized_vector.len()={} bq_vector.len()={}",
+                    self.quantized_vector.len(),
+                    bq_vector.len()
+                );
                 (self.quantized_vector.as_slice(), bq_vector)
             }
         };
@@ -538,14 +548,6 @@ impl<'a> SbqSpeedupStorage<'a> {
             }
         }
     }
-
-    unsafe fn get_heap_table_slot_from_heap_pointer<T: StatsHeapNodeRead>(
-        &self,
-        heap_pointer: HeapPointer,
-        stats: &mut T,
-    ) -> TableSlot {
-        TableSlot::new(self.heap_rel, heap_pointer, stats)
-    }
 }
 
 pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
@@ -635,17 +637,28 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
+        scan: &PgBox<pgrx::pg_sys::IndexScanDescData>,
         qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         stats: &mut S,
-    ) -> f32 {
-        let slot = unsafe { self.get_heap_table_slot_from_heap_pointer(heap_pointer, stats) };
+    ) -> Option<f32> {
+        let slot_opt = unsafe {
+            TableSlot::from_index_heap_pointer(self.heap_rel, heap_pointer, scan.xs_snapshot, stats)
+        };
 
-        let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
+        let slot = slot_opt?;
+
+        let datum = unsafe {
+            slot.get_attribute(self.heap_attr)
+                .expect("vector attribute should exist in the heap")
+        };
         let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
-        self.get_distance_function()(vec.to_full_slice(), qdm.query.to_full_slice())
+        Some(self.get_distance_function()(
+            vec.to_full_slice(),
+            qdm.query.to_full_slice(),
+        ))
     }
 
     fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
@@ -956,6 +969,7 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized",
+            "bq_speedup_default_neighbors",
         )?;
         Ok(())
     }
@@ -965,6 +979,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = io_optimized",
+            "bq_speedup_few_neighbors",
         )?;
         Ok(())
     }
@@ -1001,6 +1016,7 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = io_optimized, num_dimensions=768",
+            "bq_speedup_num_dimensions",
         )?;
         Ok(())
     }
@@ -1010,14 +1026,16 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = io_optimized, num_neighbors=10",
             300,
+            "bq_speedup",
         )?;
         Ok(())
     }
 
     #[pg_test]
-    unsafe fn test_bq_speedup_compressed_index_creation_default_neighbors() -> spi::Result<()> {
+    unsafe fn test_bq_compressed_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = memory_optimized",
+            "bq_compressed_default_neighbors",
         )?;
         Ok(())
     }
@@ -1027,6 +1045,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = memory_optimized",
+            "bq_compressed_few_neighbors",
         )?;
         Ok(())
     }
@@ -1045,6 +1064,12 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_bq_compressed_storage_update_with_null() {
+        crate::access_method::vacuum::tests::test_update_with_null_scaffold(
+            "num_neighbors = 38, storage_layout = memory_optimized",
+        );
+    }
     #[pg_test]
     unsafe fn test_bq_compressed_storage_empty_table_insert() -> spi::Result<()> {
         crate::access_method::build::tests::test_empty_table_insert_scaffold(
@@ -1063,6 +1088,7 @@ mod tests {
     unsafe fn test_bq_compressed_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "storage_layout = memory_optimized, num_dimensions=768",
+            "bq_compressed_num_dimensions",
         )?;
         Ok(())
     }
@@ -1072,6 +1098,7 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = memory_optimized, num_neighbors=10",
             300,
+            "bq_compressed",
         )?;
         Ok(())
     }

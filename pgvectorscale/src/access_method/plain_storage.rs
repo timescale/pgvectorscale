@@ -11,7 +11,7 @@ use super::{
     storage_common::get_attribute_number_from_index,
 };
 
-use pgrx::PgRelation;
+use pgrx::{PgBox, PgRelation};
 
 use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
@@ -213,21 +213,31 @@ impl<'a> Storage for PlainStorage<'a> {
     }
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
+        scan: &PgBox<pgrx::pg_sys::IndexScanDescData>,
         qdm: &Self::QueryDistanceMeasure,
         _index_pointer: IndexPointer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         stats: &mut S,
-    ) -> f32 {
+    ) -> Option<f32> {
         /* Plain storage only needs to resort when the index is using less dimensions than the underlying data. */
         assert!(meta_page.get_num_dimensions() > meta_page.get_num_dimensions_to_index());
 
-        let slot = unsafe { TableSlot::new(self.heap_rel, heap_pointer, stats) };
+        let slot_opt = unsafe {
+            TableSlot::from_index_heap_pointer(self.heap_rel, heap_pointer, scan.xs_snapshot, stats)
+        };
+        let slot = slot_opt?;
         match qdm {
             PlainDistanceMeasure::Full(query) => {
-                let datum = unsafe { slot.get_attribute(self.heap_attr).unwrap() };
+                let datum = unsafe {
+                    slot.get_attribute(self.heap_attr)
+                        .expect("vector attribute should exist in the heap")
+                };
                 let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
-                self.get_distance_function()(vec.to_full_slice(), query.to_full_slice())
+                Some(self.get_distance_function()(
+                    vec.to_full_slice(),
+                    query.to_full_slice(),
+                ))
             }
         }
     }
@@ -351,6 +361,7 @@ mod tests {
     unsafe fn test_plain_storage_index_creation_many_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, storage_layout = plain",
+            "plain_many_neighbors",
         )?;
         Ok(())
     }
@@ -360,6 +371,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=10, storage_layout = plain",
+            "plain_few_neighbors",
         )?;
         Ok(())
     }
@@ -374,6 +386,13 @@ mod tests {
     #[test]
     fn test_plain_storage_delete_vacuum_full() {
         crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
+            "num_neighbors = 38, storage_layout = plain",
+        );
+    }
+
+    #[test]
+    fn test_plain_storage_update_with_null() {
+        crate::access_method::vacuum::tests::test_update_with_null_scaffold(
             "num_neighbors = 38, storage_layout = plain",
         );
     }
@@ -396,6 +415,7 @@ mod tests {
     unsafe fn test_plain_storage_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
+            "plain_num_dimensions",
         )?;
         Ok(())
     }
@@ -405,6 +425,7 @@ mod tests {
         crate::access_method::build::tests::test_index_updates(
             "storage_layout = plain, num_neighbors=30",
             50,
+            "plain",
         )?;
         Ok(())
     }
