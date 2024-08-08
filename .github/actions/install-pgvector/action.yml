@@ -1,0 +1,36 @@
+name: "Install pgvector "
+description: "Builds and installs Pgvector"
+
+inputs:
+  pgvector-version:
+    required: true
+    description: "pgvector version"
+  pgvector-src-dir:
+    default: pgvectorbuild
+  pg-install-dir:
+    default: postgresql
+
+runs:
+  using: "composite"
+  steps:
+    
+    - name: Build Pgvector ${{ inputs.pgvector-version }}
+      shell: bash
+      env:
+        pg_build_args: --enable-debug --enable-cassert
+        llvm_config: llvm-config-14
+        CC: gcc
+        CXX: g++
+      run: |
+        export PATH=${{ inputs.pg-install-dir }}/bin:$PATH
+        mkdir -p ${{ inputs.pgvector-src-dir }}
+        cd ${{ inputs.pgvector-src-dir }}
+        git clone --branch v${{ inputs.pgvector-version }} https://github.com/pgvector/pgvector.git
+        cd pgvector
+        make -j$(nproc)
+
+    - name: Install pgvector ${{ inputs.pgvector-version }}
+      shell: bash
+      run: |
+        export PATH=${{ inputs.pg-install-dir }}/bin:$PATH
+        make -C ${{ inputs.pgvector-src-dir }}/pgvector install

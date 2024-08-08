@@ -1,0 +1,68 @@
+name: Run PGRX tests
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+
+jobs:
+  tester:
+    runs-on: ${{ matrix.platform.runs_on }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        pgvector:
+          - version: 0.7.4
+        pg:
+          - major: 15
+            minor: 7
+          - major: 16
+            minor: 3
+        platform:
+          - type: amd64
+            runs_on: ubuntu-latest
+            rustflags: '-C target-feature=+avx2,+fma'
+          - type: arm64
+            runs_on: cloud-image-runner-arm64
+            rustflags: ''
+
+    env:
+      PG_SRC_DIR: pgbuild
+      PG_INSTALL_DIR: postgresql
+      MAKE_JOBS: 6
+      PG_CONFIG_PATH: postgresql/bin/pg_config
+      TAG: ${{ github.event.inputs.tag }}
+      TAG_DIR: pgvectorscale
+      TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
+
+    steps:
+    - name: Checkout pgvectorscale
+      uses: actions/checkout@v4
+
+    - name: Install Linux Packages
+      uses: ./.github/actions/install-packages
+
+    - name: Install PostgreSQL ${{ matrix.pg.major }}
+      uses: ./.github/actions/install-postgres
+      with:
+        pg-version: ${{ matrix.pg.major }}.${{ matrix.pg.minor }}
+        pg-src-dir: ~/${{ env.PG_SRC_DIR }}
+        pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+      
+    - name: Install pgvector ${{ matrix.pgvector.version }}
+      uses: ./.github/actions/install-pgvector
+      with:
+        pgvector-version: ${{ matrix.pgvector.version }}
+        pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+
+    - name: Install pgrx
+      uses: ./.github/actions/install-pgrx
+      with:
+        pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+        pgrx-version: 0.11.1
+
+    - name: Run tests
+      id: runtests 
+      run: |
+        cd pgvectorscale
+        ls
+        ${{ matrix.platform.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} cargo pgrx test -- pg${{ matrix.pg.major }}
