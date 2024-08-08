@@ -64,5 +64,5 @@ jobs:
       id: runtests 
       run: |
         cd pgvectorscale
-        ls
-        ${{ matrix.platform.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} cargo pgrx test -- pg${{ matrix.pg.major }}
+        ${{ matrix.platform.rustflags != '' && format('export RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} 
+        cargo pgrx test -- pg${{ matrix.pg.major }}
