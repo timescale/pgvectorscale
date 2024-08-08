@@ -7,12 +7,14 @@ use simdeez::sse41::*;
 use simdeez::avx2::*;
 
 #[cfg(not(target_feature = "avx2"))]
+#[cfg(not(doc))]
 compile_error!(
     "On x86, the AVX2 feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+avx2,+fma\""
 );
 
 //note: without fmadd, the performance degrades pretty badly. Benchmark before disbaling
 #[cfg(not(target_feature = "fma"))]
+#[cfg(not(doc))]
 compile_error!(
     "On x86, the fma feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+avx2,+fma\""
 );
