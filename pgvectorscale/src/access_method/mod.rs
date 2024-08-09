@@ -47,7 +47,6 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
 
     amroutine.amstrategies = 0;
     amroutine.amsupport = 0; //TODO
-    amroutine.amoptsprocnum = 0;
 
     amroutine.amcanorder = false;
     amroutine.amcanorderbyop = true;
@@ -62,7 +61,11 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
     amroutine.ampredlocks = false;
     amroutine.amcanparallel = false; //TODO
     amroutine.amcaninclude = false; //TODO
-    amroutine.amusemaintenanceworkmem = false; /* not used during VACUUM */
+    #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
+    {
+        amroutine.amoptsprocnum = 0;
+        amroutine.amusemaintenanceworkmem = false; /* not used during VACUUM */
+    }
     //amroutine.amparallelvacuumoptions = pg_sys  VACUUM_OPTION_PARALLEL_BULKDEL; //TODO
     amroutine.amkeytype = pg_sys::InvalidOid;
 
