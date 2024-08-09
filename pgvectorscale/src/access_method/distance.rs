@@ -1,9 +1,17 @@
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[cfg(not(target_feature = "avx2"))]
+#[cfg(not(doc))]
 compile_error!(
     "On x86, the AVX2 feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+avx2,+fma\""
 );
+
+pub fn init() {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if !is_x86_feature_detected!("avx2") || !is_x86_feature_detected!("fma") {
+        panic!("On x86, pgvectorscale requires the CPU to support AVX2 and FMA. See https://github.com/timescale/pgvectorscale/issues/115");
+    }
+}
 
 #[inline]
 pub fn distance_l2(a: &[f32], b: &[f32]) -> f32 {

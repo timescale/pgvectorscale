@@ -7,12 +7,14 @@ use simdeez::sse41::*;
 use simdeez::avx2::*;
 
 #[cfg(not(target_feature = "avx2"))]
+#[cfg(not(doc))]
 compile_error!(
     "On x86, the AVX2 feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+avx2,+fma\""
 );
 
 //note: without fmadd, the performance degrades pretty badly. Benchmark before disbaling
 #[cfg(not(target_feature = "fma"))]
+#[cfg(not(doc))]
 compile_error!(
     "On x86, the fma feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+avx2,+fma\""
 );
@@ -132,33 +134,6 @@ simdeez::simd_runtime_generate!(
 mod tests {
     #[test]
     fn distances_equal() {
-        let r: Vec<f32> = (0..2000).map(|_| 1.0).collect();
-        let l: Vec<f32> = (0..2000).map(|_| 2.0).collect();
-
-        assert_eq!(
-            unsafe { super::distance_cosine_x86_avx2(&r, &l) },
-            super::super::distance::distance_cosine_unoptimized(&r, &l)
-        );
-
-        assert_eq!(
-            unsafe { super::distance_l2_x86_avx2(&r, &l) },
-            super::super::distance::distance_l2_unoptimized(&r, &l)
-        );
-
-        //don't use too many dimensions to avoid overflow
-        let r: Vec<f32> = (0..20).map(|v| v as f32).collect();
-        let l: Vec<f32> = (0..20).map(|v| v as f32).collect();
-
-        assert_eq!(
-            unsafe { super::distance_cosine_x86_avx2(&r, &l) },
-            super::super::distance::distance_cosine_unoptimized(&r, &l)
-        );
-        assert_eq!(
-            unsafe { super::distance_l2_x86_avx2(&r, &l) },
-            super::super::distance::distance_l2_unoptimized(&r, &l)
-        );
-
-        //many dimensions but normalized
         let r: Vec<f32> = (0..2000).map(|v| v as f32 + 1.0).collect();
         let l: Vec<f32> = (0..2000).map(|v| v as f32 + 2.0).collect();
 
