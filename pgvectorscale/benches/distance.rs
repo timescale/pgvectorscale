@@ -1,7 +1,7 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
 use vectorscale::access_method::distance::{
-    distance_cosine, distance_l2, distance_l2_optimized_for_few_dimensions,
-    distance_l2_unoptimized, distance_xor_optimized,
+    distance_cosine, distance_cosine_unoptimized, distance_l2,
+    distance_l2_optimized_for_few_dimensions, distance_l2_unoptimized, distance_xor_optimized,
 };
 
 //copy and use qdrants simd code, purely for benchmarking purposes
@@ -149,8 +149,14 @@ fn benchmark_distance(c: &mut Criterion) {
     group.bench_function("distance l2", |b| {
         b.iter(|| distance_l2(black_box(&r), black_box(&l)))
     });
+    group.bench_function("distance l2 unoptimized", |b| {
+        b.iter(|| distance_l2_unoptimized(black_box(&r), black_box(&l)))
+    });
     group.bench_function("distance cosine", |b| {
         b.iter(|| distance_cosine(black_box(&r), black_box(&l)))
+    });
+    group.bench_function("distance cosine unoptimized", |b| {
+        b.iter(|| distance_cosine_unoptimized(black_box(&r), black_box(&l)))
     });
 }
 

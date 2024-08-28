@@ -1,6 +1,7 @@
 //! Calculate the distance by vector arithmetic optimized for aarch64 neon intrinsics
 
 use core::arch::aarch64::{self, *};
+use std::ops;
 
 #[cfg(not(target_feature = "neon"))]
 #[cfg(not(doc))]
@@ -8,189 +9,61 @@ compile_error!(
     "On arm, the neon feature must be enabled. Set RUSTFLAGS=\"-C target-feature=+neon\""
 );
 
-// Eventually would like to upstream changed into simdeez, so to simplify the transition,
-// creating this struct for an easy refactor
-struct S;
+// Naming and impl done to match simdeez and the options used in the distance_l2_simd_body and
+// distance_cosine_simd_body macros
+struct S(float32x4_t);
 
 impl S {
     const VF32_WIDTH: usize = 4; // 128bit register for ARM NEON
 
-    fn setzero_ps() -> float32x4_t {
-        let x: float32x4_t;
-        unsafe {
-            let zero: f32 = 0.0;
-            x = aarch64::vld1q_dup_f32(&zero);
-        }
-        x
+    unsafe fn setzero_ps() -> S {
+        let zero: f32 = 0.0;
+        S(aarch64::vld1q_dup_f32(&zero))
     }
 
-    fn loadu_ps(a: &f32) -> float32x4_t {
-        unsafe { aarch64::vld1q_f32(a) }
+    unsafe fn loadu_ps(a: &f32) -> S {
+        S(aarch64::vld1q_f32(a))
     }
 
-    fn horizontal_add_ps(a: float32x4_t) -> f32 {
-        unsafe { aarch64::vaddvq_f32(a) }
+    unsafe fn horizontal_add_ps(a: S) -> f32 {
+         aarch64::vaddvq_f32(a.0) 
     }
 
-    fn fmadd_ps(a: float32x4_t, b: float32x4_t, c: float32x4_t) -> float32x4_t {
-        unsafe { aarch64::vfmaq_f32(c, a, b) }
-    }
-
-    fn mult_ps(a: float32x4_t, b: float32x4_t) -> float32x4_t {
-        unsafe { aarch64::vmulq_f32(a, b) }
-    }
-
-    fn add_ps(a: float32x4_t, b: float32x4_t) -> float32x4_t {
-        unsafe { aarch64::vaddq_f32(a, b) }
-    }
-
-    fn sub_ps(a: float32x4_t, b: float32x4_t) -> float32x4_t {
-        unsafe { aarch64::vsubq_f32(a, b) }
+    unsafe fn fmadd_ps(a: S, b: S, c: S) -> S {
+        S(aarch64::vfmaq_f32(c.0, a.0, b.0))
     }
 }
 
-pub fn distance_l2_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    let mut accum0 = S::setzero_ps();
-    let mut accum1 = S::setzero_ps();
-    let mut accum2 = S::setzero_ps();
-    let mut accum3 = S::setzero_ps();
+impl ops::Add<S> for S {
+    type Output = S;
 
-    //assert!(x.len() == y.len());
-    let mut x = &x[..];
-    let mut y = &y[..];
-
-    // Operations have to be done in terms of the vector width
-    // so that it will work with any size vector.
-    // the width of a vector type is provided as a constant
-    // so the compiler is free to optimize it more.
-    while x.len() >= S::VF32_WIDTH * 4 {
-        //load data from your vec into an SIMD value
-        accum0 = S::add_ps(
-            accum0,
-            S::mult_ps(
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 0]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 0]),
-                ),
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 0]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 0]),
-                ),
-            ),
-        );
-        accum1 = S::add_ps(
-            accum1,
-            S::mult_ps(
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 1]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 1]),
-                ),
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 1]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 1]),
-                ),
-            ),
-        );
-        accum2 = S::add_ps(
-            accum2,
-            S::mult_ps(
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 2]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 2]),
-                ),
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 2]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 2]),
-                ),
-            ),
-        );
-        accum3 = S::add_ps(
-            accum3,
-            S::mult_ps(
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 3]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 3]),
-                ),
-                S::sub_ps(
-                    S::loadu_ps(&x[S::VF32_WIDTH * 3]),
-                    S::loadu_ps(&y[S::VF32_WIDTH * 3]),
-                ),
-            ),
-        );
-
-        // Move each slice to the next position
-        x = &x[S::VF32_WIDTH * 4..];
-        y = &y[S::VF32_WIDTH * 4..];
+    fn add(self, rhs: S) -> Self::Output {
+        unsafe { S(aarch64::vaddq_f32(self.0, rhs.0)) }
     }
-
-    let mut dist = S::horizontal_add_ps(accum0)
-        + S::horizontal_add_ps(accum1)
-        + S::horizontal_add_ps(accum2)
-        + S::horizontal_add_ps(accum3);
-
-    // compute for the remaining elements
-    for i in 0..x.len() {
-        let diff = x[i] - y[i];
-        dist += diff * diff;
-    }
-
-    assert!(dist >= 0.);
-    //dist.sqrt()
-    dist
 }
 
-pub fn distance_cosine_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    let mut accum0 = S::setzero_ps();
-    let mut accum1 = S::setzero_ps();
-    let mut accum2 = S::setzero_ps();
-    let mut accum3 = S::setzero_ps();
-    let mut x = &x[..];
-    let mut y = &y[..];
+impl ops::Sub<S> for S {
+    type Output = S;
 
-    //assert!(x.len() == y.len());
-
-    // Operations have to be done in terms of the vector width
-    // so that it will work with any size vector.
-    // the width of a vector type is provided as a constant
-    // so the compiler is free to optimize it more.
-    while x.len() >= S::VF32_WIDTH * 4 {
-        accum0 = S::fmadd_ps(
-            S::loadu_ps(&x[S::VF32_WIDTH * 0]),
-            S::loadu_ps(&y[S::VF32_WIDTH * 0]),
-            accum0,
-        );
-        accum1 = S::fmadd_ps(
-            S::loadu_ps(&x[S::VF32_WIDTH * 1]),
-            S::loadu_ps(&y[S::VF32_WIDTH * 1]),
-            accum1,
-        );
-        accum2 = S::fmadd_ps(
-            S::loadu_ps(&x[S::VF32_WIDTH * 2]),
-            S::loadu_ps(&y[S::VF32_WIDTH * 2]),
-            accum2,
-        );
-        accum3 = S::fmadd_ps(
-            S::loadu_ps(&x[S::VF32_WIDTH * 3]),
-            S::loadu_ps(&y[S::VF32_WIDTH * 3]),
-            accum3,
-        );
-
-        // Move each slice to the next position
-        x = &x[S::VF32_WIDTH * 4..];
-        y = &y[S::VF32_WIDTH * 4..];
+    fn sub(self, rhs: S) -> Self::Output {
+        unsafe { S(aarch64::vsubq_f32(self.0, rhs.0)) }
     }
+}
 
-    let mut dist = S::horizontal_add_ps(accum0)
-        + S::horizontal_add_ps(accum1)
-        + S::horizontal_add_ps(accum2)
-        + S::horizontal_add_ps(accum3);
+impl ops::Mul<S> for S {
+    type Output = S;
 
-    // compute for the remaining elements
-    for i in 0..x.len() {
-        dist += x[i] * y[i];
+    fn mul(self, rhs: S) -> Self::Output {
+        unsafe { S(aarch64::vmulq_f32(self.0, rhs.0)) }
     }
+}
 
-    (1.0 - dist).max(0.0)
+pub unsafe fn distance_l2_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
+    super::distance::distance_l2_simd_body!(x, y)
+}
+
+pub unsafe fn distance_cosine_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
+    super::distance::distance_cosine_simd_body!(x, y)
 }
 
 #[cfg(test)]
@@ -207,13 +80,13 @@ mod tests {
         let l: Vec<f32> = l.iter().map(|v| v / l_size).collect();
 
         assert!(
-            (super::distance_cosine_aarch64_neon(&r, &l)
+            (unsafe { super::distance_cosine_aarch64_neon(&r, &l) }
                 - super::super::distance::distance_cosine_unoptimized(&r, &l))
             .abs()
                 < 0.000001
         );
         assert!(
-            (super::distance_l2_aarch64_neon(&r, &l)
+            (unsafe { super::distance_l2_aarch64_neon(&r, &l) }
                 - super::super::distance::distance_l2_unoptimized(&r, &l))
             .abs()
                 < 0.000001
