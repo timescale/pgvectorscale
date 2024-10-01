@@ -142,37 +142,6 @@ pub unsafe extern "C" fn amoptions(
     build_relopts(reloptions, validate, tab)
 }
 
-#[cfg(any(feature = "pg12"))]
-unsafe fn build_relopts(
-    reloptions: pg_sys::Datum,
-    validate: bool,
-    tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS],
-) -> *mut pg_sys::bytea {
-    let mut noptions = 0;
-    let options = pg_sys::parseRelOptions(reloptions, validate, RELOPT_KIND_TSV, &mut noptions);
-    if noptions == 0 {
-        return std::ptr::null_mut();
-    }
-
-    for relopt in std::slice::from_raw_parts_mut(options, noptions as usize) {
-        relopt.gen.as_mut().unwrap().lockmode = pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE;
-    }
-
-    let rdopts =
-        pg_sys::allocateReloptStruct(std::mem::size_of::<TSVIndexOptions>(), options, noptions);
-    pg_sys::fillRelOptions(
-        rdopts,
-        std::mem::size_of::<TSVIndexOptions>(),
-        options,
-        noptions,
-        validate,
-        tab.as_ptr(),
-        tab.len() as i32,
-    );
-    pg_sys::pfree(options as void_mut_ptr);
-    rdopts as *mut pg_sys::bytea
-}
-
 #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,

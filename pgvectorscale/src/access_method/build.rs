@@ -151,7 +151,7 @@ pub unsafe extern "C" fn aminsert(
     false
 }
 
-#[cfg(any(feature = "pg12", feature = "pg13"))]
+#[cfg(any(feature = "pg13"))]
 #[pg_guard]
 pub unsafe extern "C" fn aminsert(
     indexrel: pg_sys::Relation,
@@ -398,30 +398,6 @@ fn finalize_index_build<S: Storage>(
     ntuples
 }
 
-#[cfg(any(feature = "pg12"))]
-#[pg_guard]
-unsafe extern "C" fn build_callback_bq_train(
-    _index: pg_sys::Relation,
-    _htup: pg_sys::HeapTuple,
-    values: *mut pg_sys::Datum,
-    isnull: *mut bool,
-    _tuple_is_alive: bool,
-    state: *mut std::os::raw::c_void,
-) {
-    let state = (state as *mut StorageBuildState).as_mut().unwrap();
-    match state {
-        StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
-            if let Some(vec) = vec {
-                bq.add_sample(vec.to_index_slice());
-            }
-        }
-        StorageBuildState::Plain(_, _) => {
-            panic!("Should not be training with plain storage");
-        }
-    }
-}
-
 #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 #[pg_guard]
 unsafe extern "C" fn build_callback_bq_train(
@@ -442,37 +418,6 @@ unsafe extern "C" fn build_callback_bq_train(
         }
         StorageBuildState::Plain(_, _) => {
             panic!("Should not be training with plain storage");
-        }
-    }
-}
-
-#[cfg(any(feature = "pg12"))]
-#[pg_guard]
-unsafe extern "C" fn build_callback(
-    index: pg_sys::Relation,
-    htup: pg_sys::HeapTuple,
-    values: *mut pg_sys::Datum,
-    isnull: *mut bool,
-    _tuple_is_alive: bool,
-    state: *mut std::os::raw::c_void,
-) {
-    let htup = htup.as_ref().unwrap();
-    let index_relation = unsafe { PgRelation::from_pg(index) };
-    let state = (state as *mut StorageBuildState).as_mut().unwrap();
-    match state {
-        StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
-            if let Some(vec) = vec {
-                let heap_pointer = ItemPointer::with_item_pointer_data(htup.t_self);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
-            }
-        }
-        StorageBuildState::Plain(plain, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
-            if let Some(vec) = vec {
-                let heap_pointer = ItemPointer::with_item_pointer_data(htup.t_self);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
-            }
         }
     }
 }
