@@ -141,7 +141,6 @@ pub unsafe extern "C" fn amoptions(
     build_relopts(reloptions, validate, tab)
 }
 
-#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,
     validate: bool,
