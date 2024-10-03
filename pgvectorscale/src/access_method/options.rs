@@ -142,7 +142,6 @@ pub unsafe extern "C" fn amoptions(
     build_relopts(reloptions, validate, tab)
 }
 
-#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,
     validate: bool,
@@ -185,10 +184,7 @@ pub unsafe fn init() {
         "Storage layout: either memory_optimized, io_optimized, or plain".as_pg_cstr(),
         super::storage::DEFAULT_STORAGE_TYPE_STR.as_pg_cstr(),
         Some(validate_storage_layout),
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 
     pg_sys::add_int_reloption(
@@ -198,10 +194,7 @@ pub unsafe fn init() {
         NUM_NEIGHBORS_DEFAULT_SENTINEL,
         -1,
         1000,
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 
     pg_sys::add_int_reloption(
@@ -211,10 +204,7 @@ pub unsafe fn init() {
         100,
         10,
         1000,
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 
     pg_sys::add_real_reloption(
@@ -224,10 +214,7 @@ pub unsafe fn init() {
         DEFAULT_MAX_ALPHA,
         1.0,
         5.0,
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 
     pg_sys::add_int_reloption(
@@ -237,10 +224,7 @@ pub unsafe fn init() {
         0,
         0,
         5000,
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 
     pg_sys::add_int_reloption(
@@ -250,10 +234,7 @@ pub unsafe fn init() {
         SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
         0,
         32,
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
-        {
-            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
-        },
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE
     );
 }
 

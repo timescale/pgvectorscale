@@ -102,53 +102,7 @@ pub unsafe extern "C" fn aminsert(
     _index_unchanged: bool,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
-    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
-    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
-    let mut meta_page = MetaPage::fetch(&index_relation);
-    let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
-    if let None = vec {
-        //todo handle NULLs?
-        return false;
-    }
-    let vec = vec.unwrap();
-    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
-
-    let mut storage = meta_page.get_storage_type();
-    let mut stats = InsertStats::new();
-    match &mut storage {
-        StorageType::Plain => {
-            let plain = PlainStorage::load_for_insert(
-                &index_relation,
-                &heap_relation,
-                meta_page.get_distance_function(),
-            );
-            insert_storage(
-                &plain,
-                &index_relation,
-                vec,
-                heap_pointer,
-                &mut meta_page,
-                &mut stats,
-            );
-        }
-        StorageType::SbqSpeedup | StorageType::SbqCompression => {
-            let bq = SbqSpeedupStorage::load_for_insert(
-                &heap_relation,
-                &index_relation,
-                &meta_page,
-                &mut stats.quantizer_stats,
-            );
-            insert_storage(
-                &bq,
-                &index_relation,
-                vec,
-                heap_pointer,
-                &mut meta_page,
-                &mut stats,
-            );
-        }
-    }
-    false
+    aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
 }
 
 #[cfg(any(feature = "pg13"))]
@@ -162,8 +116,18 @@ pub unsafe extern "C" fn aminsert(
     _check_unique: pg_sys::IndexUniqueCheck,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
-    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
-    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
+    aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
+}
+
+unsafe fn aminsert_internal(
+    indexrel: pg_sys::Relation,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    heap_tid: pg_sys::ItemPointer,
+    heaprel: pg_sys::Relation,
+) -> bool {
+    let index_relation = PgRelation::from_pg(indexrel);
+    let heap_relation = PgRelation::from_pg(heaprel);
     let mut meta_page = MetaPage::fetch(&index_relation);
     let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
     if let None = vec {
@@ -398,7 +362,6 @@ fn finalize_index_build<S: Storage>(
     ntuples
 }
 
-#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 #[pg_guard]
 unsafe extern "C" fn build_callback_bq_train(
     _index: pg_sys::Relation,
