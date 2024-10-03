@@ -8,8 +8,7 @@ use std::ops::Deref;
 use pgrx::*;
 
 use pgrx::pg_sys::{
-    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber_MAIN_FORKNUM, InvalidBlockNumber,
-    ReadBufferMode_RBM_NORMAL,
+    BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber, InvalidBlockNumber, ReadBufferMode,
 };
 
 pub struct LockRelationForExtension<'a> {
@@ -74,13 +73,13 @@ impl<'a> LockedBufferExclusive<'a> {
 
     /// Safety: unsafe because tje block number is not verifiwed
     unsafe fn read_unchecked(index: &'a PgRelation, block: BlockNumber) -> Self {
-        let fork_number = ForkNumber_MAIN_FORKNUM;
+        let fork_number = ForkNumber::MAIN_FORKNUM;
 
         let buf = pg_sys::ReadBufferExtended(
             index.as_ptr(),
             fork_number,
             block,
-            ReadBufferMode_RBM_NORMAL,
+            ReadBufferMode::RBM_NORMAL,
             std::ptr::null_mut(),
         );
 
@@ -95,13 +94,13 @@ impl<'a> LockedBufferExclusive<'a> {
     /// Obtaining this lock is more restrictive. It will only be obtained once the pin
     /// count is 1. Refer to the PG code for `LockBufferForCleanup` for more info
     pub unsafe fn read_for_cleanup(index: &'a PgRelation, block: BlockNumber) -> Self {
-        let fork_number = ForkNumber_MAIN_FORKNUM;
+        let fork_number = ForkNumber::MAIN_FORKNUM;
 
         let buf = pg_sys::ReadBufferExtended(
             index.as_ptr(),
             fork_number,
             block,
-            ReadBufferMode_RBM_NORMAL,
+            ReadBufferMode::RBM_NORMAL,
             std::ptr::null_mut(),
         );
 
@@ -153,14 +152,14 @@ impl<'a> LockedBufferShare<'a> {
     ///
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
-        let fork_number = ForkNumber_MAIN_FORKNUM;
+        let fork_number = ForkNumber::MAIN_FORKNUM;
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
                 index.as_ptr(),
                 fork_number,
                 block,
-                ReadBufferMode_RBM_NORMAL,
+                ReadBufferMode::RBM_NORMAL,
                 std::ptr::null_mut(),
             );
 
@@ -210,14 +209,14 @@ impl PinnedBufferShare {
     ///
     /// Safety: Safe because it checks the block number doesn't overflow. ReadBufferExtended will throw an error if the block number is out of range for the relation
     pub fn read(index: &PgRelation, block: BlockNumber) -> Self {
-        let fork_number = ForkNumber_MAIN_FORKNUM;
+        let fork_number = ForkNumber::MAIN_FORKNUM;
 
         unsafe {
             let buf = pg_sys::ReadBufferExtended(
                 index.as_ptr(),
                 fork_number,
                 block,
-                ReadBufferMode_RBM_NORMAL,
+                ReadBufferMode::RBM_NORMAL,
                 std::ptr::null_mut(),
             );
             PinnedBufferShare { buffer: buf }
