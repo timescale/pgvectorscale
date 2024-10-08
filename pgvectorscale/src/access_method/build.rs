@@ -484,11 +484,11 @@ pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 pub mod tests {
-    use std::collections::HashSet;
+    // use std::collections::HashSet;
 
     use pgrx::*;
 
-    use crate::util::ItemPointer;
+    // use crate::util::ItemPointer;
 
     //TODO: add test where inserting and querying with vectors that are all the same.
 
