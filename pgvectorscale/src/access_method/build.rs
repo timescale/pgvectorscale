@@ -484,11 +484,9 @@ pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 pub mod tests {
-    // use std::collections::HashSet;
+    use std::collections::HashSet;
 
     use pgrx::*;
-
-    // use crate::util::ItemPointer;
 
     //TODO: add test where inserting and querying with vectors that are all the same.
 
@@ -596,29 +594,28 @@ pub mod tests {
             ",
         ))?;
 
-        // TODO: uncomment this once we can use https://github.com/pgcentralfoundation/pgrx/pull/1900
-        // let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
-        //     &format!(
-        //         "
-        // SET enable_seqscan = 0;
-        // SET enable_indexscan = 1;
-        // SET diskann.query_search_list_size = 25;
-        // WITH cte AS (
-        //     SELECT
-        //         ctid
-        //     FROM
-        //         {table_name}
-        //     ORDER BY
-        //         embedding <=> $1::vector
-        //     LIMIT 10
-        // )
-        // SELECT array_agg(ctid) from cte;"
-        //     ),
-        //     vec![(
-        //         pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-        //         test_vec.clone().into_datum(),
-        //     )],
-        // )?;
+        let with_index: Option<Vec<String>> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 0;
+        SET enable_indexscan = 1;
+        SET diskann.query_search_list_size = 25;
+        WITH cte AS (
+            SELECT
+                ctid::TEXT
+            FROM
+                {table_name}
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?;
 
         /* Test that the explain plan is generated ok */
         let explain: Option<pgrx::datum::Json> = Spi::get_one_with_args(
@@ -645,41 +642,38 @@ pub mod tests {
         assert!(explain.is_some());
         //warning!("explain: {}", explain.unwrap().0);
 
-        // let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
-        //     &format!(
-        //         "
-        // SET enable_seqscan = 1;
-        // SET enable_indexscan = 0;
-        // WITH cte AS (
-        //     SELECT
-        //         ctid
-        //     FROM
-        //         {table_name}
-        //     ORDER BY
-        //         embedding <=> $1::vector
-        //     LIMIT 10
-        // )
-        // SELECT array_agg(ctid) from cte;"
-        //     ),
-        //     vec![(
-        //         pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-        //         test_vec.clone().into_datum(),
-        //     )],
-        // )?;
+        let without_index: Vec<String> = Spi::get_one_with_args(
+            &format!(
+                "
+        SET enable_seqscan = 1;
+        SET enable_indexscan = 0;
+        WITH cte AS (
+            SELECT
+                ctid::TEXT
+            FROM
+                {table_name}
+            ORDER BY
+                embedding <=> $1::vector
+            LIMIT 10
+        )
+        SELECT array_agg(ctid) from cte;"
+            ),
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                test_vec.clone().into_datum(),
+            )],
+        )?
+        .unwrap();
 
-        // let set: HashSet<_> = without_index
-        //     .unwrap()
-        //     .iter()
-        //     .map(|&ctid| ItemPointer::with_item_pointer_data(ctid))
-        //     .collect();
+        let set: HashSet<_> = without_index.iter().collect();
 
-        // let mut matches = 0;
-        // for ctid in with_index.unwrap() {
-        //     if set.contains(&ItemPointer::with_item_pointer_data(ctid)) {
-        //         matches += 1;
-        //     }
-        // }
-        // assert!(matches > 9, "Low number of matches: {}", matches);
+        let mut matches = 0;
+        for ctid in with_index.unwrap() {
+            if set.contains(&ctid) {
+                matches += 1;
+            }
+        }
+        assert!(matches > 9, "Low number of matches: {}", matches);
 
         //FIXME: should work in all cases
         if !index_options.contains("num_neighbors=10") {
