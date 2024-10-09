@@ -98,7 +98,7 @@ pub unsafe extern "C" fn aminsert(
     isnull: *mut bool,
     heap_tid: pg_sys::ItemPointer,
     heaprel: pg_sys::Relation,
-    _check_unique: pg_sys::IndexUniqueCheck,
+    _check_unique: pg_sys::IndexUniqueCheck::Type,
     _index_unchanged: bool,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
@@ -113,7 +113,7 @@ pub unsafe extern "C" fn aminsert(
     isnull: *mut bool,
     heap_tid: pg_sys::ItemPointer,
     heaprel: pg_sys::Relation,
-    _check_unique: pg_sys::IndexUniqueCheck,
+    _check_unique: pg_sys::IndexUniqueCheck::Type,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
     aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
@@ -488,8 +488,6 @@ pub mod tests {
 
     use pgrx::*;
 
-    use crate::util::ItemPointer;
-
     //TODO: add test where inserting and querying with vectors that are all the same.
 
     #[cfg(any(test, feature = "pg_test"))]
@@ -596,7 +594,7 @@ pub mod tests {
             ",
         ))?;
 
-        let with_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+        let with_index: Option<Vec<String>> = Spi::get_one_with_args(
             &format!(
                 "
         SET enable_seqscan = 0;
@@ -604,7 +602,7 @@ pub mod tests {
         SET diskann.query_search_list_size = 25;
         WITH cte AS (
             SELECT
-                ctid
+                ctid::TEXT
             FROM
                 {table_name}
             ORDER BY
@@ -644,14 +642,14 @@ pub mod tests {
         assert!(explain.is_some());
         //warning!("explain: {}", explain.unwrap().0);
 
-        let without_index: Option<Vec<pgrx::pg_sys::ItemPointerData>> = Spi::get_one_with_args(
+        let without_index: Vec<String> = Spi::get_one_with_args(
             &format!(
                 "
         SET enable_seqscan = 1;
         SET enable_indexscan = 0;
         WITH cte AS (
             SELECT
-                ctid
+                ctid::TEXT
             FROM
                 {table_name}
             ORDER BY
@@ -664,17 +662,14 @@ pub mod tests {
                 pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                 test_vec.clone().into_datum(),
             )],
-        )?;
+        )?
+        .unwrap();
 
-        let set: HashSet<_> = without_index
-            .unwrap()
-            .iter()
-            .map(|&ctid| ItemPointer::with_item_pointer_data(ctid))
-            .collect();
+        let set: HashSet<_> = without_index.iter().collect();
 
         let mut matches = 0;
         for ctid in with_index.unwrap() {
-            if set.contains(&ItemPointer::with_item_pointer_data(ctid)) {
+            if set.contains(&ctid) {
                 matches += 1;
             }
         }

@@ -107,7 +107,8 @@ END;
 $$;
 
 "#,
-    name = "diskann_ops_operator"
+    name = "diskann_ops_operator",
+    requires = [amhandler]
 );
 
 #[pg_guard]
