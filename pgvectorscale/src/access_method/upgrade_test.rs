@@ -25,6 +25,10 @@ pub mod tests {
     #[ignore]
     ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
     fn test_upgrade() {
+        if cfg!(feature = "pg17") {
+            // PG17 is only supported for one version
+            return;
+        }
         pgrx_tests::run_test(
             "test_delete_mock_fn",
             None,
@@ -73,48 +77,40 @@ pub mod tests {
             temp_dir.path()
         );
 
-        // use latest pgrx
         let res = std::process::Command::new("cargo")
             .current_dir(temp_path.join("timescale_vector"))
-            .args(["rm", "pgrx"])
+            .args([
+                "install",
+                "cargo-pgrx",
+                "--version",
+                "=0.11.1",
+                "--force",
+                "--root",
+                temp_path.join("pgrx-0.11.1").to_str().unwrap(),
+                "cargo-pgrx",
+            ])
             .stdout(Stdio::inherit())
             .stderr(Stdio::piped())
             .output()
             .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
-        let res = std::process::Command::new("cargo")
-            .current_dir(temp_path.join("timescale_vector"))
-            .args(["rm", "--dev", "pgrx-tests"])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
-        assert!(res.status.success(), "failed: {:?}", res);
-
-        let res = std::process::Command::new("cargo")
-            .current_dir(temp_path.join("timescale_vector"))
-            .args(["add", "-F", &format!("pg{}", pg_version), "pgrx"])
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
-        assert!(res.status.success(), "failed: {:?}", res);
-
-        //let contents = fs::read_to_string(temp_path.join("pgvectorscale/Cargo.toml")).unwrap();
-        //print!("cargo {}", contents);
-
-        let res = std::process::Command::new("cargo")
-            .current_dir(temp_path.join("timescale_vector"))
-            .arg("pgrx")
-            .arg("install")
-            .arg("--test")
-            .arg("--pg-config")
-            .arg(pg_config.path().unwrap())
-            .stdout(Stdio::inherit())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
+        let res = std::process::Command::new(
+            temp_path
+                .join("pgrx-0.11.1/bin/cargo-pgrx")
+                .to_str()
+                .unwrap(),
+        )
+        .current_dir(temp_path.join("timescale_vector"))
+        .arg("pgrx")
+        .arg("install")
+        .arg("--test")
+        .arg("--pg-config")
+        .arg(pg_config.path().unwrap())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
         client
