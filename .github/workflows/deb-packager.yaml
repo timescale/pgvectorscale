@@ -23,6 +23,8 @@ jobs:
             minor: 7
           - major: 16
             minor: 3
+          - major: 17
+            minor: 0
         platform:
           - type: amd64
             runs_on: ubuntu-latest
