@@ -96,13 +96,13 @@ impl ItemPointer {
     }
 
     pub unsafe fn with_item_pointer_data(ctid: pgrx::pg_sys::ItemPointerData) -> Self {
-        let ip = pgrx::item_pointer_get_block_number(&ctid);
-        let off = pgrx::item_pointer_get_offset_number(&ctid);
+        let ip = pgrx::itemptr::item_pointer_get_block_number(&ctid);
+        let off = pgrx::itemptr::item_pointer_get_offset_number(&ctid);
         Self::new(ip, off)
     }
 
     pub fn to_item_pointer_data(&self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
-        pgrx::item_pointer_set_all(ctid, self.block_number, self.offset)
+        pgrx::itemptr::item_pointer_set_all(ctid, self.block_number, self.offset)
     }
 
     pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer {
