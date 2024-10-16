@@ -1,5 +1,5 @@
 use memoffset::*;
-use pgrx::{pg_sys::AsPgCStr, prelude::*, set_varsize, void_ptr, PgRelation};
+use pgrx::{pg_sys::AsPgCStr, prelude::*, set_varsize_4b, void_ptr, PgRelation};
 use std::{ffi::CStr, fmt::Debug};
 
 use super::storage::StorageType;
@@ -41,7 +41,7 @@ impl TSVIndexOptions {
             ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
             ops.bq_num_bits_per_dimension = SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
             unsafe {
-                set_varsize(
+                set_varsize_4b(
                     ops.as_ptr().cast(),
                     std::mem::size_of::<TSVIndexOptions>() as i32,
                 );
@@ -87,7 +87,7 @@ impl TSVIndexOptions {
 }
 
 const NUM_REL_OPTS: usize = 6;
-static mut RELOPT_KIND_TSV: pg_sys::relopt_kind = 0;
+static mut RELOPT_KIND_TSV: pg_sys::relopt_kind::Type = 0;
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
 // this is used to fill the rd_options field in the index relation.
@@ -108,32 +108,32 @@ pub unsafe extern "C" fn amoptions(
     let tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS] = [
         pg_sys::relopt_parse_elt {
             optname: "storage_layout".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_STRING,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
             offset: offset_of!(TSVIndexOptions, storage_layout_offset) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_neighbors".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_neighbors) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "search_list_size".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, search_list_size) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_dimensions".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_dimensions) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_bits_per_dimension".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_INT,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, bq_num_bits_per_dimension) as i32,
         },
         pg_sys::relopt_parse_elt {
             optname: "max_alpha".as_pg_cstr(),
-            opttype: pg_sys::relopt_type_RELOPT_TYPE_REAL,
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
         },
     ];
@@ -141,7 +141,6 @@ pub unsafe extern "C" fn amoptions(
     build_relopts(reloptions, validate, tab)
 }
 
-#[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15", feature = "pg16"))]
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,
     validate: bool,

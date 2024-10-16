@@ -33,7 +33,7 @@ pub extern "C" fn ambulkdelete(
     let nblocks = unsafe {
         pg_sys::RelationGetNumberOfBlocksInFork(
             index_relation.as_ptr(),
-            pg_sys::ForkNumber_MAIN_FORKNUM,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
         )
     };
 
@@ -127,7 +127,7 @@ pub extern "C" fn amvacuumcleanup(
 
         (*stats).num_pages = pg_sys::RelationGetNumberOfBlocksInFork(
             index_relation.as_ptr(),
-            pg_sys::ForkNumber_MAIN_FORKNUM,
+            pg_sys::ForkNumber::MAIN_FORKNUM,
         );
 
         stats
