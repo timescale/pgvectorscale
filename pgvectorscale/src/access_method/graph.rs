@@ -221,7 +221,7 @@ impl<'a> Graph<'a> {
             }
         }
         //remove myself
-        if !hash.insert(neighbors_of) {
+        if hash.contains(&neighbors_of) {
             //prevent self-loops
             let index = candidates
                 .iter()
@@ -531,18 +531,14 @@ impl<'a> Graph<'a> {
         );
 
         //update back pointers
-        let mut cnt = 0;
         for neighbor in neighbor_list {
-            let needed_prune = self.update_back_pointer(
+            self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
-            if needed_prune {
-                cnt = cnt + 1;
-            }
         }
     }
 
