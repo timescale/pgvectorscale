@@ -183,7 +183,7 @@ unsafe fn insert_storage<S: Storage>(
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
-    let mut tape = Tape::new(&index_relation, S::page_type());
+    let mut tape = Tape::resume(&index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vector.to_index_slice(),
         heap_pointer,
