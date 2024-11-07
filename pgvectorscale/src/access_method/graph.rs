@@ -264,6 +264,7 @@ impl<'a> Graph<'a> {
     ///
     /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
+    #[allow(clippy::mutable_key_type)]
     fn greedy_search_for_build<S: Storage>(
         &self,
         index_pointer: IndexPointer,
@@ -463,6 +464,7 @@ impl<'a> Graph<'a> {
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
+        #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
@@ -490,7 +492,7 @@ impl<'a> Graph<'a> {
                 &mut stats.prune_neighbor_stats,
             );
             if contains {
-                cnt_contains = cnt_contains + 1;
+                cnt_contains += 1;
             }
         }
         if neighbor_list_len > 0 && cnt_contains == 0 {
