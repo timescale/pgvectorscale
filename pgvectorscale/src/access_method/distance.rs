@@ -1,3 +1,5 @@
+pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
+
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[cfg(not(target_feature = "avx2"))]

@@ -1,5 +1,5 @@
 use super::{
-    distance::distance_xor_optimized,
+    distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -383,7 +383,7 @@ impl QuantizedVectorCache {
 
 pub struct SbqSpeedupStorage<'a> {
     pub index: &'a PgRelation,
-    pub distance_fn: fn(&[f32], &[f32]) -> f32,
+    pub distance_fn: DistanceFn,
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
@@ -600,7 +600,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         &mut self,
         meta: &MetaPage,
         index_pointer: IndexPointer,
-        neighbors: &Vec<NeighborWithDistance>,
+        neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
         let mut cache = self.qv_cache.borrow_mut();
@@ -745,7 +745,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         node.commit();
     }
 
-    fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
+    fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
     }
 }

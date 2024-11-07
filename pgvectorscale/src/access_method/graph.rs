@@ -24,13 +24,7 @@ pub struct ListSearchNeighbor<PD> {
 
 impl<PD> PartialOrd for ListSearchNeighbor<PD> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.distance == 0.0 && other.distance == 0.0 {
-            /* this logic should be consistent with what's used during pruning */
-            return self
-                .distance_tie_break
-                .partial_cmp(&other.distance_tie_break);
-        }
-        self.distance.partial_cmp(&other.distance)
+        Some(self.cmp(other))
     }
 }
 
@@ -44,7 +38,11 @@ impl<PD> Eq for ListSearchNeighbor<PD> {}
 
 impl<PD> Ord for ListSearchNeighbor<PD> {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.distance.partial_cmp(&other.distance).unwrap()
+        if self.distance == 0.0 && other.distance == 0.0 {
+            /* this logic should be consistent with what's used during pruning */
+            return self.distance_tie_break.cmp(&other.distance_tie_break);
+        }
+        self.distance.total_cmp(&other.distance)
     }
 }
 
@@ -530,18 +528,14 @@ impl<'a> Graph<'a> {
         );
 
         //update back pointers
-        let mut cnt = 0;
         for neighbor in neighbor_list {
-            let needed_prune = self.update_back_pointer(
+            self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
-            if needed_prune {
-                cnt += 1;
-            }
         }
     }
 

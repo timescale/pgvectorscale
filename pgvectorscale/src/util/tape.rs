@@ -48,7 +48,5 @@ impl<'a> Tape<'a> {
         item_pointer
     }
 
-    pub fn close(self) {
-        std::mem::drop(self)
-    }
+    pub fn close(self) {}
 }

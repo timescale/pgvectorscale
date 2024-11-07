@@ -8,7 +8,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::distance;
+use super::distance::{self, DistanceFn};
 use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
@@ -93,6 +93,7 @@ pub struct MetaPageHeader {
     version: u32,
 }
 
+/// TODO: move to distance.rs
 enum DistanceType {
     Cosine = 0,
     L2 = 1,
@@ -173,7 +174,7 @@ impl MetaPage {
         self.max_alpha
     }
 
-    pub fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
+    pub fn get_distance_function(&self) -> DistanceFn {
         match DistanceType::from_u16(self.distance_type) {
             DistanceType::Cosine => distance::distance_cosine,
             DistanceType::L2 => distance::distance_l2,

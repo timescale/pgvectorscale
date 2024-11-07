@@ -92,6 +92,7 @@ pub extern "C" fn ambuild(
 
 #[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[pg_guard]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn aminsert(
     indexrel: pg_sys::Relation,
     values: *mut pg_sys::Datum,
@@ -105,7 +106,7 @@ pub unsafe extern "C" fn aminsert(
     aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
 }
 
-#[cfg(any(feature = "pg13"))]
+#[cfg(feature = "pg13")]
 #[pg_guard]
 pub unsafe extern "C" fn aminsert(
     indexrel: pg_sys::Relation,

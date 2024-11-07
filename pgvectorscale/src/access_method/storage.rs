@@ -5,6 +5,7 @@ use pgrx::{pg_sys, PgBox};
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
 
 use super::{
+    distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     meta_page::MetaPage,
@@ -62,7 +63,7 @@ pub trait Storage {
         &mut self,
         meta: &MetaPage,
         index_pointer: IndexPointer,
-        neighbors: &Vec<NeighborWithDistance>,
+        neighbors: &[NeighborWithDistance],
         stats: &mut S,
     );
 
@@ -124,7 +125,7 @@ pub trait Storage {
         stats: &mut S,
     );
 
-    fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32;
+    fn get_distance_function(&self) -> DistanceFn;
 }
 
 #[derive(PartialEq, Debug)]

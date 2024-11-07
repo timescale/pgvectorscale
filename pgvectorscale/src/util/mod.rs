@@ -101,7 +101,7 @@ impl ItemPointer {
         Self::new(ip, off)
     }
 
-    pub fn to_item_pointer_data(&self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
+    pub fn to_item_pointer_data(self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
         pgrx::itemptr::item_pointer_set_all(ctid, self.block_number, self.offset)
     }
 

@@ -172,6 +172,9 @@ extern "C" fn validate_storage_layout(value: *const std::os::raw::c_char) {
     _ = StorageType::from_str(value);
 }
 
+/// # Safety
+///
+/// TODO
 pub unsafe fn init() {
     RELOPT_KIND_TSV = pg_sys::add_reloption_kind();
 

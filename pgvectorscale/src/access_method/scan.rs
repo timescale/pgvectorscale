@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::{
+    distance::DistanceFn,
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
@@ -31,7 +32,7 @@ enum StorageState {
 /* no lifetime usage here. */
 struct TSVScanState {
     storage: *mut StorageState,
-    distance_fn: Option<fn(&[f32], &[f32]) -> f32>,
+    distance_fn: Option<DistanceFn>,
     meta_page: MetaPage,
     last_buffer: Option<PinnedBufferShare>,
 }
@@ -95,9 +96,7 @@ impl PartialEq for ResortData {
 
 impl PartialOrd for ResortData {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        //notice the reverse here. Other is the one that is being compared to self
-        //this allows us to have a min heap
-        other.distance.partial_cmp(&self.distance)
+        Some(self.cmp(other))
     }
 }
 
@@ -105,7 +104,9 @@ impl Eq for ResortData {}
 
 impl Ord for ResortData {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
+        //notice the reverse here. Other is the one that is being compared to self
+        //this allows us to have a min heap
+        other.distance.total_cmp(&self.distance)
     }
 }
 

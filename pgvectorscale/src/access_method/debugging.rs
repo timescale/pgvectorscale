@@ -13,7 +13,7 @@ pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {
     let mut map = HashMap::<ItemPointer, Vec<f32>>::new();
     let mut sb = String::new();
     unsafe {
-        print_graph_from_disk_visitor(index, init_id, &mut map, &mut sb, 0);
+        print_graph_from_disk_visitor(index, init_id, &mut map, &mut sb);
     }
     panic!("{}", sb.as_str())
 }
@@ -23,7 +23,6 @@ unsafe fn print_graph_from_disk_visitor(
     index_pointer: ItemPointer,
     map: &mut HashMap<ItemPointer, Vec<f32>>,
     sb: &mut String,
-    level: usize,
 ) {
     let mut stats = GreedySearchStats::new();
     let data_node = Node::read(index, index_pointer, &mut stats);
@@ -37,7 +36,7 @@ unsafe fn print_graph_from_disk_visitor(
     for neighbor_pointer in node.iter_neighbors() {
         let p = neighbor_pointer;
         if !map.contains_key(&p) {
-            print_graph_from_disk_visitor(index, p, map, sb, level + 1);
+            print_graph_from_disk_visitor(index, p, map, sb);
         }
     }
     sb.push_str(&name);

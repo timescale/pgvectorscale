@@ -1,4 +1,5 @@
 use super::{
+    distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     pg_vector::PgVector,
@@ -21,7 +22,7 @@ use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct PlainStorage<'a> {
     pub index: &'a PgRelation,
-    pub distance_fn: fn(&[f32], &[f32]) -> f32,
+    pub distance_fn: DistanceFn,
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
 }
@@ -30,7 +31,7 @@ impl<'a> PlainStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        distance_fn: DistanceFn,
     ) -> PlainStorage<'a> {
         Self {
             index,
@@ -43,7 +44,7 @@ impl<'a> PlainStorage<'a> {
     pub fn load_for_insert(
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        distance_fn: DistanceFn,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
@@ -56,7 +57,7 @@ impl<'a> PlainStorage<'a> {
     pub fn load_for_search(
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        distance_fn: DistanceFn,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
@@ -73,7 +74,7 @@ pub enum PlainDistanceMeasure {
 
 impl PlainDistanceMeasure {
     pub fn calculate_distance<S: StatsDistanceComparison>(
-        distance_fn: fn(&[f32], &[f32]) -> f32,
+        distance_fn: DistanceFn,
         query: &[f32],
         vector: &[f32],
         stats: &mut S,
@@ -191,7 +192,7 @@ impl<'a> Storage for PlainStorage<'a> {
         &mut self,
         meta: &MetaPage,
         index_pointer: IndexPointer,
-        neighbors: &Vec<NeighborWithDistance>,
+        neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
         let node = unsafe { Node::modify(self.index, index_pointer, stats) };
@@ -346,7 +347,7 @@ impl<'a> Storage for PlainStorage<'a> {
         node.commit();
     }
 
-    fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
+    fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
     }
 }
