@@ -612,7 +612,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
             .chain(once(index_pointer));
         cache.preload(iter, self, stats);
 
-        let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
+        let mut node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, meta, &cache);
 
@@ -739,7 +739,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
             .chain(once(index_pointer));
         cache.preload(iter, self, stats);
 
-        let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
+        let mut node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, meta, &cache);
         node.commit();

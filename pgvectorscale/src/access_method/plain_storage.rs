@@ -195,7 +195,7 @@ impl<'a> Storage for PlainStorage<'a> {
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
-        let node = unsafe { Node::modify(self.index, index_pointer, stats) };
+        let mut node = unsafe { Node::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, meta);
         node.commit();
@@ -341,7 +341,7 @@ impl<'a> Storage for PlainStorage<'a> {
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
-        let node = unsafe { Node::modify(self.index, index_pointer, stats) };
+        let mut node = unsafe { Node::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
         archived.as_mut().set_neighbors(neighbors, meta);
         node.commit();
