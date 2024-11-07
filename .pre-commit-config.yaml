@@ -3,8 +3,8 @@ repos:
     rev: v1.0
     hooks:
       - id: fmt
-        files: ^pgvectorscale/pgvectorscale/.*\.(rs|toml)$
+        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
       - id: cargo-check
-        files: ^pgvectorscale/pgvectorscale/.*\.rs$
+        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
       - id: clippy
-        files: ^pgvectorscale/pgvectorscale/.*\.rs$
+        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
