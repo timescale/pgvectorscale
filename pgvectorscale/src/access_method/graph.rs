@@ -10,6 +10,7 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
 
+use super::neighbor_with_distance::{Distance, DistanceWithTieBreak};
 use super::pg_vector::PgVector;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
 use super::storage::Storage;
@@ -17,8 +18,7 @@ use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
-    distance: f32,
-    distance_tie_break: usize, /* only used if distance = 0. This ensures a consistent order of results when distance = 0 */
+    distance_with_tie_break: DistanceWithTieBreak,
     private_data: PD,
 }
 
@@ -38,23 +38,21 @@ impl<PD> Eq for ListSearchNeighbor<PD> {}
 
 impl<PD> Ord for ListSearchNeighbor<PD> {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.distance == 0.0 && other.distance == 0.0 {
-            /* this logic should be consistent with what's used during pruning */
-            return self.distance_tie_break.cmp(&other.distance_tie_break);
-        }
-        self.distance.total_cmp(&other.distance)
+        self.distance_with_tie_break
+            .cmp(&other.distance_with_tie_break)
     }
 }
 
 impl<PD> ListSearchNeighbor<PD> {
-    pub fn new(index_pointer: IndexPointer, distance: f32, private_data: PD) -> Self {
-        assert!(!distance.is_nan());
-        debug_assert!(distance >= 0.0);
+    pub fn new(
+        index_pointer: IndexPointer,
+        distance_with_tie_break: DistanceWithTieBreak,
+        private_data: PD,
+    ) -> Self {
         Self {
             index_pointer,
             private_data,
-            distance,
-            distance_tie_break: 0,
+            distance_with_tie_break,
         }
     }
 
@@ -116,16 +114,22 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         self.inserted.insert(ip)
     }
 
-    /// Internal function
-    pub fn insert_neighbor(&mut self, mut n: ListSearchNeighbor<PD>) {
-        self.stats.record_candidate();
-        if n.distance == 0.0 {
-            /* record the tie break if distance is 0 */
-            if let Some(tie_break_item_pointer) = self.tie_break_item_pointer {
-                let d = tie_break_item_pointer.ip_distance(n.index_pointer);
-                n.distance_tie_break = d;
+    pub fn create_distance_with_tie_break(
+        &self,
+        d: Distance,
+        ip: ItemPointer,
+    ) -> DistanceWithTieBreak {
+        match self.tie_break_item_pointer {
+            None => DistanceWithTieBreak::with_query(d, ip),
+            Some(tie_break_item_pointer) => {
+                DistanceWithTieBreak::new(d, ip, tie_break_item_pointer)
             }
         }
+    }
+
+    /// Internal function
+    pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
+        self.stats.record_candidate();
         self.candidates.push(Reverse(n));
     }
 
@@ -332,8 +336,7 @@ impl<'a> Graph<'a> {
                     let list_search_entry = &lsr.visited[list_search_entry_idx];
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
-                        list_search_entry.distance,
-                        list_search_entry.distance_tie_break,
+                        list_search_entry.distance_with_tie_break.clone(),
                     ));
                 }
             }
@@ -349,7 +352,7 @@ impl<'a> Graph<'a> {
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
         &self,
-        neighbors_of: ItemPointer,
+        _neighbors_of: ItemPointer,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -410,8 +413,9 @@ impl<'a> Graph<'a> {
                         dist_state
                             .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)
                     };
-                    let mut distance_between_candidate_and_point =
-                        candidate_neighbor.get_distance();
+                    let mut distance_between_candidate_and_point = candidate_neighbor
+                        .get_distance_with_tie_break()
+                        .get_distance();
 
                     //We need both values to be positive.
                     //Otherwise, the case where distance_between_candidate_and_point > 0 and distance_between_candidate_and_existing_neighbor < 0 is totally wrong.
@@ -451,8 +455,8 @@ impl<'a> Graph<'a> {
 
                             Note: with sbq these equivalence relations are actually not uncommon */
                             let ip_distance_between_candidate_and_point = candidate_neighbor
-                                .get_index_pointer_to_neighbor()
-                                .ip_distance(neighbors_of);
+                                .get_distance_with_tie_break()
+                                .get_distance_tie_break();
 
                             let ip_distance_between_candidate_and_existing_neighbor =
                                 candidate_neighbor
@@ -527,8 +531,7 @@ impl<'a> Graph<'a> {
             let (_needed_prune, contains) = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
-                neighbor.get_distance(),
-                neighbor.get_distance_tie_break(),
+                neighbor.get_distance_with_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
@@ -545,12 +548,14 @@ impl<'a> Graph<'a> {
         &mut self,
         from: IndexPointer,
         to: IndexPointer,
-        distance: f32,
-        distance_tie_break: usize,
+        distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
     ) -> (bool, bool) {
-        let new = vec![NeighborWithDistance::new(to, distance, distance_tie_break)];
+        let new = vec![NeighborWithDistance::new(
+            to,
+            distance_with_tie_break.clone(),
+        )];
         let (pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
         (pruned, n.contains(&new[0]))
     }
