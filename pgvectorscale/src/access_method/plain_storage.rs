@@ -254,7 +254,11 @@ impl<'a> Storage for PlainStorage<'a> {
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
         for n in neighbors {
             let dist = unsafe { dist_state.get_distance(n, stats) };
-            result.push(NeighborWithDistance::new(n, dist))
+            result.push(NeighborWithDistance::new(
+                n,
+                dist,
+                n.ip_distance(neighbors_of),
+            ))
         }
     }
 
