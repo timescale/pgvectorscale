@@ -21,16 +21,16 @@ impl NeighborWithDistance {
     }
 
     pub fn get_index_pointer_to_neighbor(&self) -> ItemPointer {
-        return self.index_pointer;
+        self.index_pointer
     }
     pub fn get_distance(&self) -> Distance {
-        return self.distance;
+        self.distance
     }
 }
 
 impl PartialOrd for NeighborWithDistance {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
+        Some(self.cmp(other))
     }
 }
 

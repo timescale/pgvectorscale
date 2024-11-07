@@ -95,7 +95,7 @@ impl ListSearchResultMinHeap {
 
     fn visit_closest(&mut self, pos_limit: usize) -> Option<&ListSearchNeighbor> {
         //OPT: should we optimize this not to do a linear search each time?
-        if self.candidates.len() == 0 {
+        if self.candidates.is_empty() {
             panic!("no candidates left");
             //return None;
         }
@@ -128,7 +128,7 @@ fn run_lsr_min_heap(lsr: &mut ListSearchResultMinHeap) {
     for _ in 0..20 {
         lsr.insert_neighbor(ListSearchNeighbor {
             index_pointer: 0,
-            distance: distance,
+            distance,
             visited: false,
             _private_data: 2,
         })
@@ -146,7 +146,7 @@ fn run_lsr(lsr: &mut ListSearchResult) {
     for _ in 0..20 {
         lsr.insert_neighbor(ListSearchNeighbor {
             index_pointer: 0,
-            distance: distance,
+            distance,
             visited: false,
             _private_data: 2,
         })

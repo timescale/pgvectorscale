@@ -2,6 +2,7 @@ use pgrx::*;
 
 /// cost estimate function loosely based on how ivfflat does things
 #[pg_guard(immutable, parallel_safe)]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn amcostestimate(
     root: *mut pg_sys::PlannerInfo,
     path: *mut pg_sys::IndexPath,

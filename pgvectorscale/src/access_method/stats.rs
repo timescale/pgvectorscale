@@ -36,6 +36,12 @@ pub struct PruneNeighborStats {
     pub num_neighbors_after_prune: usize,
 }
 
+impl Default for PruneNeighborStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PruneNeighborStats {
     pub fn new() -> Self {
         PruneNeighborStats {
@@ -80,6 +86,12 @@ pub struct GreedySearchStats {
     quantized_distance_comparisons: usize,
     visited_nodes: usize,
     candidate_nodes: usize,
+}
+
+impl Default for GreedySearchStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl GreedySearchStats {
@@ -178,6 +190,12 @@ pub struct QuantizerStats {
     pub node_writes: usize,
 }
 
+impl Default for QuantizerStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl QuantizerStats {
     pub fn new() -> Self {
         QuantizerStats {
@@ -208,16 +226,22 @@ pub struct InsertStats {
     pub node_writes: usize,
 }
 
+impl Default for InsertStats {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl InsertStats {
     pub fn new() -> Self {
-        return InsertStats {
+        InsertStats {
             prune_neighbor_stats: PruneNeighborStats::new(),
             greedy_search_stats: GreedySearchStats::new(),
             quantizer_stats: QuantizerStats::new(),
             node_reads: 0,
             node_modify: 0,
             node_writes: 0,
-        };
+        }
     }
 }
 
@@ -247,6 +271,12 @@ pub struct WriteStats {
     pub nodes_written: usize,
     pub prune_stats: PruneNeighborStats,
     pub num_neighbors: usize,
+}
+
+impl Default for WriteStats {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl WriteStats {

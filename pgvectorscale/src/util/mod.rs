@@ -63,7 +63,7 @@ pub struct WritableBuffer<'a> {
 }
 
 impl<'a> WritableBuffer<'a> {
-    pub fn get_data_slice(&self) -> &mut [u8] {
+    pub fn get_data_slice(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 
@@ -78,8 +78,8 @@ impl ItemPointer {
         offset: pgrx::pg_sys::OffsetNumber,
     ) -> Self {
         Self {
-            block_number: block_number,
-            offset: offset,
+            block_number,
+            offset,
         }
     }
 
@@ -91,7 +91,7 @@ impl ItemPointer {
     pub unsafe fn with_page(page: &page::WritablePage, offset: pgrx::pg_sys::OffsetNumber) -> Self {
         Self {
             block_number: pgrx::pg_sys::BufferGetBlockNumber(**(page.get_buffer())),
-            offset: offset,
+            offset,
         }
     }
 
@@ -101,7 +101,7 @@ impl ItemPointer {
         Self::new(ip, off)
     }
 
-    pub fn to_item_pointer_data(&self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
+    pub fn to_item_pointer_data(self, ctid: &mut pgrx::pg_sys::ItemPointerData) {
         pgrx::itemptr::item_pointer_set_all(ctid, self.block_number, self.offset)
     }
 
@@ -126,10 +126,10 @@ impl ItemPointer {
         /* distance measure based on on-disk distance */
         /* The two abs() give better results than taking one abs() at the end. Not quite sure why but I think
          * It creates more links within the equivalence class  */
-        let block_diff = (self.block_number as isize - other.block_number as isize).abs() as usize;
-        let offset_diff = (self.offset as isize - other.offset as isize).abs() as usize;
+        let block_diff = (self.block_number as isize - other.block_number as isize).unsigned_abs();
+        let offset_diff = (self.offset as isize - other.offset as isize).unsigned_abs();
         debug_assert!(offset_diff < pgrx::pg_sys::MaxOffsetNumber as _);
-        (block_diff * (pgrx::pg_sys::MaxOffsetNumber as usize) + offset_diff) as usize
+        block_diff * (pgrx::pg_sys::MaxOffsetNumber as usize) + offset_diff
     }
 }
 

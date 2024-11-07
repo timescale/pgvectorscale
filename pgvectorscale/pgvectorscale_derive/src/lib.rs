@@ -72,7 +72,7 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl<'a> #writeable_name<'a> {
-            pub fn get_archived_node(&self) -> std::pin::Pin<&mut #archived_name> {
+            pub fn get_archived_node(&mut self) -> std::pin::Pin<&mut #archived_name> {
                 #archived_name::with_data(self.wb.get_data_slice())
             }
 

@@ -19,7 +19,7 @@ impl<'a> Tape<'a> {
         page.commit();
         Self {
             page_type,
-            index: index,
+            index,
             current: block_number,
         }
     }
@@ -48,7 +48,5 @@ impl<'a> Tape<'a> {
         item_pointer
     }
 
-    pub fn close(self) {
-        std::mem::drop(self)
-    }
+    pub fn close(self) {}
 }

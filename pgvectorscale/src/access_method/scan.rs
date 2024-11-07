@@ -11,6 +11,7 @@ use crate::{
 };
 
 use super::{
+    distance::DistanceFn,
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
@@ -31,7 +32,7 @@ enum StorageState {
 /* no lifetime usage here. */
 struct TSVScanState {
     storage: *mut StorageState,
-    distance_fn: Option<fn(&[f32], &[f32]) -> f32>,
+    distance_fn: Option<DistanceFn>,
     meta_page: MetaPage,
     last_buffer: Option<PinnedBufferShare>,
 }
@@ -41,7 +42,7 @@ impl TSVScanState {
         Self {
             storage: std::ptr::null_mut(),
             distance_fn: None,
-            meta_page: meta_page,
+            meta_page,
             last_buffer: None,
         }
     }
@@ -53,7 +54,7 @@ impl TSVScanState {
         query: PgVector,
         search_list_size: usize,
     ) {
-        let meta_page = MetaPage::fetch(&index);
+        let meta_page = MetaPage::fetch(index);
         let storage = meta_page.get_storage_type();
         let distance = meta_page.get_distance_function();
 
@@ -95,9 +96,7 @@ impl PartialEq for ResortData {
 
 impl PartialOrd for ResortData {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        //notice the reverse here. Other is the one that is being compared to self
-        //this allows us to have a min heap
-        other.distance.partial_cmp(&self.distance)
+        Some(self.cmp(other))
     }
 }
 
@@ -105,7 +104,9 @@ impl Eq for ResortData {}
 
 impl Ord for ResortData {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.partial_cmp(other).unwrap()
+        //notice the reverse here. Other is the one that is being compared to self
+        //this allows us to have a min heap
+        other.distance.total_cmp(&self.distance)
     }
 }
 
@@ -174,7 +175,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
-        let mut meta_page = MetaPage::fetch(&index);
+        let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
@@ -286,10 +287,9 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance
         );*/
 
-        match self.resort_buffer.pop() {
-            Some(rd) => Some((rd.heap_pointer, rd.index_pointer)),
-            None => None,
-        }
+        self.resort_buffer
+            .pop()
+            .map(|rd| (rd.heap_pointer, rd.index_pointer))
     }
 }
 

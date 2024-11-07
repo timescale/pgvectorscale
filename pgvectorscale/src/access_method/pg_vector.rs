@@ -14,8 +14,8 @@ pub struct PgVectorInternal {
 
 impl PgVectorInternal {
     pub fn to_slice(&self) -> &[f32] {
-        let dim = (*self).dim;
-        let raw_slice = unsafe { (*self).x.as_slice(dim as _) };
+        let dim = self.dim;
+        let raw_slice = unsafe { self.x.as_slice(dim as _) };
         raw_slice
     }
 }
@@ -47,6 +47,9 @@ impl Drop for PgVector {
 }
 
 impl PgVector {
+    /// # Safety
+    ///
+    /// TODO
     pub unsafe fn from_pg_parts(
         datum_parts: *mut pg_sys::Datum,
         isnull_parts: *mut bool,
@@ -100,6 +103,9 @@ impl PgVector {
         casted
     }
 
+    /// # Safety
+    ///
+    /// TODO
     pub unsafe fn from_datum(
         datum: pg_sys::Datum,
         meta_page: &meta_page::MetaPage,

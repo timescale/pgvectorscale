@@ -47,13 +47,10 @@ impl BuilderNeighborCache {
         result: &mut Vec<NeighborWithDistance>,
     ) {
         let neighbors = self.neighbor_map.get(&neighbors_of);
-        match neighbors {
-            Some(n) => {
-                for nwd in n {
-                    result.push(nwd.clone());
-                }
+        if let Some(n) = neighbors {
+            for nwd in n {
+                result.push(nwd.clone());
             }
-            None => (),
         }
     }
 
