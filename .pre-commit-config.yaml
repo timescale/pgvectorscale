@@ -3,5 +3,8 @@ repos:
     rev: v1.0
     hooks:
       - id: fmt
+        files: ^pgvectorscale/pgvectorscale/.*\.(rs|toml)$
       - id: cargo-check
+        files: ^pgvectorscale/pgvectorscale/.*\.rs$
       - id: clippy
+        files: ^pgvectorscale/pgvectorscale/.*\.rs$
