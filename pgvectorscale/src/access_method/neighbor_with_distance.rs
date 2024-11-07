@@ -65,18 +65,18 @@ impl DistanceWithTieBreak {
 
 impl PartialOrd for DistanceWithTieBreak {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        if self.distance == 0.0 && other.distance == 0.0 {
-            return self
-                .get_distance_tie_break()
-                .partial_cmp(&other.get_distance_tie_break());
-        }
-        self.distance.partial_cmp(&other.distance)
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for DistanceWithTieBreak {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.partial_cmp(other).unwrap()
+        if self.distance == 0.0 && other.distance == 0.0 {
+            return self
+                .get_distance_tie_break()
+                .cmp(&other.get_distance_tie_break());
+        }
+        self.distance.total_cmp(&other.distance)
     }
 }
 
