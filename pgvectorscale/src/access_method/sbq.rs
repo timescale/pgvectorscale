@@ -233,7 +233,7 @@ impl SbqQuantizer {
         _meta_page: &super::meta_page::MetaPage,
         full_vector: &[f32],
     ) -> Vec<SbqVectorElement> {
-        self.quantize(&full_vector)
+        self.quantize(full_vector)
     }
 }
 
@@ -264,7 +264,7 @@ impl SbqSearchDistanceMeasure {
         gns: &GraphNeighborStore,
         stats: &mut S,
     ) -> f32 {
-        assert!(bq_vector.len() > 0);
+        assert!(!bq_vector.is_empty());
         stats.record_quantized_distance_comparison();
         let (a, b) = match gns {
             GraphNeighborStore::Disk => {
@@ -318,7 +318,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         let cache = &mut storage.qv_cache.borrow_mut();
         Self {
             vec: cache.get(index_pointer, storage, stats).to_vec(),
-            storage: storage,
+            storage,
         }
     }
 }
@@ -398,10 +398,10 @@ impl<'a> SbqSpeedupStorage<'a> {
         meta_page: &super::meta_page::MetaPage,
     ) -> SbqSpeedupStorage<'a> {
         Self {
-            index: index,
+            index,
             distance_fn: meta_page.get_distance_function(),
             quantizer: SbqQuantizer::new(meta_page),
-            heap_rel: heap_rel,
+            heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
@@ -413,7 +413,7 @@ impl<'a> SbqSpeedupStorage<'a> {
         meta_page: &super::meta_page::MetaPage,
         stats: &mut S,
     ) -> SbqQuantizer {
-        unsafe { SbqMeans::load(&index_relation, meta_page, stats) }
+        unsafe { SbqMeans::load(index_relation, meta_page, stats) }
     }
 
     pub fn load_for_insert<S: StatsNodeRead>(
@@ -426,7 +426,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
-            heap_rel: heap_rel,
+            heap_rel,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
@@ -463,9 +463,9 @@ impl<'a> SbqSpeedupStorage<'a> {
 
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
         if self.quantizer.use_mean {
-            let index_pointer = unsafe { SbqMeans::store(&self.index, &self.quantizer, stats) };
+            let index_pointer = unsafe { SbqMeans::store(self.index, &self.quantizer, stats) };
             super::meta_page::MetaPage::update_quantizer_metadata_pointer(
-                &self.index,
+                self.index,
                 index_pointer,
                 stats,
             );
@@ -575,7 +575,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         let node = SbqNode::with_meta(
             &self.quantizer,
             heap_pointer,
-            &meta_page,
+            meta_page,
             bq_vector.as_slice(),
         );
 
@@ -614,7 +614,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
 
         let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, &meta, &cache);
+        archived.as_mut().set_neighbors(neighbors, meta, &cache);
 
         node.commit();
     }
@@ -628,11 +628,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
     }
 
     fn get_query_distance_measure(&self, query: PgVector) -> SbqSearchDistanceMeasure {
-        return SbqSearchDistanceMeasure::new(
-            &self.quantizer,
-            query,
-            self.num_dimensions_for_neighbors,
-        );
+        SbqSearchDistanceMeasure::new(&self.quantizer, query, self.num_dimensions_for_neighbors)
     }
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
@@ -722,8 +718,8 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         let lsn_index_pointer = lsn.index_pointer;
         let rn = unsafe { SbqNode::read(self.index, lsn_index_pointer, stats) };
         let node = rn.get_archived_node();
-        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
-        heap_pointer
+
+        node.heap_item_pointer.deserialize_item_pointer()
     }
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
@@ -745,7 +741,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
 
         let node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, &meta, &cache);
+        archived.as_mut().set_neighbors(neighbors, meta, &cache);
         node.commit();
     }
 
@@ -814,8 +810,8 @@ impl SbqNode {
         Self {
             heap_item_pointer: heap_pointer,
             bq_vector: bq_vector.to_vec(),
-            neighbor_index_pointers: neighbor_index_pointers,
-            neighbor_vectors: neighbor_vectors,
+            neighbor_index_pointers,
+            neighbor_vectors,
         }
     }
 
@@ -852,7 +848,7 @@ impl SbqNode {
         let page_size = BLCKSZ as usize - 50;
         //one quantized_vector takes this many bytes
         let vec_size =
-            SbqQuantizer::quantized_size_bytes(num_dimensions as usize, num_bits_per_dimension) + 1;
+            SbqQuantizer::quantized_size_bytes(num_dimensions, num_bits_per_dimension) + 1;
         //start from the page size then subtract the heap_item_pointer and bq_vector elements of SbqNode.
         let starting = BLCKSZ as usize - std::mem::size_of::<HeapPointer>() - vec_size;
         //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in SbqNode.
@@ -861,9 +857,9 @@ impl SbqNode {
         let mut num_neighbors_overapproximate: usize = starting / one_neighbor;
         while num_neighbors_overapproximate > 0 {
             let serialized_size = SbqNode::test_size(
-                num_neighbors_overapproximate as usize,
-                num_dimensions as usize,
-                num_dimensions_for_neighbors as usize,
+                num_neighbors_overapproximate,
+                num_dimensions,
+                num_dimensions_for_neighbors,
                 num_bits_per_dimension,
             );
             if serialized_size <= page_size {

@@ -21,10 +21,10 @@ impl NeighborWithDistance {
     }
 
     pub fn get_index_pointer_to_neighbor(&self) -> ItemPointer {
-        return self.index_pointer;
+        self.index_pointer
     }
     pub fn get_distance(&self) -> Distance {
-        return self.distance;
+        self.distance
     }
 }
 

@@ -50,9 +50,9 @@ impl<'a, 'b> BuildState<'a, 'b> {
         BuildState {
             memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
-            meta_page: meta_page,
+            meta_page,
             tape,
-            graph: graph,
+            graph,
             started: Instant::now(),
             stats: InsertStats::new(),
         }
@@ -130,7 +130,7 @@ unsafe fn aminsert_internal(
     let heap_relation = PgRelation::from_pg(heaprel);
     let mut meta_page = MetaPage::fetch(&index_relation);
     let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
-    if let None = vec {
+    if vec.is_none() {
         //todo handle NULLs?
         return false;
     }
@@ -183,17 +183,17 @@ unsafe fn insert_storage<S: Storage>(
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
-    let mut tape = Tape::new(&index_relation, S::page_type());
+    let mut tape = Tape::new(index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vector.to_index_slice(),
         heap_pointer,
-        &meta_page,
+        meta_page,
         &mut tape,
         stats,
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(&index_relation, index_pointer, vector, storage, stats)
+    graph.insert(index_relation, index_pointer, vector, storage, stats)
 }
 
 #[pg_guard]
@@ -440,7 +440,7 @@ fn build_callback_internal<S: Storage>(
 ) {
     check_for_interrupts!();
 
-    state.ntuples = state.ntuples + 1;
+    state.ntuples += 1;
 
     if state.ntuples % 1000 == 0 {
         debug1!(
@@ -529,10 +529,11 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+        let test_vec: Option<Vec<f32>> = Spi::get_one(
+            &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
     FROM generate_series(1, 1536)"
-        ))?;
+                .to_string(),
+        )?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
                 &format!(
@@ -713,20 +714,19 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
+        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
         assert_eq!(3, res.unwrap());
 
-        Spi::run(&format!(
-            "
+        Spi::run(
+            &"
         set enable_seqscan = 0;
         explain analyze select * from test order by embedding <=> '[0,0,0]';
-        ",
-        ))?;
+        "
+            .to_string(),
+        )?;
 
-        Spi::run(&format!("drop index idxtest;",))?;
+        Spi::run(&"drop index idxtest;".to_string())?;
 
         Ok(())
     }
@@ -747,13 +747,11 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
+        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
         assert_eq!(2, res.unwrap());
 
-        Spi::run(&format!("drop index idxtest;",))?;
+        Spi::run(&"drop index idxtest;".to_string())?;
 
         Ok(())
     }
@@ -800,10 +798,11 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+        let test_vec: Option<Vec<f32>> = Spi::get_one(
+            &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
     FROM generate_series(1, 1536)"
-        ))?;
+                .to_string(),
+        )?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
                 &format!(
@@ -914,14 +913,12 @@ pub mod tests {
         ))?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
-                &format!(
-                    "
+                &"
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
             WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
-            ",
-                ),
+            ".to_string(),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),
@@ -931,14 +928,12 @@ pub mod tests {
         if cnt.unwrap() != expected_cnt {
             /* better debugging */
             let id: Option<i64> = Spi::get_one_with_args(
-                &format!(
-                    "
+                &"
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
             WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT id from cte limit 1;
-            ",
-                ),
+            ".to_string(),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),

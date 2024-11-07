@@ -41,7 +41,7 @@ impl TSVScanState {
         Self {
             storage: std::ptr::null_mut(),
             distance_fn: None,
-            meta_page: meta_page,
+            meta_page,
             last_buffer: None,
         }
     }
@@ -53,7 +53,7 @@ impl TSVScanState {
         query: PgVector,
         search_list_size: usize,
     ) {
-        let meta_page = MetaPage::fetch(&index);
+        let meta_page = MetaPage::fetch(index);
         let storage = meta_page.get_storage_type();
         let distance = meta_page.get_distance_function();
 
@@ -174,7 +174,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
-        let mut meta_page = MetaPage::fetch(&index);
+        let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
@@ -286,10 +286,9 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance
         );*/
 
-        match self.resort_buffer.pop() {
-            Some(rd) => Some((rd.heap_pointer, rd.index_pointer)),
-            None => None,
-        }
+        self.resort_buffer
+            .pop()
+            .map(|rd| (rd.heap_pointer, rd.index_pointer))
     }
 }
 

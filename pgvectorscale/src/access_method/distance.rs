@@ -23,7 +23,7 @@ pub fn distance_l2(a: &[f32], b: &[f32]) -> f32 {
 
     #[allow(unreachable_code)]
     {
-        return distance_l2_unoptimized(a, b);
+        distance_l2_unoptimized(a, b)
     }
 }
 
@@ -33,7 +33,7 @@ pub fn distance_l2_unoptimized(a: &[f32], b: &[f32]) -> f32 {
     let norm: f32 = a
         .iter()
         .zip(b.iter())
-        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+        .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
         .sum();
     assert!(norm >= 0.);
     //don't sqrt for performance. These are only used for ordering so sqrt not needed
@@ -50,42 +50,42 @@ pub fn distance_l2_optimized_for_few_dimensions(a: &[f32], b: &[f32]) -> f32 {
         1 => a[..1]
             .iter()
             .zip(b[..1].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         2 => a[..2]
             .iter()
             .zip(b[..2].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         3 => a[..3]
             .iter()
             .zip(b[..3].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         4 => a[..4]
             .iter()
             .zip(b[..4].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         5 => a[..5]
             .iter()
             .zip(b[..5].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         6 => a[..6]
             .iter()
             .zip(b[..6].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         7 => a[..7]
             .iter()
             .zip(b[..7].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         8 => a[..8]
             .iter()
             .zip(b[..8].iter())
-            .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+            .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
             .sum(),
         _ => distance_l2(a, b),
     };
@@ -104,7 +104,7 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
 
     #[allow(unreachable_code)]
     {
-        return distance_cosine_unoptimized(a, b);
+        distance_cosine_unoptimized(a, b)
     }
 }
 
@@ -130,7 +130,7 @@ pub fn preprocess_cosine_get_norm(a: &[f32]) -> Option<f32> {
     if norm >= 1.0 - adj_epsilon && norm <= 1.0 + adj_epsilon {
         return None;
     }
-    return Some(norm.sqrt());
+    Some(norm.sqrt())
 }
 
 pub fn preprocess_cosine(a: &mut [f32]) {

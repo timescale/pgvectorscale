@@ -14,8 +14,8 @@ pub struct PgVectorInternal {
 
 impl PgVectorInternal {
     pub fn to_slice(&self) -> &[f32] {
-        let dim = (*self).dim;
-        let raw_slice = unsafe { (*self).x.as_slice(dim as _) };
+        let dim = self.dim;
+        let raw_slice = unsafe { self.x.as_slice(dim as _) };
         raw_slice
     }
 }

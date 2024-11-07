@@ -19,7 +19,7 @@ impl<'a> Tape<'a> {
         page.commit();
         Self {
             page_type,
-            index: index,
+            index,
             current: block_number,
         }
     }
