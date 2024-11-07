@@ -30,6 +30,7 @@ impl DistanceWithTieBreak {
         //this is the distance from the query to a index node.
         //make the distance_tie_break = 0
         let distance_tie_break = OnceCell::new();
+        //explicitly set the distance_tie_break to 0 to avoid the cost of computing it
         distance_tie_break.set(0).unwrap();
         DistanceWithTieBreak {
             distance,
@@ -47,6 +48,18 @@ impl DistanceWithTieBreak {
 
     pub fn get_distance(&self) -> Distance {
         self.distance
+    }
+
+    pub fn get_factor(&self, divisor: &Self) -> f64 {
+        if divisor.get_distance() < 0.0 + f32::EPSILON {
+            if self.get_distance() < 0.0 + f32::EPSILON {
+                self.get_distance_tie_break() as f64 / divisor.get_distance_tie_break() as f64
+            } else {
+                f64::MAX
+            }
+        } else {
+            self.get_distance() as f64 / divisor.get_distance() as f64
+        }
     }
 }
 

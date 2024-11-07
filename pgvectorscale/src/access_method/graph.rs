@@ -375,7 +375,6 @@ impl<'a> Graph<'a> {
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
-        let dimension_epsilon = self.get_meta_page().get_num_dimensions() as f32 * f32::EPSILON;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
@@ -409,69 +408,24 @@ impl<'a> Graph<'a> {
                         continue;
                     }
 
-                    let mut distance_between_candidate_and_existing_neighbor = unsafe {
+                    let raw_distance_between_candidate_and_existing_neighbor = unsafe {
                         dist_state
                             .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)
                     };
-                    let mut distance_between_candidate_and_point = candidate_neighbor
-                        .get_distance_with_tie_break()
-                        .get_distance();
 
-                    //We need both values to be positive.
-                    //Otherwise, the case where distance_between_candidate_and_point > 0 and distance_between_candidate_and_existing_neighbor < 0 is totally wrong.
-                    //If we implement inner product distance we'll have to figure something else out.
-                    if distance_between_candidate_and_point < 0.0
-                        && distance_between_candidate_and_point >= 0.0 - dimension_epsilon
-                    {
-                        distance_between_candidate_and_point = 0.0;
-                    }
+                    let distance_between_candidate_and_existing_neighbor =
+                        DistanceWithTieBreak::new(
+                            raw_distance_between_candidate_and_existing_neighbor,
+                            candidate_neighbor.get_index_pointer_to_neighbor(),
+                            existing_neighbor.get_index_pointer_to_neighbor(),
+                        );
 
-                    if distance_between_candidate_and_existing_neighbor < 0.0
-                        && distance_between_candidate_and_existing_neighbor
-                            >= 0.0 - dimension_epsilon
-                    {
-                        distance_between_candidate_and_existing_neighbor = 0.0;
-                    }
-
-                    debug_assert!(
-                        distance_between_candidate_and_point >= 0.0,
-                        "distance_between_candidate_and_point is negative: {}, {}",
-                        distance_between_candidate_and_point,
-                        f32::EPSILON
-                    );
-                    debug_assert!(distance_between_candidate_and_existing_neighbor >= 0.0);
+                    let distance_between_candidate_and_point =
+                        candidate_neighbor.get_distance_with_tie_break();
 
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
-                    let factor = if distance_between_candidate_and_existing_neighbor
-                        < 0.0 + f32::EPSILON
-                    {
-                        if distance_between_candidate_and_point < 0.0 + f32::EPSILON {
-                            /* Both distances are 0. This is a special and interesting case because the neighbors of all
-                            other nodes will be the same on both nodes. This, in turn means, that we would have the same
-                            nieghbors on both. But, if the num_neighbors is small, we risk creating a unconnected subgraph all
-                            pointing to each other (all nodes at the same point). For this reason, we create a consistent way
-                            to rank the distance even at the same point (by using the item-pointer distance), and determine
-                            the factor according to this new distance. This means that some 0-distance node will be pruned at alpha=1.0
-
-                            Note: with sbq these equivalence relations are actually not uncommon */
-                            let ip_distance_between_candidate_and_point = candidate_neighbor
-                                .get_distance_with_tie_break()
-                                .get_distance_tie_break();
-
-                            let ip_distance_between_candidate_and_existing_neighbor =
-                                candidate_neighbor
-                                    .get_index_pointer_to_neighbor()
-                                    .ip_distance(existing_neighbor.get_index_pointer_to_neighbor());
-
-                            ip_distance_between_candidate_and_point as f64
-                                / ip_distance_between_candidate_and_existing_neighbor as f64
-                        } else {
-                            f64::MAX
-                        }
-                    } else {
-                        distance_between_candidate_and_point as f64
-                            / distance_between_candidate_and_existing_neighbor as f64
-                    };
+                    let factor = distance_between_candidate_and_point
+                        .get_factor(&distance_between_candidate_and_existing_neighbor);
 
                     max_factors[j] = max_factors[j].max(factor)
                 }
