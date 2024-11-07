@@ -672,7 +672,12 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
             let rn1 = unsafe { SbqNode::read(self.index, n, stats) };
             stats.record_quantized_distance_comparison();
             let dist = distance_xor_optimized(q, rn1.get_archived_node().bq_vector.as_slice());
-            result.push(NeighborWithDistance::new(n, dist as f32))
+            result.push(NeighborWithDistance::new(
+                n,
+                dist as f32,
+                //OPT: probably should make this calculation lazy
+                n.ip_distance(neighbors_of),
+            ))
         }
     }
 

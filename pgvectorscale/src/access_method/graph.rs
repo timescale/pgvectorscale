@@ -141,15 +141,13 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         if self.visited.len() > pos_limit {
             let node_at_pos = &self.visited[pos_limit - 1];
             let head = self.candidates.peek().unwrap();
-            if head.0.distance >= node_at_pos.distance {
+            if head.0 >= *node_at_pos {
                 return None;
             }
         }
 
         let head = self.candidates.pop().unwrap();
-        let idx = self
-            .visited
-            .partition_point(|x| x.distance < head.0.distance);
+        let idx = self.visited.partition_point(|x| *x < head.0);
         self.visited.insert(idx, head.0);
         Some(idx)
     }
@@ -335,6 +333,7 @@ impl<'a> Graph<'a> {
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
                         list_search_entry.distance,
+                        list_search_entry.distance_tie_break,
                     ));
                 }
             }
@@ -460,14 +459,8 @@ impl<'a> Graph<'a> {
                                     .get_index_pointer_to_neighbor()
                                     .ip_distance(existing_neighbor.get_index_pointer_to_neighbor());
 
-                            if ip_distance_between_candidate_and_point
-                                <= ip_distance_between_candidate_and_existing_neighbor
-                            {
-                                0.99
-                            } else {
-                                /* make sure this gets pruned for alpha=1.0 to make room for other nodes at higher distances */
-                                1.01
-                            }
+                            ip_distance_between_candidate_and_point as f64
+                                / ip_distance_between_candidate_and_existing_neighbor as f64
                         } else {
                             f64::MAX
                         }
@@ -528,14 +521,23 @@ impl<'a> Graph<'a> {
         );
 
         //update back pointers
+        let mut cnt_contains = 0;
+        let neighbor_list_len = neighbor_list.len();
         for neighbor in neighbor_list {
-            self.update_back_pointer(
+            let (_needed_prune, contains) = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance(),
+                neighbor.get_distance_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
+            if contains {
+                cnt_contains = cnt_contains + 1;
+            }
+        }
+        if neighbor_list_len > 0 && cnt_contains == 0 {
+            pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }
     }
 
@@ -544,11 +546,12 @@ impl<'a> Graph<'a> {
         from: IndexPointer,
         to: IndexPointer,
         distance: f32,
+        distance_tie_break: usize,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
-    ) -> bool {
-        let new = vec![NeighborWithDistance::new(to, distance)];
-        let (pruned, _) = self.add_neighbors(storage, from, new, prune_stats);
-        pruned
+    ) -> (bool, bool) {
+        let new = vec![NeighborWithDistance::new(to, distance, distance_tie_break)];
+        let (pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
+        (pruned, n.contains(&new[0]))
     }
 }

@@ -8,15 +8,21 @@ pub type Distance = f32;
 pub struct NeighborWithDistance {
     index_pointer: IndexPointer,
     distance: Distance,
+    distance_tie_break: usize,
 }
 
 impl NeighborWithDistance {
-    pub fn new(neighbor_index_pointer: ItemPointer, distance: Distance) -> Self {
+    pub fn new(
+        neighbor_index_pointer: ItemPointer,
+        distance: Distance,
+        distance_tie_break: usize,
+    ) -> Self {
         assert!(!distance.is_nan());
         assert!(distance >= 0.0);
         Self {
             index_pointer: neighbor_index_pointer,
             distance,
+            distance_tie_break,
         }
     }
 
@@ -25,6 +31,9 @@ impl NeighborWithDistance {
     }
     pub fn get_distance(&self) -> Distance {
         self.distance
+    }
+    pub fn get_distance_tie_break(&self) -> usize {
+        return self.distance_tie_break;
     }
 }
 
@@ -36,6 +45,9 @@ impl PartialOrd for NeighborWithDistance {
 
 impl Ord for NeighborWithDistance {
     fn cmp(&self, other: &Self) -> Ordering {
+        if self.distance == 0.0 && other.distance == 0.0 {
+            return self.distance_tie_break.cmp(&other.distance_tie_break);
+        }
         self.distance.total_cmp(&other.distance)
     }
 }

@@ -864,13 +864,71 @@ pub mod tests {
         Ok(())
     }
 
+    pub fn verify_index_accuracy(
+        index_options: &str,
+        expected_cnt: i64,
+        dimensions: usize,
+    ) -> spi::Result<()> {
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, {dimensions})"
+        ))?;
+
+        let cnt: Option<i64> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET diskann.query_search_list_size = 2;
+            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+        if cnt.unwrap() != expected_cnt {
+            /* better debugging */
+            let id: Option<String> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET diskann.query_search_list_size = 2;
+            WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from test_data where id in (select id from cte limit 1);
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+            assert!(
+                cnt.unwrap() == expected_cnt,
+                "initial count is {} id is {}",
+                cnt.unwrap(),
+                id.unwrap()
+            );
+        }
+
+        assert!(
+            cnt.unwrap() == expected_cnt,
+            "initial count is {}",
+            cnt.unwrap()
+        );
+        Ok(())
+    }
+
     #[pg_test]
     pub unsafe fn test_index_small_accuracy() -> spi::Result<()> {
         /* Test for the creation of connected graphs when the number of dimensions is small as is the
         number of neighborss */
         /* small num_neighbors is especially challenging for making sure no nodes get disconnected */
         let index_options = "num_neighbors=10, search_list_size=10";
-        let expected_cnt = 300;
+        let expected_cnt = 1000;
         let dimensions = 2;
 
         Spi::run(&format!(
@@ -908,52 +966,53 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-    FROM generate_series(1, {dimensions})"
-        ))?;
+        verify_index_accuracy(index_options, expected_cnt, dimensions)
+    }
 
-        let cnt: Option<i64> = Spi::get_one_with_args(
-                &"
-            SET enable_seqscan = 0;
-            SET enable_indexscan = 1;
-            SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
-            ".to_string(),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
-            )?;
+    #[pg_test]
+    pub unsafe fn test_index_small_accuracy_insert_after_index_created() -> spi::Result<()> {
+        /* Test for the creation of connected graphs when the number of dimensions is small as is the
+        number of neighborss */
+        /* small num_neighbors is especially challenging for making sure no nodes get disconnected */
+        let index_options = "num_neighbors=10, search_list_size=10";
+        let expected_cnt = 1000;
+        let dimensions = 2;
 
-        if cnt.unwrap() != expected_cnt {
-            /* better debugging */
-            let id: Option<i64> = Spi::get_one_with_args(
-                &"
-            SET enable_seqscan = 0;
-            SET enable_indexscan = 1;
-            SET diskann.query_search_list_size = 2;
-            WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT id from cte limit 1;
-            ".to_string(),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
-            )?;
-
-            assert!(
-                cnt.unwrap() == expected_cnt,
-                "initial count is {} id is {}",
-                cnt.unwrap(),
-                id.unwrap()
+        Spi::run(&format!(
+            "CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimensions})
             );
-        }
+            
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
-        assert!(
-            cnt.unwrap() == expected_cnt,
-            "initial count is {}",
-            cnt.unwrap()
-        );
+            select setseed(0.5);
+           -- generate 300 vectors
+            INSERT INTO test_data (id, embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    i % {expected_cnt},
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, {dimensions} * {expected_cnt}) i
+                GROUP BY
+                    i % {expected_cnt}) g;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimensions}));"))?;
+
+        verify_index_accuracy(index_options, expected_cnt, dimensions)?;
         Ok(())
     }
 }
