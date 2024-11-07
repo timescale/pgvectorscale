@@ -864,11 +864,7 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn verify_index_accuracy(
-        index_options: &str,
-        expected_cnt: i64,
-        dimensions: usize,
-    ) -> spi::Result<()> {
+    pub fn verify_index_accuracy(expected_cnt: i64, dimensions: usize) -> spi::Result<()> {
         let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
             "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
     FROM generate_series(1, {dimensions})"
@@ -966,7 +962,8 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        verify_index_accuracy(index_options, expected_cnt, dimensions)
+        verify_index_accuracy(expected_cnt, dimensions)?;
+        Ok(())
     }
 
     #[pg_test]
@@ -1012,7 +1009,7 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        verify_index_accuracy(index_options, expected_cnt, dimensions)?;
+        verify_index_accuracy(expected_cnt, dimensions)?;
         Ok(())
     }
 }

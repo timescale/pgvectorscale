@@ -2,6 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
     stats::{
@@ -256,8 +257,7 @@ impl<'a> Storage for PlainStorage<'a> {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(
                 n,
-                dist,
-                n.ip_distance(neighbors_of),
+                DistanceWithTieBreak::new(dist, neighbors_of, n),
             ))
         }
     }
@@ -288,7 +288,7 @@ impl<'a> Storage for PlainStorage<'a> {
 
         ListSearchNeighbor::new(
             index_pointer,
-            distance,
+            lsr.create_distance_with_tie_break(distance, index_pointer),
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
         )
     }
@@ -322,7 +322,7 @@ impl<'a> Storage for PlainStorage<'a> {
             };
             let lsn = ListSearchNeighbor::new(
                 neighbor_index_pointer,
-                distance,
+                lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                 PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
             );
 
