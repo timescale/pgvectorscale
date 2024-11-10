@@ -1,3 +1,10 @@
 {
-  "2808401": "2808401-My first shared query.sql"
+  "2808401": "2808401-My first shared query.sql",
+  "2810072": "pgvectorscale/sql/timescale_vector--0.0.1--0.0.2.sql",
+  "2810073": "pgvectorscale/sql/vectorscale--0.0.2--0.2.0.sql",
+  "2810074": "pgvectorscale/sql/vectorscale--0.0.2--0.3.0.sql",
+  "2810075": "pgvectorscale/sql/vectorscale--0.0.2--0.4.0.sql",
+  "2810076": "pgvectorscale/sql/vectorscale--0.2.0--0.3.0.sql",
+  "2810077": "pgvectorscale/sql/vectorscale--0.2.0--0.4.0.sql",
+  "2810078": "pgvectorscale/sql/vectorscale--0.3.0--0.4.0.sql"
 }
