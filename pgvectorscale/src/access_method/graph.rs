@@ -127,7 +127,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         }
     }
 
-    /// Internal function
+    /// To be called by the Storage Providers only
     pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
         self.stats.record_candidate();
         self.candidates.push(Reverse(n));
@@ -484,18 +484,25 @@ impl<'a> Graph<'a> {
         let mut cnt_contains = 0;
         let neighbor_list_len = neighbor_list.len();
         for neighbor in neighbor_list {
-            let (_needed_prune, contains) = self.update_back_pointer(
+            let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
                 neighbor.get_distance_with_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
-            if contains {
+            if neighbor_contains_new_point {
                 cnt_contains += 1;
             }
         }
         if neighbor_list_len > 0 && cnt_contains == 0 {
+            // in tests this should be a hard error
+            debug_assert!(
+                false,
+                "Inserted {:?} but it became an orphan",
+                index_pointer
+            );
+            // in production this is a warning
             pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }
     }
@@ -507,12 +514,12 @@ impl<'a> Graph<'a> {
         distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
-    ) -> (bool, bool) {
+    ) -> bool {
         let new = vec![NeighborWithDistance::new(
             to,
             distance_with_tie_break.clone(),
         )];
-        let (pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
-        (pruned, n.contains(&new[0]))
+        let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
+        n.contains(&new[0])
     }
 }

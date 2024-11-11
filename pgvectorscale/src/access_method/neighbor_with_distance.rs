@@ -5,13 +5,13 @@ use crate::util::{IndexPointer, ItemPointer};
 //TODO is this right?
 pub type Distance = f32;
 
-/* implements a distance with a lazy tie break */
+// implements a distance with a lazy tie break
 #[derive(Clone, Debug)]
 pub struct DistanceWithTieBreak {
     distance: Distance,
     from: IndexPointer,
     to: IndexPointer,
-    _distance_tie_break: OnceCell<usize>,
+    distance_tie_break: OnceCell<usize>,
 }
 
 impl DistanceWithTieBreak {
@@ -22,7 +22,7 @@ impl DistanceWithTieBreak {
             distance,
             from,
             to,
-            _distance_tie_break: OnceCell::new(),
+            distance_tie_break: OnceCell::new(),
         }
     }
 
@@ -36,17 +36,17 @@ impl DistanceWithTieBreak {
             distance,
             from: to,
             to,
-            _distance_tie_break: distance_tie_break,
+            distance_tie_break,
         }
     }
 
-    pub fn get_distance_tie_break(&self) -> usize {
+    fn get_distance_tie_break(&self) -> usize {
         *self
-            ._distance_tie_break
+            .distance_tie_break
             .get_or_init(|| self.from.ip_distance(self.to))
     }
 
-    pub fn get_distance(&self) -> Distance {
+    fn get_distance(&self) -> Distance {
         self.distance
     }
 
