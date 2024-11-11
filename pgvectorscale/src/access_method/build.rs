@@ -886,7 +886,7 @@ pub mod tests {
             )?;
 
         if cnt.unwrap() != expected_cnt {
-            /* better debugging */
+            // better debugging
             let id: Option<String> = Spi::get_one_with_args(
                 &format!(
                     "
@@ -920,9 +920,9 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_index_small_accuracy() -> spi::Result<()> {
-        /* Test for the creation of connected graphs when the number of dimensions is small as is the
-        number of neighborss */
-        /* small num_neighbors is especially challenging for making sure no nodes get disconnected */
+        // Test for the creation of connected graphs when the number of dimensions is small as is the
+        // number of neighborss
+        // small num_neighbors is especially challenging for making sure no nodes get disconnected
         let index_options = "num_neighbors=10, search_list_size=10";
         let expected_cnt = 1000;
         let dimensions = 2;
@@ -968,9 +968,9 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_index_small_accuracy_insert_after_index_created() -> spi::Result<()> {
-        /* Test for the creation of connected graphs when the number of dimensions is small as is the
-        number of neighborss */
-        /* small num_neighbors is especially challenging for making sure no nodes get disconnected */
+        // Test for the creation of connected graphs when the number of dimensions is small as is the
+        // number of neighborss
+        // small num_neighbors is especially challenging for making sure no nodes get disconnected
         let index_options = "num_neighbors=10, search_list_size=10";
         let expected_cnt = 1000;
         let dimensions = 2;
