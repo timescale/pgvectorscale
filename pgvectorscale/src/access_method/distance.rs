@@ -1,4 +1,44 @@
+use pgrx::pg_extern;
+use pgrx::pg_sys::{palloc0, FunctionCallInfoBaseData, PGFunction};
+
 pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
+
+pub enum DistanceType {
+    Cosine = 0,
+    L2 = 1,
+}
+
+impl DistanceType {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0 => DistanceType::Cosine,
+            1 => DistanceType::L2,
+            _ => panic!("Unknown DistanceType number {}", value),
+        }
+    }
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_cosine() -> i16 {
+    DistanceType::Cosine as i16
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_l2() -> i16 {
+    DistanceType::L2 as i16
+}
+
+pub unsafe fn call_distance_type_fn(fun: PGFunction) -> DistanceType {
+    match fun {
+        Some(fun) => {
+            let fcinfo_alloc =
+                palloc0(size_of::<FunctionCallInfoBaseData>()) as *mut FunctionCallInfoBaseData;
+            let result = fun(fcinfo_alloc).value() as i16;
+            DistanceType::from_u16(result as u16)
+        }
+        None => panic!("distance function is not set"),
+    }
+}
 
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

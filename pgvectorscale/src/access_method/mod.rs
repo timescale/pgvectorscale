@@ -23,6 +23,9 @@ pub mod distance;
 mod distance_x86;
 mod sbq;
 
+/// Access method support function numbers
+pub const DISKANN_DISTANCE_TYPE_PROC: u16 = 1;
+
 #[pg_extern(sql = "
     CREATE OR REPLACE FUNCTION diskann_amhandler(internal) RETURNS index_am_handler PARALLEL SAFE IMMUTABLE STRICT COST 0.0001 LANGUAGE c AS '@MODULE_PATHNAME@', '@FUNCTION_NAME@';
 
@@ -46,7 +49,7 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
         unsafe { PgBox::<pg_sys::IndexAmRoutine>::alloc_node(pg_sys::NodeTag::T_IndexAmRoutine) };
 
     amroutine.amstrategies = 0;
-    amroutine.amsupport = 0; //TODO
+    amroutine.amsupport = 1;
 
     amroutine.amcanorder = false;
     amroutine.amcanorderbyop = true;
@@ -99,16 +102,30 @@ BEGIN
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
 
     IF c = 0 THEN
-        CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
+        CREATE OPERATOR CLASS vector_cosine_ops
+        DEFAULT FOR TYPE vector USING diskann AS
+	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
+            FUNCTION 1 distance_type_cosine();
+    END IF;
+
+    SELECT count(*)
+    INTO c
+    FROM pg_catalog.pg_opclass c
+    WHERE c.opcname = 'vector_l2_ops'
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
+
+    IF c = 0 THEN
+        CREATE OPERATOR CLASS vector_l2_ops
         FOR TYPE vector USING diskann AS
-	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops;
+            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
+            FUNCTION 1 distance_type_l2();
     END IF;
 END;
 $$;
 
 "#,
     name = "diskann_ops_operator",
-    requires = [amhandler]
+    requires = [amhandler, distance_type_cosine, distance_type_l2]
 );
 
 #[pg_guard]

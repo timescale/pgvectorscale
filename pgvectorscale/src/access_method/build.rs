@@ -1,14 +1,16 @@
 use std::time::Instant;
 
-use pgrx::pg_sys::{pgstat_progress_update_param, AsPgCStr};
+use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr};
 use pgrx::*;
 
+use crate::access_method::distance::call_distance_type_fn;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
 
+use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -79,7 +81,17 @@ pub extern "C" fn ambuild(
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
     assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt) };
+
+    let distance_type = unsafe {
+        let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
+        if fmgr_info == std::ptr::null_mut() {
+            error!("No distance type function found for index");
+        }
+        call_distance_type_fn((*fmgr_info).fn_addr)
+    };
+
+    let meta_page =
+        unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
