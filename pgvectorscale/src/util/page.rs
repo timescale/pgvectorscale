@@ -103,9 +103,9 @@ impl<'a> WritablePage<'a> {
             //TODO do we need a GENERIC_XLOG_FULL_IMAGE option?
             let page = pg_sys::GenericXLogRegisterBuffer(state, *buffer, 0);
             let mut new = Self {
-                buffer: buffer,
-                page: page,
-                state: state,
+                buffer,
+                page,
+                state,
                 committed: false,
             };
             new.reinit(page_type);
@@ -165,9 +165,9 @@ impl<'a> WritablePage<'a> {
             //this check the page
             _ = TsvPageOpaqueData::read_from_page(&page);
             Self {
-                buffer: buffer,
-                page: page,
-                state: state,
+                buffer,
+                page,
+                state,
                 committed: false,
             }
         }
@@ -243,15 +243,12 @@ impl<'a> ReadablePage<'a> {
     pub unsafe fn read(index: &'a PgRelation, block: BlockNumber) -> Self {
         let buffer = LockedBufferShare::read(index, block);
         let page = BufferGetPage(*buffer);
-        Self {
-            buffer: buffer,
-            page: page,
-        }
+        Self { buffer, page }
     }
 
     pub fn get_type(&self) -> PageType {
         let opaque_data = TsvPageOpaqueData::read_from_page(&self.page);
-        PageType::from_u8((*opaque_data).page_type)
+        PageType::from_u8(opaque_data.page_type)
     }
 
     pub fn get_buffer(&self) -> &LockedBufferShare {

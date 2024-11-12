@@ -40,7 +40,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!("DROP EXTENSION IF EXISTS vectorscale CASCADE;"),
+                &"DROP EXTENSION IF EXISTS vectorscale CASCADE;".to_string(),
                 &[],
             )
             .unwrap();
@@ -173,9 +173,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!(
-                    "UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';",
-                ),
+                &"UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';".to_string(),
                 &[],
             )
             .unwrap();
