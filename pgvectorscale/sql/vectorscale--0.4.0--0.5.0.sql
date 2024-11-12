@@ -29,7 +29,7 @@ The ordering of items is not stable, it is driven by a dependency graph.
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/access_method/distance.rs:21
+-- src/access_method/distance.rs:42
 -- vectorscale::access_method::distance::distance_type_cosine
 CREATE  FUNCTION "distance_type_cosine"() RETURNS smallint /* i16 */
 IMMUTABLE STRICT PARALLEL SAFE
@@ -38,7 +38,7 @@ AS '$libdir/vectorscale-0.5.0', 'distance_type_cosine_wrapper';
 /* </end connected objects> */
 
 /* <begin connected objects> */
--- src/access_method/distance.rs:26
+-- src/access_method/distance.rs:47
 -- vectorscale::access_method::distance::distance_type_l2
 CREATE  FUNCTION "distance_type_l2"() RETURNS smallint /* i16 */
 IMMUTABLE STRICT PARALLEL SAFE

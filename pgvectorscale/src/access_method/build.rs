@@ -1,9 +1,10 @@
 use std::time::Instant;
 
+use pg_sys::{FunctionCall0Coll, InvalidOid};
 use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr};
 use pgrx::*;
 
-use crate::access_method::distance::call_distance_type_fn;
+use crate::access_method::distance::DistanceType;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::options::TSVIndexOptions;
@@ -87,7 +88,8 @@ pub extern "C" fn ambuild(
         if fmgr_info == std::ptr::null_mut() {
             error!("No distance type function found for index");
         }
-        call_distance_type_fn((*fmgr_info).fn_addr)
+        let result = FunctionCall0Coll(fmgr_info, InvalidOid).value() as u16;
+        DistanceType::from_u16(result)
     };
 
     let meta_page =
@@ -499,15 +501,19 @@ pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
 pub mod tests {
     use std::collections::HashSet;
 
+    use crate::access_method::distance::DistanceType;
     use pgrx::*;
 
     //TODO: add test where inserting and querying with vectors that are all the same.
 
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_creation_and_accuracy_scaffold(
+        distance_type: DistanceType,
         index_options: &str,
         name: &str,
     ) -> spi::Result<()> {
+        let operator = distance_type.get_operator();
+        let operator_class = distance_type.get_operator_class();
         let table_name = format!("test_data_icaa_{}", name);
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
@@ -527,7 +533,7 @@ pub mod tests {
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding {operator_class}) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -537,7 +543,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));"))?;
@@ -554,7 +560,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -588,7 +594,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));
@@ -620,7 +626,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -643,7 +649,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -667,7 +673,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -698,7 +704,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(
@@ -771,10 +777,14 @@ pub mod tests {
 
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_updates(
+        distance_type: DistanceType,
         index_options: &str,
         expected_cnt: i64,
         name: &str,
     ) -> spi::Result<()> {
+        let operator_class = distance_type.get_operator_class();
+        let operator = distance_type.get_operator();
+
         let table_name = format!("test_data_index_updates_{}", name);
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
@@ -796,7 +806,7 @@ pub mod tests {
                 GROUP BY
                     i % {expected_cnt}) g;
 
-            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding {operator_class}) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -806,7 +816,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));"))?;
@@ -823,7 +833,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -862,7 +872,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(

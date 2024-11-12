@@ -8,7 +8,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::distance::{self, DistanceFn, DistanceType};
+use super::distance::{DistanceFn, DistanceType};
 use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
@@ -159,10 +159,7 @@ impl MetaPage {
     }
 
     pub fn get_distance_function(&self) -> DistanceFn {
-        match DistanceType::from_u16(self.distance_type) {
-            DistanceType::Cosine => distance::distance_cosine,
-            DistanceType::L2 => distance::distance_l2,
-        }
+        DistanceType::from_u16(self.distance_type).get_distance_function()
     }
 
     pub fn get_storage_type(&self) -> StorageType {
