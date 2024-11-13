@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: timescaledev/rust-builder:ubuntu-1.65
+      image: timescaledev/rust-builder:ubuntu-stable
 
     env:
         # Make sure CI fails on all warnings, including Clippy lints
@@ -24,7 +24,7 @@ jobs:
       - name: Clippy check
         run: cd pgvectorscale && cargo clippy --all-targets --all-features
 
-      - name: Check formatting failure
+      - name: Check failure
         if: failure()
         run: |
           echo "cargo version is"
