@@ -3,16 +3,16 @@ on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
 
+# Make sure CI fails on all warnings, including Clippy lints
+env:
+  RUSTFLAGS: "-Dwarnings"
+
 jobs:
   fmt:
     runs-on: ubuntu-latest
 
     container:
       image: timescaledev/rust-builder:ubuntu-stable
-
-    env:
-        # Make sure CI fails on all warnings, including Clippy lints
-        RUSTFLAGS: "-Dwarnings"
 
     steps:
       - name: Checkout
@@ -21,12 +21,25 @@ jobs:
       - name: Verify formatting
         run: cd pgvectorscale && cargo fmt --check
 
+      - name: Check failure
+      if: failure()
+      run: |
+        echo "Failure in fmt check, cargo version is"
+        cargo --version
+
+  clippy-check:
+    runs-on: ubuntu-latest
+
+    container:
+      image: timescaledev/rust-builder:ubuntu-stable
+
+    steps:
       - name: Clippy check
         run: cd pgvectorscale && cargo clippy --all-targets --all-features
 
       - name: Check failure
         if: failure()
         run: |
-          echo "cargo version is"
+          echo "Failure in clippy-check, cargo version is"
           cargo --version
           
