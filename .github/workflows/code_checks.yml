@@ -6,6 +6,13 @@ permissions:
 # Make sure CI fails on all warnings, including Clippy lints
 env:
   RUSTFLAGS: "-Dwarnings"
+  PG_SRC_DIR: pgbuild
+  PG_INSTALL_DIR: postgresql
+  MAKE_JOBS: 6
+  PG_CONFIG_PATH: postgresql/bin/pg_config
+  TAG: ${{ github.event.inputs.tag }}
+  TAG_DIR: pgvectorscale
+  TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
 
 jobs:
   code-checks:
@@ -26,6 +33,29 @@ jobs:
         run: |
           echo "Failure in fmt check, cargo version is"
           cargo --version
+
+          - name: Install Linux Packages
+          uses: ./.github/actions/install-packages
+    
+      - name: Install PostgreSQL
+        uses: ./.github/actions/install-postgres
+        with:
+          pg-version: 16.3
+          pg-src-dir: ~/${{ env.PG_SRC_DIR }}
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+          
+      - name: Install pgvector
+        uses: ./.github/actions/install-pgvector
+        with:
+          pgvector-version: 0.7.4
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+    
+      - name: Install pgrx
+        uses: ./.github/actions/install-pgrx
+        with:
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+          pgrx-version: 0.12.5
+    
 
       - name: Clippy check
         run: cargo clippy --manifest-path pgvectorscale/Cargo.toml
