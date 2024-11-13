@@ -10,6 +10,10 @@ jobs:
     container:
       image: timescaledev/rust-builder:ubuntu-1.65
 
+    env:
+        # Make sure CI fails on all warnings, including Clippy lints
+        RUSTFLAGS: "-Dwarnings"
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -17,10 +21,12 @@ jobs:
       - name: Verify formatting
         run: cd pgvectorscale && cargo fmt --check
 
+      - name: Clippy check
+        run: cargo clippy --all-targets --all-features
+
       - name: Check formatting failure
         if: failure()
         run: |
           echo "cargo version is"
           cargo --version
-
-
+          
