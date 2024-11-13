@@ -10,6 +10,7 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
 
+use super::neighbor_with_distance::{Distance, DistanceWithTieBreak};
 use super::pg_vector::PgVector;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
 use super::storage::Storage;
@@ -17,8 +18,7 @@ use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
-    distance: f32,
-    distance_tie_break: usize, /* only used if distance = 0. This ensures a consistent order of results when distance = 0 */
+    distance_with_tie_break: DistanceWithTieBreak,
     private_data: PD,
 }
 
@@ -38,23 +38,21 @@ impl<PD> Eq for ListSearchNeighbor<PD> {}
 
 impl<PD> Ord for ListSearchNeighbor<PD> {
     fn cmp(&self, other: &Self) -> Ordering {
-        if self.distance == 0.0 && other.distance == 0.0 {
-            /* this logic should be consistent with what's used during pruning */
-            return self.distance_tie_break.cmp(&other.distance_tie_break);
-        }
-        self.distance.total_cmp(&other.distance)
+        self.distance_with_tie_break
+            .cmp(&other.distance_with_tie_break)
     }
 }
 
 impl<PD> ListSearchNeighbor<PD> {
-    pub fn new(index_pointer: IndexPointer, distance: f32, private_data: PD) -> Self {
-        assert!(!distance.is_nan());
-        debug_assert!(distance >= 0.0);
+    pub fn new(
+        index_pointer: IndexPointer,
+        distance_with_tie_break: DistanceWithTieBreak,
+        private_data: PD,
+    ) -> Self {
         Self {
             index_pointer,
             private_data,
-            distance,
-            distance_tie_break: 0,
+            distance_with_tie_break,
         }
     }
 
@@ -116,16 +114,22 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         self.inserted.insert(ip)
     }
 
-    /// Internal function
-    pub fn insert_neighbor(&mut self, mut n: ListSearchNeighbor<PD>) {
-        self.stats.record_candidate();
-        if n.distance == 0.0 {
-            /* record the tie break if distance is 0 */
-            if let Some(tie_break_item_pointer) = self.tie_break_item_pointer {
-                let d = tie_break_item_pointer.ip_distance(n.index_pointer);
-                n.distance_tie_break = d;
+    pub fn create_distance_with_tie_break(
+        &self,
+        d: Distance,
+        ip: ItemPointer,
+    ) -> DistanceWithTieBreak {
+        match self.tie_break_item_pointer {
+            None => DistanceWithTieBreak::with_query(d, ip),
+            Some(tie_break_item_pointer) => {
+                DistanceWithTieBreak::new(d, ip, tie_break_item_pointer)
             }
         }
+    }
+
+    /// To be called by the Storage Providers only
+    pub fn insert_neighbor(&mut self, n: ListSearchNeighbor<PD>) {
+        self.stats.record_candidate();
         self.candidates.push(Reverse(n));
     }
 
@@ -141,15 +145,13 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         if self.visited.len() > pos_limit {
             let node_at_pos = &self.visited[pos_limit - 1];
             let head = self.candidates.peek().unwrap();
-            if head.0.distance >= node_at_pos.distance {
+            if head.0 >= *node_at_pos {
                 return None;
             }
         }
 
         let head = self.candidates.pop().unwrap();
-        let idx = self
-            .visited
-            .partition_point(|x| x.distance < head.0.distance);
+        let idx = self.visited.partition_point(|x| *x < head.0);
         self.visited.insert(idx, head.0);
         Some(idx)
     }
@@ -262,6 +264,7 @@ impl<'a> Graph<'a> {
     ///
     /// Note this is the one-shot implementation that keeps only the closest `search_list_size` results in
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
+    #[allow(clippy::mutable_key_type)]
     fn greedy_search_for_build<S: Storage>(
         &self,
         index_pointer: IndexPointer,
@@ -334,7 +337,7 @@ impl<'a> Graph<'a> {
                     let list_search_entry = &lsr.visited[list_search_entry_idx];
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
-                        list_search_entry.distance,
+                        list_search_entry.distance_with_tie_break.clone(),
                     ));
                 }
             }
@@ -350,7 +353,7 @@ impl<'a> Graph<'a> {
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
         &self,
-        neighbors_of: ItemPointer,
+        _neighbors_of: ItemPointer,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -373,7 +376,6 @@ impl<'a> Graph<'a> {
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
-        let dimension_epsilon = self.get_meta_page().get_num_dimensions() as f32 * f32::EPSILON;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
@@ -407,74 +409,24 @@ impl<'a> Graph<'a> {
                         continue;
                     }
 
-                    let mut distance_between_candidate_and_existing_neighbor = unsafe {
+                    let raw_distance_between_candidate_and_existing_neighbor = unsafe {
                         dist_state
                             .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)
                     };
-                    let mut distance_between_candidate_and_point =
-                        candidate_neighbor.get_distance();
 
-                    //We need both values to be positive.
-                    //Otherwise, the case where distance_between_candidate_and_point > 0 and distance_between_candidate_and_existing_neighbor < 0 is totally wrong.
-                    //If we implement inner product distance we'll have to figure something else out.
-                    if distance_between_candidate_and_point < 0.0
-                        && distance_between_candidate_and_point >= 0.0 - dimension_epsilon
-                    {
-                        distance_between_candidate_and_point = 0.0;
-                    }
+                    let distance_between_candidate_and_existing_neighbor =
+                        DistanceWithTieBreak::new(
+                            raw_distance_between_candidate_and_existing_neighbor,
+                            candidate_neighbor.get_index_pointer_to_neighbor(),
+                            existing_neighbor.get_index_pointer_to_neighbor(),
+                        );
 
-                    if distance_between_candidate_and_existing_neighbor < 0.0
-                        && distance_between_candidate_and_existing_neighbor
-                            >= 0.0 - dimension_epsilon
-                    {
-                        distance_between_candidate_and_existing_neighbor = 0.0;
-                    }
-
-                    debug_assert!(
-                        distance_between_candidate_and_point >= 0.0,
-                        "distance_between_candidate_and_point is negative: {}, {}",
-                        distance_between_candidate_and_point,
-                        f32::EPSILON
-                    );
-                    debug_assert!(distance_between_candidate_and_existing_neighbor >= 0.0);
+                    let distance_between_candidate_and_point =
+                        candidate_neighbor.get_distance_with_tie_break();
 
                     //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
-                    let factor = if distance_between_candidate_and_existing_neighbor
-                        < 0.0 + f32::EPSILON
-                    {
-                        if distance_between_candidate_and_point < 0.0 + f32::EPSILON {
-                            /* Both distances are 0. This is a special and interesting case because the neighbors of all
-                            other nodes will be the same on both nodes. This, in turn means, that we would have the same
-                            nieghbors on both. But, if the num_neighbors is small, we risk creating a unconnected subgraph all
-                            pointing to each other (all nodes at the same point). For this reason, we create a consistent way
-                            to rank the distance even at the same point (by using the item-pointer distance), and determine
-                            the factor according to this new distance. This means that some 0-distance node will be pruned at alpha=1.0
-
-                            Note: with sbq these equivalence relations are actually not uncommon */
-                            let ip_distance_between_candidate_and_point = candidate_neighbor
-                                .get_index_pointer_to_neighbor()
-                                .ip_distance(neighbors_of);
-
-                            let ip_distance_between_candidate_and_existing_neighbor =
-                                candidate_neighbor
-                                    .get_index_pointer_to_neighbor()
-                                    .ip_distance(existing_neighbor.get_index_pointer_to_neighbor());
-
-                            if ip_distance_between_candidate_and_point
-                                <= ip_distance_between_candidate_and_existing_neighbor
-                            {
-                                0.99
-                            } else {
-                                /* make sure this gets pruned for alpha=1.0 to make room for other nodes at higher distances */
-                                1.01
-                            }
-                        } else {
-                            f64::MAX
-                        }
-                    } else {
-                        distance_between_candidate_and_point as f64
-                            / distance_between_candidate_and_existing_neighbor as f64
-                    };
+                    let factor = distance_between_candidate_and_point
+                        .get_factor(&distance_between_candidate_and_existing_neighbor);
 
                     max_factors[j] = max_factors[j].max(factor)
                 }
@@ -512,6 +464,7 @@ impl<'a> Graph<'a> {
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
+        #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
@@ -528,14 +481,29 @@ impl<'a> Graph<'a> {
         );
 
         //update back pointers
+        let mut cnt_contains = 0;
+        let neighbor_list_len = neighbor_list.len();
         for neighbor in neighbor_list {
-            self.update_back_pointer(
+            let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
-                neighbor.get_distance(),
+                neighbor.get_distance_with_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
             );
+            if neighbor_contains_new_point {
+                cnt_contains += 1;
+            }
+        }
+        if neighbor_list_len > 0 && cnt_contains == 0 {
+            // in tests this should be a hard error
+            debug_assert!(
+                false,
+                "Inserted {:?} but it became an orphan",
+                index_pointer
+            );
+            // in production this is a warning
+            pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }
     }
 
@@ -543,12 +511,15 @@ impl<'a> Graph<'a> {
         &mut self,
         from: IndexPointer,
         to: IndexPointer,
-        distance: f32,
+        distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
     ) -> bool {
-        let new = vec![NeighborWithDistance::new(to, distance)];
-        let (pruned, _) = self.add_neighbors(storage, from, new, prune_stats);
-        pruned
+        let new = vec![NeighborWithDistance::new(
+            to,
+            distance_with_tie_break.clone(),
+        )];
+        let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
+        n.contains(&new[0])
     }
 }

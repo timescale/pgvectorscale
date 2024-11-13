@@ -2,6 +2,7 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
@@ -516,7 +517,7 @@ impl<'a> SbqSpeedupStorage<'a> {
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
-                        distance,
+                        lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
                     );
 
@@ -539,7 +540,7 @@ impl<'a> SbqSpeedupStorage<'a> {
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
-                        distance,
+                        lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
                     );
 
@@ -672,7 +673,10 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
             let rn1 = unsafe { SbqNode::read(self.index, n, stats) };
             stats.record_quantized_distance_comparison();
             let dist = distance_xor_optimized(q, rn1.get_archived_node().bq_vector.as_slice());
-            result.push(NeighborWithDistance::new(n, dist as f32))
+            result.push(NeighborWithDistance::new(
+                n,
+                DistanceWithTieBreak::new(dist as f32, neighbors_of, n),
+            ))
         }
     }
 
@@ -697,7 +701,11 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
             &mut lsr.stats,
         );
 
-        ListSearchNeighbor::new(index_pointer, distance, PhantomData::<bool>)
+        ListSearchNeighbor::new(
+            index_pointer,
+            lsr.create_distance_with_tie_break(distance, index_pointer),
+            PhantomData::<bool>,
+        )
     }
 
     fn visit_lsn(
