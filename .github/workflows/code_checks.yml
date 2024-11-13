@@ -21,11 +21,11 @@ jobs:
       - name: Verify formatting
         run: cd pgvectorscale && cargo fmt --check
 
-      - name: Check failure
-      if: failure()
-      run: |
-        echo "Failure in fmt check, cargo version is"
-        cargo --version
+      - name: Formatting check failure
+        if: failure()
+        run: |
+          echo "Failure in fmt check, cargo version is"
+          cargo --version
 
   clippy-check:
     runs-on: ubuntu-latest
@@ -37,9 +37,9 @@ jobs:
       - name: Clippy check
         run: cd pgvectorscale && cargo clippy --all-targets --all-features
 
-      - name: Check failure
+      - name: Clippy check failure
         if: failure()
         run: |
-          echo "Failure in clippy-check, cargo version is"
+          echo "Failure in clippy check, cargo version is"
           cargo --version
           
