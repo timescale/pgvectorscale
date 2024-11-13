@@ -22,7 +22,7 @@ jobs:
         run: cd pgvectorscale && cargo fmt --check
 
       - name: Clippy check
-        run: cargo clippy --all-targets --all-features
+        run: cd pgvectorscale && cargo clippy --all-targets --all-features
 
       - name: Check formatting failure
         if: failure()
