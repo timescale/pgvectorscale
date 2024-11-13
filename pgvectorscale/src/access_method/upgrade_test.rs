@@ -61,6 +61,8 @@ pub mod tests {
         let pg_version = pg_sys::get_pg_major_version_num();
         let pg_config = pgrx.get(&format!("pg{}", pg_version)).unwrap();
 
+        // TODO (tj): expand this test to start from different versions, ideally all
+        // versions, but at least from the immediately previous one.
         let version = "0.0.2";
         let res = std::process::Command::new("git")
             .current_dir(temp_path)
@@ -193,5 +195,19 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         assert_eq!(cnt, 303, "count after upgrade");
+
+        client
+            .batch_execute(&format!(
+                "DROP INDEX idxtest;
+
+        CREATE INDEX idxtest_cosine
+              ON test
+           USING diskann(embedding vector_cosine_ops);
+
+        CREATE INDEX idxtest_l2
+              ON test
+              USING diskann(embedding vector_l2_ops);"
+            ))
+            .unwrap();
     }
 }

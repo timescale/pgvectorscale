@@ -91,38 +91,20 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
 // This SQL is made idempotent so that we can use the same script for the installation and the upgrade.
 extension_sql!(
     r#"
-DO $$
-DECLARE
-  c int;
-BEGIN
-    SELECT count(*)
-    INTO c
-    FROM pg_catalog.pg_opclass c
-    WHERE c.opcname = 'vector_cosine_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
+    DROP OPERATOR CLASS IF EXISTS vector_cosine_ops USING diskann;
 
-    IF c = 0 THEN
-        CREATE OPERATOR CLASS vector_cosine_ops
+    CREATE OPERATOR CLASS vector_cosine_ops
         DEFAULT FOR TYPE vector USING diskann AS
-	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
-            FUNCTION 1 distance_type_cosine();
-    END IF;
+        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
+        FUNCTION 1 distance_type_cosine();
 
-    SELECT count(*)
-    INTO c
-    FROM pg_catalog.pg_opclass c
-    WHERE c.opcname = 'vector_l2_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
 
-    IF c = 0 THEN
-        CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
-            FUNCTION 1 distance_type_l2();
-    END IF;
-END;
-$$;
+    DROP OPERATOR CLASS IF EXISTS vector_l2_ops USING diskann;
 
+    CREATE OPERATOR CLASS vector_l2_ops
+    FOR TYPE vector USING diskann AS
+        OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
+        FUNCTION 1 distance_type_l2();
 "#,
     name = "diskann_ops_operator",
     requires = [amhandler, distance_type_cosine, distance_type_l2]
