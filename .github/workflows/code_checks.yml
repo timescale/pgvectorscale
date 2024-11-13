@@ -8,7 +8,7 @@ env:
   RUSTFLAGS: "-Dwarnings"
 
 jobs:
-  fmt:
+  code-checks:
     runs-on: ubuntu-latest
 
     container:
@@ -19,7 +19,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Verify formatting
-        run: cd pgvectorscale && cargo fmt --check
+        run: cargo fmt --manifest-path pgvectorscale/Cargo.toml --check
 
       - name: Formatting check failure
         if: failure()
@@ -27,18 +27,8 @@ jobs:
           echo "Failure in fmt check, cargo version is"
           cargo --version
 
-  clippy-check:
-    runs-on: ubuntu-latest
-
-    container:
-      image: timescaledev/rust-builder:ubuntu-stable
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
       - name: Clippy check
-        run: cd pgvectorscale && cargo clippy --all-targets --all-features
+        run: cargo clippy --manifest-path pgvectorscale/Cargo.toml
 
       - name: Clippy check failure
         if: failure()
