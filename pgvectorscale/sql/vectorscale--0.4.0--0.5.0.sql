@@ -56,12 +56,12 @@ AS '$libdir/vectorscale-0.5.0', 'distance_type_l2_wrapper';
 
 DO $$
 DECLARE
-  c int;
-  d int;
+  have_cos_ops int;
+  have_l2_ops int;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
-    INTO c
+    INTO have_cos_ops
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_cosine_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
@@ -69,13 +69,13 @@ BEGIN
 
     -- Has L2 operator class been installed previously?
     SELECT count(*)
-    INTO d
+    INTO have_l2_ops
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_l2_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
-    IF c = 0 THEN
+    IF have_cos_ops = 0 THEN
         -- Fresh install from scratch
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
         FOR TYPE vector USING diskann AS
@@ -86,7 +86,7 @@ BEGIN
         FOR TYPE vector USING diskann AS
             OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_l2();
-    ELSIF d = 0 THEN
+    ELSIF have_l2_ops = 0 THEN
         -- Upgrade to add L2 distance support and update cosine opclass to
         -- include the distance_type_cosine function
         INSERT INTO pg_amproc (amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
