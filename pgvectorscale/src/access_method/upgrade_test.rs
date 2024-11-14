@@ -337,13 +337,6 @@ pub mod tests {
             .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
-        client
-            .execute(
-                &"UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';".to_string(),
-                &[],
-            )
-            .unwrap();
-
         //need to recreate the client to avoid double load of GUC. Look into this later.
         let (mut client, _) = pgrx_tests::client().unwrap();
         client
@@ -366,7 +359,7 @@ pub mod tests {
 
         CREATE INDEX idxtest_cosine
               ON test
-           USING diskann(embedding vector_cosine_ops);
+            USING diskann(embedding vector_cosine_ops);
 
         CREATE INDEX idxtest_l2
               ON test
