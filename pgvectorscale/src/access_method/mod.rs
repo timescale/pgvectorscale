@@ -196,7 +196,7 @@ BEGIN
         -- Upgrade to add L2 distance support and update cosine opclass to
         -- include the distance_type_cosine function
         INSERT INTO pg_amproc (amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
-        SELECT c.opcfamily, c.opcintype, c.opcintype, 1, 'distance_type_l2'
+        SELECT c.opcfamily, c.opcintype, c.opcintype, 1, '@extschema@.distance_type_l2'::regproc
         FROM pg_opclass c, pg_am a
         WHERE a.oid = c.opcmethod AND c.opcname = 'vector_l2_ops' AND a.amname = 'diskann';
 
