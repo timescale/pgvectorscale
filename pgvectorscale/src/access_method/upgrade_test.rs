@@ -104,6 +104,7 @@ pub mod tests {
                 .unwrap(),
         )
         .current_dir(temp_path.join("timescale_vector"))
+        .env("CARGO_TARGET_DIR", temp_path.join("timescale_vector").join("target"))
         .arg("pgrx")
         .arg("install")
         .arg("--test")
@@ -268,15 +269,39 @@ pub mod tests {
 
         let res = std::process::Command::new("cargo")
             .current_dir(temp_path.join("pgvectorscale"))
-            .arg("pgrx")
-            .arg("install")
-            .arg("--test")
-            .arg("--pg-config")
-            .arg(pg_config.path().unwrap())
+            .args([
+                "install",
+                "cargo-pgrx",
+                "--version",
+                "=0.12.5",
+                "--force",
+                "--root",
+                temp_path.join("pgrx-0.12.5").to_str().unwrap(),
+                "cargo-pgrx",
+            ])
             .stdout(Stdio::inherit())
             .stderr(Stdio::piped())
             .output()
             .unwrap();
+        assert!(res.status.success(), "failed: {:?}", res);
+
+        let res = std::process::Command::new(
+            temp_path
+                .join("pgrx-0.12.5/bin/cargo-pgrx")
+                .to_str()
+                .unwrap(),
+        )
+        .current_dir(temp_path.join("pgvectorscale"))
+        .env("CARGO_TARGET_DIR", temp_path.join("pgvectorscale").join("target"))
+        .arg("pgrx")
+        .arg("install")
+        .arg("--test")
+        .arg("--pg-config")
+        .arg(pg_config.path().unwrap())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::piped())
+        .output()
+        .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
         client
