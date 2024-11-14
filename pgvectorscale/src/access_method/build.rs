@@ -81,7 +81,7 @@ pub extern "C" fn ambuild(
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    assert!(dimensions > 0 && dimensions < 2000);
+    assert!(dimensions > 0 && dimensions <= 2000);
 
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
