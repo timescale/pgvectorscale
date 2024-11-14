@@ -247,4 +247,34 @@ pub mod tests {
     fn test_upgrade_from_0_4_0() {
         test_upgrade_base("0.4.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
     }
+
+    #[ignore]
+    #[test]
+    fn test_upgrade_from_0_0_2() {
+        test_upgrade_base(
+            "0.0.2",
+            "0.11.1",
+            "timescale_vector",
+            "timescale_vector",
+            "tsv",
+        );
+    }
+
+    #[ignore]
+    #[test]
+    fn test_upgrade_from_0_2_0() {
+        test_upgrade_base("0.2.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[test]
+    fn test_upgrade_from_0_3_0() {
+        test_upgrade_base("0.3.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[test]
+    fn test_upgrade_from_0_4_0() {
+        test_upgrade_base("0.4.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
+    }
 }
