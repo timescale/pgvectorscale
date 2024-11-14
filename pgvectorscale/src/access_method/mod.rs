@@ -180,6 +180,7 @@ BEGIN
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_l2_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@')
 
     IF c = 0 THEN
         -- Fresh install from scratch
