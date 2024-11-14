@@ -64,16 +64,16 @@ BEGIN
     INTO c
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_cosine_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
     -- Has L2 operator class been installed previously?
     SELECT count(*)
     INTO d
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_l2_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am  WHERE am.amname = 'diskann');
-
-    RAISE NOTICE 'c: %, d: %', c, d;
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
     IF c = 0 THEN
         -- Fresh install from scratch
@@ -81,7 +81,7 @@ BEGIN
         FOR TYPE vector USING diskann AS
 	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_cosine();
-        
+
         CREATE OPERATOR CLASS vector_l2_ops
         FOR TYPE vector USING diskann AS
             OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
@@ -90,7 +90,7 @@ BEGIN
         -- Upgrade to add L2 distance support and update cosine opclass to
         -- include the distance_type_cosine function
         INSERT INTO pg_amproc (amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
-        SELECT c.opcfamily, c.opcintype, c.opcintype, 1, 'distance_type_l2'
+        SELECT c.opcfamily, c.opcintype, c.opcintype, 1, '@extschema@.distance_type_l2'::regproc
         FROM pg_opclass c, pg_am a
         WHERE a.oid = c.opcmethod AND c.opcname = 'vector_l2_ops' AND a.amname = 'diskann';
 
