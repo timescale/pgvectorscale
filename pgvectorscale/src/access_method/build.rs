@@ -78,7 +78,7 @@ pub extern "C" fn ambuild(
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    assert!(dimensions > 0 && dimensions < 2000);
+    assert!(dimensions > 0 && dimensions <= 2000);
     let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt) };
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
