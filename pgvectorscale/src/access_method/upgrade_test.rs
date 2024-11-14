@@ -177,10 +177,6 @@ pub mod tests {
 
         //reinstall myself
         let res = std::process::Command::new("cargo")
-            .env(
-                "CARGO_TARGET_DIR",
-                temp_path.join("pgvectorscale").join("target"),
-            )
             .arg("pgrx")
             .arg("install")
             .arg("--test")
