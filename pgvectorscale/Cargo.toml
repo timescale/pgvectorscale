@@ -1,6 +1,6 @@
 [package]
 name = "vectorscale"
-version = "0.5.0"
+version = "0.6.0-dev"
 edition = "2021"
 
 [lib]
@@ -35,16 +35,6 @@ pgrx-tests = "=0.12.5"
 pgrx-pg-config = "=0.12.5"
 criterion = "0.5.1"
 tempfile = "3.3.0"
-
-[profile.dev]
-panic = "unwind"
-
-[profile.release]
-panic = "unwind"
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-#debug = true
 
 [[bench]]
 name = "distance"
