@@ -2,6 +2,7 @@
 #[pgrx::pg_schema]
 pub mod tests {
     use pgrx::*;
+    use serial_test::serial;
     use std::{fs, path::Path, process::Stdio};
 
     fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
@@ -28,8 +29,8 @@ pub mod tests {
         extname: &str,
         amname: &str,
     ) {
-        if cfg!(feature = "pg17") {
-            // PG17 is only supported for one version
+        if cfg!(feature = "pg17") && version != "0.4.0" {
+            // PG17 was not supported before 0.4.0
             return;
         }
         pgrx_tests::run_test(
@@ -224,6 +225,7 @@ pub mod tests {
     }
 
     #[ignore]
+    #[serial]
     #[test]
     fn test_upgrade_from_0_0_2() {
         test_upgrade_base(
@@ -236,18 +238,21 @@ pub mod tests {
     }
 
     #[ignore]
+    #[serial]
     #[test]
     fn test_upgrade_from_0_2_0() {
         test_upgrade_base("0.2.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
     }
 
     #[ignore]
+    #[serial]
     #[test]
     fn test_upgrade_from_0_3_0() {
         test_upgrade_base("0.3.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
     }
 
     #[ignore]
+    #[serial]
     #[test]
     fn test_upgrade_from_0_4_0() {
         test_upgrade_base("0.4.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
