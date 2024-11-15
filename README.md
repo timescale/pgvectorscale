@@ -76,7 +76,7 @@ You can install pgvectorscale from source and install it in an existing PostgreS
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
     ## pgrx
     cargo install --locked cargo-pgrx
-    cargo pgrx init --pg16 pg_config
+    cargo pgrx init --pg17 pg_config
 
     #download, build and install pgvectorscale
     cd /tmp
@@ -155,7 +155,7 @@ To enable pgvectorscale:
 1. Create a StreamingDiskANN index on the embedding column:
     ```postgresql
     CREATE INDEX document_embedding_idx ON document_embedding
-    USING diskann (embedding);
+    USING diskann (embedding vector_cosine_ops);
     ```
 1. Find the 10 closest embeddings using the index.
 
@@ -166,12 +166,12 @@ To enable pgvectorscale:
     LIMIT 10
     ```
 
-    Note: pgvectorscale currently support cosine distance (`<=>`) queries. If you would like additional distance types,
+    Note: pgvectorscale currently supports: cosine distance (`<=>`) queries, for indices created with `vector_cosine_ops`; and L2 distance (`<->`) queries, for indices created with `vector_l2_ops`.  This is the same syntax used by `pgvector`.  If you would like additional distance types,
     [create an issue](https://github.com/timescale/pgvectorscale/issues).
 
 ## Tuning
 
-The StreamingDiskANN index comes with **smart defaults** but also the ability to customize it's behavior. There are two types of parameters: index build-time parameters that are specified when an index is created and query-time parameters that can be tuned when querying an index.
+The StreamingDiskANN index comes with **smart defaults** but also the ability to customize its behavior. There are two types of parameters: index build-time parameters that are specified when an index is created and query-time parameters that can be tuned when querying an index.
 
 We suggest setting the index build-time paramers for major changes to index operations while query-time parameters can be used to tune the accuracy/performance tradeoff for individual queries.
 
