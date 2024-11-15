@@ -1,4 +1,53 @@
+use pgrx::pg_extern;
+
 pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
+
+#[derive(Debug, PartialEq)]
+pub enum DistanceType {
+    Cosine = 0,
+    L2 = 1,
+}
+
+impl DistanceType {
+    pub fn from_u16(value: u16) -> Self {
+        match value {
+            0 => DistanceType::Cosine,
+            1 => DistanceType::L2,
+            _ => panic!("Unknown DistanceType number {}", value),
+        }
+    }
+
+    pub fn get_operator(&self) -> &str {
+        match self {
+            DistanceType::Cosine => "<=>",
+            DistanceType::L2 => "<->",
+        }
+    }
+
+    pub fn get_operator_class(&self) -> &str {
+        match self {
+            DistanceType::Cosine => "vector_cosine_ops",
+            DistanceType::L2 => "vector_l2_ops",
+        }
+    }
+
+    pub fn get_distance_function(&self) -> DistanceFn {
+        match self {
+            DistanceType::Cosine => distance_cosine,
+            DistanceType::L2 => distance_l2,
+        }
+    }
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_cosine() -> i16 {
+    DistanceType::Cosine as i16
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_l2() -> i16 {
+    DistanceType::L2 as i16
+}
 
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

@@ -113,13 +113,14 @@ pub mod tests {
             "CARGO_TARGET_DIR",
             temp_path.join(subdirname).join("target"),
         )
+        .env("CARGO_PKG_VERSION", version)
         .arg("pgrx")
         .arg("install")
         .arg("--test")
         .arg("--pg-config")
         .arg(pg_config.path().unwrap())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .output()
         .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
@@ -200,9 +201,26 @@ pub mod tests {
             )
             .unwrap();
 
+        // Recreate client to pick up system catalog changes
+        let (mut client, _) = pgrx_tests::client().unwrap();
+
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         assert_eq!(cnt, 303, "count after upgrade");
+
+        client.execute("DROP INDEX idxtest;", &[]).unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_cosine ON test USING diskann(embedding vector_cosine_ops);",
+                &[],
+            )
+            .unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_l2 ON test USING diskann(embedding vector_l2_ops);",
+                &[],
+            )
+            .unwrap();
     }
 
     #[ignore]

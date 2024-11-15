@@ -8,7 +8,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::distance::{self, DistanceFn};
+use super::distance::{DistanceFn, DistanceType};
 use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
@@ -93,22 +93,6 @@ pub struct MetaPageHeader {
     version: u32,
 }
 
-/// TODO: move to distance.rs
-enum DistanceType {
-    Cosine = 0,
-    L2 = 1,
-}
-
-impl DistanceType {
-    fn from_u16(value: u16) -> Self {
-        match value {
-            0 => DistanceType::Cosine,
-            1 => DistanceType::L2,
-            _ => panic!("Unknown DistanceType number {}", value),
-        }
-    }
-}
-
 /// This is metadata about the entire index.
 /// Stored as the first page (offset 2) in the index relation.
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -175,10 +159,7 @@ impl MetaPage {
     }
 
     pub fn get_distance_function(&self) -> DistanceFn {
-        match DistanceType::from_u16(self.distance_type) {
-            DistanceType::Cosine => distance::distance_cosine,
-            DistanceType::L2 => distance::distance_l2,
-        }
+        DistanceType::from_u16(self.distance_type).get_distance_function()
     }
 
     pub fn get_storage_type(&self) -> StorageType {
@@ -234,6 +215,7 @@ impl MetaPage {
     pub unsafe fn create(
         index: &PgRelation,
         num_dimensions: u32,
+        distance_type: DistanceType,
         opt: PgBox<TSVIndexOptions>,
     ) -> MetaPage {
         let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
@@ -272,7 +254,7 @@ impl MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
             extension_version_when_built: version.to_string(),
-            distance_type: DistanceType::Cosine as u16,
+            distance_type: distance_type as u16,
             num_dimensions,
             num_dimensions_to_index,
             storage_type: (*opt).get_storage_type() as u8,
