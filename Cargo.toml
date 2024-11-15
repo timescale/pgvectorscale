@@ -1,0 +1,13 @@
+[workspace]
+members = ["pgvectorscale"]
+resolver = "2"
+
+[profile.dev]
+panic = "unwind"
+
+[profile.release]
+panic = "unwind"
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+#debug = true
