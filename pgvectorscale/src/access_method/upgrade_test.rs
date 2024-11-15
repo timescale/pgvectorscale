@@ -113,13 +113,14 @@ pub mod tests {
             "CARGO_TARGET_DIR",
             temp_path.join(subdirname).join("target"),
         )
+        .env("CARGO_PKG_VERSION", version)
         .arg("pgrx")
         .arg("install")
         .arg("--test")
         .arg("--pg-config")
         .arg(pg_config.path().unwrap())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .output()
         .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
