@@ -370,6 +370,7 @@ mod tests {
             DistanceType::Cosine,
             "num_neighbors=38, storage_layout = plain",
             "plain_many_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -381,6 +382,7 @@ mod tests {
             DistanceType::Cosine,
             "num_neighbors=10, storage_layout = plain",
             "plain_few_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -426,6 +428,7 @@ mod tests {
             DistanceType::Cosine,
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
             "plain_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
@@ -436,6 +439,7 @@ mod tests {
             DistanceType::L2,
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
             "plain_num_dimensions",
+            3072,
         )?;
         Ok(())
     }

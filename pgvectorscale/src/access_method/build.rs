@@ -81,7 +81,6 @@ pub extern "C" fn ambuild(
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    assert!(dimensions > 0 && dimensions <= 2000);
 
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
@@ -94,6 +93,11 @@ pub extern "C" fn ambuild(
 
     let meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
+
+    assert!(
+        meta_page.get_num_dimensions_to_index() > 0
+            && meta_page.get_num_dimensions_to_index() <= 2000
+    );
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -511,13 +515,14 @@ pub mod tests {
         distance_type: DistanceType,
         index_options: &str,
         name: &str,
+        vector_dimensions: usize,
     ) -> spi::Result<()> {
         let operator = distance_type.get_operator();
         let operator_class = distance_type.get_operator_class();
         let table_name = format!("test_data_icaa_{}", name);
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
-                embedding vector (1536)
+                embedding vector ({vector_dimensions})
             );
 
             select setseed(0.5);
@@ -529,7 +534,7 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 300) i
+                    generate_series(1, {vector_dimensions} * 300) i
                 GROUP BY
                     i % 300) g;
 
@@ -546,11 +551,11 @@ pub mod tests {
                 embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));"))?;
+            FROM generate_series(1, {vector_dimensions}));"))?;
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(
-            &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
-    FROM generate_series(1, 1536)"
+            &format!("SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, {vector_dimensions})")
                 .to_string(),
         )?;
 
@@ -583,7 +588,7 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 2) i
+                    generate_series(1, {vector_dimensions} * 2) i
                 GROUP BY
                     i % 2) g;
 
@@ -597,7 +602,7 @@ pub mod tests {
                 embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
+            FROM generate_series(1, {vector_dimensions}));
 
             -- test insert 10 vectors to search for that aren't random
             INSERT INTO {table_name} (embedding)
@@ -607,7 +612,7 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(1.0), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 10) i
+                    generate_series(1, {vector_dimensions} * 10) i
                 GROUP BY
                     i % 10) g;
 
