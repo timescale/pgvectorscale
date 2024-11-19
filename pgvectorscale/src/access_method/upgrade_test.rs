@@ -2,6 +2,7 @@
 #[pgrx::pg_schema]
 pub mod tests {
     use pgrx::*;
+    use semver::Version;
     use serial_test::serial;
     use std::{fs, path::Path, process::Stdio};
 
@@ -29,7 +30,8 @@ pub mod tests {
         extname: &str,
         amname: &str,
     ) {
-        if cfg!(feature = "pg17") && version != "0.4.0" {
+        let semver = Version::parse(version).unwrap();
+        if cfg!(feature = "pg17") && semver < Version::parse("0.4.0").unwrap() {
             // PG17 was not supported before 0.4.0
             return;
         }
