@@ -977,6 +977,7 @@ mod tests {
             DistanceType::Cosine,
             "storage_layout = io_optimized",
             "bq_speedup_default_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -988,6 +989,7 @@ mod tests {
             DistanceType::Cosine,
             "num_neighbors=10, storage_layout = io_optimized",
             "bq_speedup_few_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1026,6 +1028,7 @@ mod tests {
             DistanceType::Cosine,
             "storage_layout = io_optimized, num_dimensions=768",
             "bq_speedup_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
@@ -1036,6 +1039,7 @@ mod tests {
             DistanceType::L2,
             "storage_layout = io_optimized, num_dimensions=768",
             "bq_speedup_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
@@ -1068,6 +1072,7 @@ mod tests {
             DistanceType::Cosine,
             "storage_layout = memory_optimized",
             "bq_compressed_default_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1079,6 +1084,7 @@ mod tests {
             DistanceType::Cosine,
             "num_neighbors=10, storage_layout = memory_optimized",
             "bq_compressed_few_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1123,6 +1129,7 @@ mod tests {
             DistanceType::Cosine,
             "storage_layout = memory_optimized, num_dimensions=768",
             "bq_compressed_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
