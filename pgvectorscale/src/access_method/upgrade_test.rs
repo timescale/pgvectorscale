@@ -55,8 +55,14 @@ pub mod tests {
 
         // Convert the file path to an absolute path
         let current_dir = std::env::current_dir().unwrap();
-        let mut absolute_path = std::path::Path::new(&current_dir).join(current_file);
-        absolute_path = absolute_path.ancestors().nth(4).unwrap().to_path_buf();
+        let absolute_path_full = std::path::Path::new(&current_dir).join(current_file);
+        let mut absolute_path = None;
+        for ancestor in absolute_path_full.ancestors() {
+            if std::fs::exists(ancestor.join(".git")).unwrap() {
+                absolute_path = Some(ancestor.to_path_buf());
+            }
+        }
+        let absolute_path = absolute_path.expect("Couldn't find root directory");
 
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_path = temp_dir.path();
