@@ -6,6 +6,7 @@ pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
 pub enum DistanceType {
     Cosine = 0,
     L2 = 1,
+    InnerProduct = 2,
 }
 
 impl DistanceType {
@@ -13,6 +14,7 @@ impl DistanceType {
         match value {
             0 => DistanceType::Cosine,
             1 => DistanceType::L2,
+            2 => DistanceType::InnerProduct,
             _ => panic!("Unknown DistanceType number {}", value),
         }
     }
@@ -21,6 +23,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => "<=>",
             DistanceType::L2 => "<->",
+            DistanceType::InnerProduct => "<#>",
         }
     }
 
@@ -28,6 +31,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => "vector_cosine_ops",
             DistanceType::L2 => "vector_l2_ops",
+            DistanceType::InnerProduct => "vector_ip_ops",
         }
     }
 
@@ -35,6 +39,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => distance_cosine,
             DistanceType::L2 => distance_l2,
+            DistanceType::InnerProduct => distance_inner_product,
         }
     }
 }
@@ -47,6 +52,11 @@ pub fn distance_type_cosine() -> i16 {
 #[pg_extern(immutable, parallel_safe)]
 pub fn distance_type_l2() -> i16 {
     DistanceType::L2 as i16
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_inner_product() -> i16 {
+    DistanceType::InnerProduct as i16
 }
 
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
@@ -146,6 +156,21 @@ pub fn distance_l2_optimized_for_few_dimensions(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline]
+/// Negative inner product for use as distance function
+pub fn distance_inner_product(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    //note safety is guraranteed by compile_error above
+    unsafe {
+        return -super::distance_x86::inner_product_x86_avx2(a, b);
+    }
+
+    #[allow(unreachable_code)]
+    {
+        -inner_product_unoptimized(a, b)
+    }
+}
+
+#[inline]
 pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     //note safety is guraranteed by compile_error above
@@ -160,11 +185,16 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline(always)]
+pub fn inner_product_unoptimized(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(a, b)| *a * *b).sum()
+}
+
+#[inline(always)]
 pub fn distance_cosine_unoptimized(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     debug_assert!(preprocess_cosine_get_norm(a).is_none());
     debug_assert!(preprocess_cosine_get_norm(b).is_none());
-    let res: f32 = a.iter().zip(b).map(|(a, b)| *a * *b).sum();
+    let res: f32 = inner_product_unoptimized(a, b);
     (1.0 - res).max(0.0)
 }
 

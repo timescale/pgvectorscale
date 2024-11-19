@@ -222,6 +222,12 @@ pub mod tests {
                 &[],
             )
             .unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_l2 ON test USING diskann(embedding vector_ip_ops);",
+                &[],
+            )
+            .unwrap();
     }
 
     #[ignore]
@@ -256,5 +262,12 @@ pub mod tests {
     #[test]
     fn test_upgrade_from_0_4_0() {
         test_upgrade_base("0.4.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_5_0() {
+        test_upgrade_base("0.5.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
     }
 }

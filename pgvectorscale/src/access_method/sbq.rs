@@ -1041,6 +1041,16 @@ mod tests {
     }
 
     #[pg_test]
+    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_ip() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::InnerProduct,
+            "storage_layout = io_optimized, num_dimensions=768",
+            "bq_speedup_num_dimensions",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
     unsafe fn test_bq_speedup_storage_index_updates_cosine() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
             DistanceType::Cosine,
@@ -1055,6 +1065,17 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_updates_l2() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
             DistanceType::L2,
+            "storage_layout = io_optimized, num_neighbors=10",
+            300,
+            "bq_speedup",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_speedup_storage_index_updates_ip() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            DistanceType::InnerProduct,
             "storage_layout = io_optimized, num_neighbors=10",
             300,
             "bq_speedup",
@@ -1142,6 +1163,17 @@ mod tests {
     unsafe fn test_bq_compressed_storage_index_updates_l2() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
             DistanceType::L2,
+            "storage_layout = memory_optimized, num_neighbors=10",
+            300,
+            "bq_compressed",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_updates_ip() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            DistanceType::InnerProduct,
             "storage_layout = memory_optimized, num_neighbors=10",
             300,
             "bq_compressed",

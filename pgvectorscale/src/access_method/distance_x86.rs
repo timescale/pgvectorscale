@@ -73,7 +73,7 @@ simdeez::simd_runtime_generate!(
 );
 
 simdeez::simd_runtime_generate!(
-    pub fn distance_cosine_x86(x: &[f32], y: &[f32]) -> f32 {
+    pub fn inner_product_x86(x: &[f32], y: &[f32]) -> f32 {
         let mut accum0 = S::setzero_ps();
         let mut accum1 = S::setzero_ps();
         let mut accum2 = S::setzero_ps();
@@ -126,7 +126,12 @@ simdeez::simd_runtime_generate!(
             dist += x[i] * y[i];
         }
 
-        (1.0 - dist).max(0.0)
+        dist
+    }
+
+    /// Calculate the cosine distance between two normal vectors
+    pub fn cosine_distance_x86(x: &[f32], y: &[f32]) -> f32 {
+        (1.0 - inner_product_x86(x, y)).max(0.0)
     }
 );
 
