@@ -162,6 +162,10 @@ impl MetaPage {
         DistanceType::from_u16(self.distance_type).get_distance_function()
     }
 
+    pub fn get_distance_type(&self) -> DistanceType {
+        DistanceType::from_u16(self.distance_type)
+    }
+
     pub fn get_storage_type(&self) -> StorageType {
         StorageType::from_u8(self.storage_type)
     }
