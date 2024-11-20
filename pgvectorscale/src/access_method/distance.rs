@@ -39,12 +39,12 @@ impl DistanceType {
     }
 }
 
-#[pg_extern(immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe, create_or_replace)]
 pub fn distance_type_cosine() -> i16 {
     DistanceType::Cosine as i16
 }
 
-#[pg_extern(immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe, create_or_replace)]
 pub fn distance_type_l2() -> i16 {
     DistanceType::L2 as i16
 }
