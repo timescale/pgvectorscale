@@ -159,7 +159,6 @@ pub fn distance_l2_optimized_for_few_dimensions(a: &[f32], b: &[f32]) -> f32 {
 /// Negative inner product for use as distance function
 pub fn distance_inner_product(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-    //note safety is guraranteed by compile_error above
     unsafe {
         return -super::distance_x86::inner_product_x86_avx2(a, b);
     }
