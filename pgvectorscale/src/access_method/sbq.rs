@@ -1050,6 +1050,7 @@ mod tests {
             DistanceType::InnerProduct,
             "storage_layout = io_optimized, num_dimensions=768",
             "bq_speedup_num_dimensions",
+            3072,
         )?;
         Ok(())
     }

@@ -450,6 +450,7 @@ mod tests {
             DistanceType::InnerProduct,
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
             "plain_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
