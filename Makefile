@@ -83,5 +83,7 @@ shellcheck:
 shfmt:
 	shfmt -w -i 4 test scripts
 
+vectorscale.control:
+	cp pgvectorscale/vectorscale.control vectorscale.control
 
 .PHONY: release rust test prove install clean

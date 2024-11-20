@@ -5,7 +5,7 @@ DEBHELPER_COMPAT=11
 set -eux
 
 OS_NAME="${3}"
-BASEDIR="${2}"/pgvectorscale
+BASEDIR="${2}"
 DEBDIR="${PWD}"/pkgdump
 PGVECTORSCALE_VERSION="${1}"
 PG_VERSIONS="${4}"
@@ -66,8 +66,6 @@ EOF
 done
 
 dpkg-buildpackage --build=binary --no-sign --post-clean
-
-cd ..
 
 # packagecloud.io doesn't support `.ddeb` files?  Like `.udeb`, they're just
 # deb packages by another name, so:
