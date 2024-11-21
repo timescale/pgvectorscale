@@ -61,8 +61,8 @@ Depends: postgresql-$pg
 Description: pgvectorscale for speeding up ANN search
 EOF
 
-    echo "target/release/vectorscale-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
-    echo "target/release/vectorscale-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
+    echo "../target/release/vectorscale-pg$pg/$libdir/* usr/lib/postgresql/$pg/lib/" >"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
+    echo "../target/release/vectorscale-pg$pg/$sharedir/* usr/share/postgresql/$pg/" >>"${BASEDIR}"/debian/pgvectorscale-postgresql-"$pg".install
 done
 
 dpkg-buildpackage --build=binary --no-sign --post-clean
