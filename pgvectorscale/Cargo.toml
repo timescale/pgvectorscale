@@ -1,6 +1,6 @@
 [package]
 name = "vectorscale"
-version = "0.4.0"
+version = "0.6.0-dev"
 edition = "2021"
 
 [lib]
@@ -22,11 +22,12 @@ pg_test = []
 [dependencies]
 memoffset = "0.9.0"
 pgrx = "=0.12.5"
-rkyv = { version="0.7.42", features=["validation"]}
-simdeez = {version = "1.0.8"}
-rand = { version = "0.8", features = [ "small_rng" ] }
+rkyv = { version = "0.7.42", features = ["validation"] }
+simdeez = { version = "1.0.8" }
+rand = { version = "0.8", features = ["small_rng"] }
 pgvectorscale_derive = { path = "pgvectorscale_derive" }
 semver = "1.0.22"
+serial_test = "3.2.0"
 once_cell = "1.20.1"
 
 [dev-dependencies]
@@ -34,16 +35,6 @@ pgrx-tests = "=0.12.5"
 pgrx-pg-config = "=0.12.5"
 criterion = "0.5.1"
 tempfile = "3.3.0"
-
-[profile.dev]
-panic = "unwind"
-
-[profile.release]
-panic = "unwind"
-opt-level = 3
-lto = "fat"
-codegen-units = 1
-#debug = true
 
 [[bench]]
 name = "distance"

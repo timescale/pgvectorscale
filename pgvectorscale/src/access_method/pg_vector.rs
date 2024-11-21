@@ -1,5 +1,7 @@
 use pgrx::*;
 
+use crate::access_method::distance::DistanceType;
+
 use super::{distance::preprocess_cosine, meta_page};
 
 //Ported from pg_vector code
@@ -14,8 +16,8 @@ pub struct PgVectorInternal {
 
 impl PgVectorInternal {
     pub fn to_slice(&self) -> &[f32] {
-        let dim = (*self).dim;
-        let raw_slice = unsafe { (*self).x.as_slice(dim as _) };
+        let dim = self.dim;
+        let raw_slice = unsafe { self.x.as_slice(dim as _) };
         raw_slice
     }
 }
@@ -47,6 +49,9 @@ impl Drop for PgVector {
 }
 
 impl PgVector {
+    /// # Safety
+    ///
+    /// TODO
     pub unsafe fn from_pg_parts(
         datum_parts: *mut pg_sys::Datum,
         isnull_parts: *mut bool,
@@ -96,10 +101,15 @@ impl PgVector {
         let dim = (*casted).dim;
         let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
 
-        preprocess_cosine(raw_slice);
+        if meta_page.get_distance_type() == DistanceType::Cosine {
+            preprocess_cosine(raw_slice);
+        }
         casted
     }
 
+    /// # Safety
+    ///
+    /// TODO
     pub unsafe fn from_datum(
         datum: pg_sys::Datum,
         meta_page: &meta_page::MetaPage,

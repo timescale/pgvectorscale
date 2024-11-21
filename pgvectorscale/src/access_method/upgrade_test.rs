@@ -2,6 +2,7 @@
 #[pgrx::pg_schema]
 pub mod tests {
     use pgrx::*;
+    use serial_test::serial;
     use std::{fs, path::Path, process::Stdio};
 
     fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
@@ -21,12 +22,17 @@ pub mod tests {
         Ok(())
     }
 
-    #[test]
-    #[ignore]
-    ///This function is only a mock to bring up the test framewokr in test_delete_vacuum
-    fn test_upgrade() {
-        if cfg!(feature = "pg17") {
-            // PG17 is only supported for one version
+    fn test_upgrade_base(
+        version: &str,
+        pgrx_version: &str,
+        subdirname: &str,
+        extname: &str,
+        amname: &str,
+    ) {
+        if cfg!(feature = "pg17")
+            && semver::Version::parse(version).unwrap() < semver::Version::parse("0.4.0").unwrap()
+        {
+            // PG17 was not supported before 0.4.0
             return;
         }
         pgrx_tests::run_test(
@@ -40,7 +46,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!("DROP EXTENSION IF EXISTS vectorscale CASCADE;"),
+                &"DROP EXTENSION IF EXISTS vectorscale CASCADE;".to_string(),
                 &[],
             )
             .unwrap();
@@ -49,8 +55,14 @@ pub mod tests {
 
         // Convert the file path to an absolute path
         let current_dir = std::env::current_dir().unwrap();
-        let mut absolute_path = std::path::Path::new(&current_dir).join(current_file);
-        absolute_path = absolute_path.ancestors().nth(4).unwrap().to_path_buf();
+        let absolute_path_full = std::path::Path::new(&current_dir).join(current_file);
+        let mut absolute_path = None;
+        for ancestor in absolute_path_full.ancestors() {
+            if std::fs::exists(ancestor.join(".git")).unwrap() {
+                absolute_path = Some(ancestor.to_path_buf());
+            }
+        }
+        let absolute_path = absolute_path.expect("Couldn't find root directory");
 
         let temp_dir = tempfile::tempdir().unwrap();
         let temp_path = temp_dir.path();
@@ -61,7 +73,6 @@ pub mod tests {
         let pg_version = pg_sys::get_pg_major_version_num();
         let pg_config = pgrx.get(&format!("pg{}", pg_version)).unwrap();
 
-        let version = "0.0.2";
         let res = std::process::Command::new("git")
             .current_dir(temp_path)
             .arg("checkout")
@@ -77,48 +88,55 @@ pub mod tests {
             temp_dir.path()
         );
 
+        let pgrx_str = format!("={pgrx_version}");
+        let pgrx_dir = format!("pgrx-{pgrx_version}");
+
         let res = std::process::Command::new("cargo")
-            .current_dir(temp_path.join("timescale_vector"))
+            .current_dir(temp_path.join(subdirname))
             .args([
                 "install",
                 "cargo-pgrx",
                 "--version",
-                "=0.11.1",
+                pgrx_str.as_str(),
                 "--force",
                 "--root",
-                temp_path.join("pgrx-0.11.1").to_str().unwrap(),
+                temp_path.join(pgrx_dir.as_str()).to_str().unwrap(),
                 "cargo-pgrx",
             ])
             .stdout(Stdio::inherit())
             .stderr(Stdio::piped())
             .output()
             .unwrap();
+
         assert!(res.status.success(), "failed: {:?}", res);
 
         let res = std::process::Command::new(
             temp_path
-                .join("pgrx-0.11.1/bin/cargo-pgrx")
+                .join(pgrx_dir.as_str())
+                .join("bin/cargo-pgrx")
                 .to_str()
                 .unwrap(),
         )
-        .current_dir(temp_path.join("timescale_vector"))
+        .current_dir(temp_path.join(subdirname))
+        .env(
+            "CARGO_TARGET_DIR",
+            temp_path.join(subdirname).join("target"),
+        )
+        .env("CARGO_PKG_VERSION", version)
         .arg("pgrx")
         .arg("install")
         .arg("--test")
         .arg("--pg-config")
         .arg(pg_config.path().unwrap())
         .stdout(Stdio::inherit())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::inherit())
         .output()
         .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
         client
             .execute(
-                &format!(
-                    "CREATE EXTENSION timescale_vector VERSION '{}' CASCADE;",
-                    version
-                ),
+                &format!("CREATE EXTENSION {extname} VERSION '{}' CASCADE;", version),
                 &[],
             )
             .unwrap();
@@ -149,7 +167,7 @@ pub mod tests {
 
         CREATE INDEX idxtest
               ON test
-           USING tsv(embedding);
+           USING {amname}(embedding);
             "
             ))
             .unwrap();
@@ -157,6 +175,15 @@ pub mod tests {
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         assert_eq!(cnt, 303, "count before upgrade");
+
+        if extname == "timescale_vector" {
+            client
+                .execute(
+                    &"UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';".to_string(),
+                    &[],
+                )
+                .unwrap();
+        }
 
         //reinstall myself
         let res = std::process::Command::new("cargo")
@@ -171,15 +198,6 @@ pub mod tests {
             .unwrap();
         assert!(res.status.success(), "failed: {:?}", res);
 
-        client
-            .execute(
-                &format!(
-                    "UPDATE pg_extension SET extname='vectorscale' WHERE extname = 'timescale_vector';",
-                ),
-                &[],
-            )
-            .unwrap();
-
         //need to recreate the client to avoid double load of GUC. Look into this later.
         let (mut client, _) = pgrx_tests::client().unwrap();
         client
@@ -192,8 +210,66 @@ pub mod tests {
             )
             .unwrap();
 
+        // Recreate client to pick up system catalog changes
+        let (mut client, _) = pgrx_tests::client().unwrap();
+
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
         let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test order by embedding <=> '[1,1,1,{suffix}]') SELECT count(*) from cte;"), &[]).unwrap().get(0);
         assert_eq!(cnt, 303, "count after upgrade");
+
+        client.execute("DROP INDEX idxtest;", &[]).unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_cosine ON test USING diskann(embedding vector_cosine_ops);",
+                &[],
+            )
+            .unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_l2 ON test USING diskann(embedding vector_l2_ops);",
+                &[],
+            )
+            .unwrap();
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_0_2() {
+        test_upgrade_base(
+            "0.0.2",
+            "0.11.1",
+            "timescale_vector",
+            "timescale_vector",
+            "tsv",
+        );
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_2_0() {
+        test_upgrade_base("0.2.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_3_0() {
+        test_upgrade_base("0.3.0", "0.11.4", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_4_0() {
+        test_upgrade_base("0.4.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_5_0() {
+        test_upgrade_base("0.5.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
     }
 }

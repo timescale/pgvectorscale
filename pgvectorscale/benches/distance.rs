@@ -166,7 +166,7 @@ pub fn distance_l2_fixed_size_opt(a: &[f32], b: &[f32]) -> f32 {
     let norm: f32 = a[..6]
         .iter()
         .zip(b[..6].iter())
-        .map(|t| (*t.0 as f32 - *t.1 as f32) * (*t.0 as f32 - *t.1 as f32))
+        .map(|t| ({ *t.0 } - { *t.1 }) * ({ *t.0 } - { *t.1 }))
         .sum();
     assert!(norm >= 0.);
     //don't sqrt for performance. These are only used for ordering so sqrt not needed

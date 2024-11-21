@@ -8,7 +8,7 @@ use crate::access_method::options::TSVIndexOptions;
 use crate::util::page;
 use crate::util::*;
 
-use super::distance;
+use super::distance::{DistanceFn, DistanceType};
 use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
@@ -93,21 +93,6 @@ pub struct MetaPageHeader {
     version: u32,
 }
 
-enum DistanceType {
-    Cosine = 0,
-    L2 = 1,
-}
-
-impl DistanceType {
-    fn from_u16(value: u16) -> Self {
-        match value {
-            0 => DistanceType::Cosine,
-            1 => DistanceType::L2,
-            _ => panic!("Unknown DistanceType number {}", value),
-        }
-    }
-}
-
 /// This is metadata about the entire index.
 /// Stored as the first page (offset 2) in the index relation.
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -173,11 +158,12 @@ impl MetaPage {
         self.max_alpha
     }
 
-    pub fn get_distance_function(&self) -> fn(&[f32], &[f32]) -> f32 {
-        match DistanceType::from_u16(self.distance_type) {
-            DistanceType::Cosine => distance::distance_cosine,
-            DistanceType::L2 => distance::distance_l2,
-        }
+    pub fn get_distance_function(&self) -> DistanceFn {
+        DistanceType::from_u16(self.distance_type).get_distance_function()
+    }
+
+    pub fn get_distance_type(&self) -> DistanceType {
+        DistanceType::from_u16(self.distance_type)
     }
 
     pub fn get_storage_type(&self) -> StorageType {
@@ -185,7 +171,7 @@ impl MetaPage {
     }
 
     pub fn get_max_neighbors_during_build(&self) -> usize {
-        return ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize;
+        ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize
     }
 
     pub fn get_init_ids(&self) -> Option<Vec<IndexPointer>> {
@@ -233,18 +219,19 @@ impl MetaPage {
     pub unsafe fn create(
         index: &PgRelation,
         num_dimensions: u32,
+        distance_type: DistanceType,
         opt: PgBox<TSVIndexOptions>,
     ) -> MetaPage {
         let version = Version::parse(env!("CARGO_PKG_VERSION")).unwrap();
 
-        let num_dimensions_to_index = if (*opt).num_dimensions == NUM_DIMENSIONS_DEFAULT_SENTINEL {
+        let num_dimensions_to_index = if opt.num_dimensions == NUM_DIMENSIONS_DEFAULT_SENTINEL {
             num_dimensions
         } else {
-            (*opt).num_dimensions
+            opt.num_dimensions
         };
 
         let bq_num_bits_per_dimension =
-            if (*opt).bq_num_bits_per_dimension == SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
+            if opt.bq_num_bits_per_dimension == SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
                 if (*opt).get_storage_type() == StorageType::SbqCompression
                     && num_dimensions_to_index < 900
                 {
@@ -253,7 +240,7 @@ impl MetaPage {
                     1
                 }
             } else {
-                (*opt).bq_num_bits_per_dimension as u8
+                opt.bq_num_bits_per_dimension as u8
             };
 
         if bq_num_bits_per_dimension > 1 && num_dimensions_to_index > 930 {
@@ -271,7 +258,7 @@ impl MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
             extension_version_when_built: version.to_string(),
-            distance_type: DistanceType::Cosine as u16,
+            distance_type: distance_type as u16,
             num_dimensions,
             num_dimensions_to_index,
             storage_type: (*opt).get_storage_type() as u8,
@@ -281,8 +268,8 @@ impl MetaPage {
                 &opt,
             ),
             bq_num_bits_per_dimension,
-            search_list_size: (*opt).search_list_size,
-            max_alpha: (*opt).max_alpha,
+            search_list_size: opt.search_list_size,
+            max_alpha: opt.max_alpha,
             init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
         };

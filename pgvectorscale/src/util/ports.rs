@@ -117,5 +117,5 @@ pub unsafe fn slot_getattr(
     if *slot.tts_isnull.add(index) {
         return None;
     }
-    return Some(*slot.tts_values.add(index));
+    Some(*slot.tts_values.add(index))
 }

@@ -70,7 +70,7 @@ fn bulk_delete_for_storage<S: Storage>(
     callback_state: *mut ::std::os::raw::c_void,
 ) {
     for block_number in 0..nblocks {
-        let page = unsafe { WritablePage::cleanup(&index, block_number) };
+        let page = unsafe { WritablePage::cleanup(index, block_number) };
         if page.get_type() != S::page_type() {
             continue;
         }
@@ -192,27 +192,21 @@ pub mod tests {
 
         let test_vec: Option<Vec<f32>> = client
             .query_one(
-                &format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-        FROM generate_series(1, 256)"
-        ),
+                &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
+        FROM generate_series(1, 256)".to_string(),
                 &[],
             )
             .unwrap()
             .get(0);
-        let test_vec = test_vec
-            .unwrap()
-            .into_iter()
-            .map(|x| Some(x))
-            .collect::<Vec<_>>();
+        let test_vec = test_vec.unwrap().into_iter().map(Some).collect::<Vec<_>>();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&"WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;".to_string(), &[&test_vec]).unwrap().get(0);
 
         assert_eq!(cnt, 303, "initial count");
 
         client
-            .execute(&format!("DELETE FROM test_vac WHERE id = 301;"), &[])
+            .execute(&"DELETE FROM test_vac WHERE id = 301;".to_string(), &[])
             .unwrap();
 
         client.close().unwrap();
@@ -235,17 +229,17 @@ pub mod tests {
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&"WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;".to_string(), &[&test_vec]).unwrap().get(0);
         //if the old index is still used the count is 304
         assert_eq!(cnt, 303, "count after vacuum");
 
         //do another delete for same items (noop)
         client
-            .execute(&format!("DELETE FROM test_vac WHERE id=301;"), &[])
+            .execute(&"DELETE FROM test_vac WHERE id=301;".to_string(), &[])
             .unwrap();
 
         client.execute("set enable_seqscan = 0;", &[]).unwrap();
-        let cnt: i64 = client.query_one(&format!("WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;"), &[&test_vec]).unwrap().get(0);
+        let cnt: i64 = client.query_one(&"WITH cte as (select * from test_vac order by embedding <=> $1::float4[]::vector) SELECT count(*) from cte;".to_string(), &[&test_vec]).unwrap().get(0);
         //if the old index is still used the count is 304
         assert_eq!(cnt, 303, "count after delete");
 
@@ -317,8 +311,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!(
-                    "
+                &"
                     INSERT INTO test_vac_full (embedding)
                     SELECT
                      *
@@ -329,8 +322,7 @@ pub mod tests {
                      generate_series(1, 255 * 300) i
                     GROUP BY
                     i % 300) g;
-                    "
-                ),
+                    ".to_string(),
                 &[],
             )
             .unwrap();
@@ -391,7 +383,7 @@ pub mod tests {
 
         client
             .execute(
-                &format!("do $$
+                &"do $$
             declare
                 _id bigint;
                 _article text;
@@ -414,7 +406,7 @@ pub mod tests {
                     commit;
                 end loop;
             end;
-            $$;"),
+            $$;".to_string(),
                 &[],
             )
             .unwrap();
@@ -426,15 +418,14 @@ pub mod tests {
             )
             .unwrap();
 
-        client.execute(&format!(
-                "with q as
+        client.execute(&"with q as
                 (
                     select  ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector q from generate_series(1,1024)
                 )
                 select article
                 from test_data_hot_test_1
                 order by embedding <=> (select q from q limit 1)
-                limit 15;"), &[]).unwrap();
+                limit 15;".to_string(), &[]).unwrap();
 
         client
             .execute("DROP TABLE test_data_hot_test_1", &[])

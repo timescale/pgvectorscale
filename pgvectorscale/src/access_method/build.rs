@@ -1,14 +1,17 @@
 use std::time::Instant;
 
-use pgrx::pg_sys::{pgstat_progress_update_param, AsPgCStr};
+use pg_sys::{FunctionCall0Coll, InvalidOid};
+use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr};
 use pgrx::*;
 
+use crate::access_method::distance::DistanceType;
 use crate::access_method::graph::Graph;
 use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
 
+use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
@@ -50,9 +53,9 @@ impl<'a, 'b> BuildState<'a, 'b> {
         BuildState {
             memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
-            meta_page: meta_page,
+            meta_page,
             tape,
-            graph: graph,
+            graph,
             started: Instant::now(),
             stats: InsertStats::new(),
         }
@@ -78,8 +81,23 @@ pub extern "C" fn ambuild(
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    assert!(dimensions > 0 && dimensions < 2000);
-    let meta_page = unsafe { MetaPage::create(&index_relation, dimensions as _, opt) };
+
+    let distance_type = unsafe {
+        let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
+        if fmgr_info == std::ptr::null_mut() {
+            error!("No distance type function found for index");
+        }
+        let result = FunctionCall0Coll(fmgr_info, InvalidOid).value() as u16;
+        DistanceType::from_u16(result)
+    };
+
+    let meta_page =
+        unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
+
+    assert!(
+        meta_page.get_num_dimensions_to_index() > 0
+            && meta_page.get_num_dimensions_to_index() <= 2000
+    );
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -92,6 +110,7 @@ pub extern "C" fn ambuild(
 
 #[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
 #[pg_guard]
+#[allow(clippy::too_many_arguments)]
 pub unsafe extern "C" fn aminsert(
     indexrel: pg_sys::Relation,
     values: *mut pg_sys::Datum,
@@ -105,7 +124,7 @@ pub unsafe extern "C" fn aminsert(
     aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
 }
 
-#[cfg(any(feature = "pg13"))]
+#[cfg(feature = "pg13")]
 #[pg_guard]
 pub unsafe extern "C" fn aminsert(
     indexrel: pg_sys::Relation,
@@ -130,7 +149,7 @@ unsafe fn aminsert_internal(
     let heap_relation = PgRelation::from_pg(heaprel);
     let mut meta_page = MetaPage::fetch(&index_relation);
     let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
-    if let None = vec {
+    if vec.is_none() {
         //todo handle NULLs?
         return false;
     }
@@ -183,17 +202,17 @@ unsafe fn insert_storage<S: Storage>(
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
-    let mut tape = Tape::new(&index_relation, S::page_type());
+    let mut tape = Tape::resume(index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vector.to_index_slice(),
         heap_pointer,
-        &meta_page,
+        meta_page,
         &mut tape,
         stats,
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(&index_relation, index_pointer, vector, storage, stats)
+    graph.insert(index_relation, index_pointer, vector, storage, stats)
 }
 
 #[pg_guard]
@@ -440,7 +459,7 @@ fn build_callback_internal<S: Storage>(
 ) {
     check_for_interrupts!();
 
-    state.ntuples = state.ntuples + 1;
+    state.ntuples += 1;
 
     if state.ntuples % 1000 == 0 {
         debug1!(
@@ -486,19 +505,24 @@ pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
 pub mod tests {
     use std::collections::HashSet;
 
+    use crate::access_method::distance::DistanceType;
     use pgrx::*;
 
     //TODO: add test where inserting and querying with vectors that are all the same.
 
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_creation_and_accuracy_scaffold(
+        distance_type: DistanceType,
         index_options: &str,
         name: &str,
+        vector_dimensions: usize,
     ) -> spi::Result<()> {
+        let operator = distance_type.get_operator();
+        let operator_class = distance_type.get_operator_class();
         let table_name = format!("test_data_icaa_{}", name);
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
-                embedding vector (1536)
+                embedding vector ({vector_dimensions})
             );
 
             select setseed(0.5);
@@ -510,11 +534,11 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 300) i
+                    generate_series(1, {vector_dimensions} * 300) i
                 GROUP BY
                     i % 300) g;
 
-            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding {operator_class}) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -524,15 +548,16 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));"))?;
+            FROM generate_series(1, {vector_dimensions}));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-    FROM generate_series(1, 1536)"
-        ))?;
+        let test_vec: Option<Vec<f32>> = Spi::get_one(
+            &format!("SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, {vector_dimensions})")
+                .to_string(),
+        )?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
                 &format!(
@@ -540,7 +565,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -563,7 +588,7 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 2) i
+                    generate_series(1, {vector_dimensions} * 2) i
                 GROUP BY
                     i % 2) g;
 
@@ -574,10 +599,10 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, 1536));
+            FROM generate_series(1, {vector_dimensions}));
 
             -- test insert 10 vectors to search for that aren't random
             INSERT INTO {table_name} (embedding)
@@ -587,7 +612,7 @@ pub mod tests {
                 SELECT
                     ('[' || array_to_string(array_agg(1.0), ',', '0') || ']')::vector AS embedding
                 FROM
-                    generate_series(1, 1536 * 10) i
+                    generate_series(1, {vector_dimensions} * 10) i
                 GROUP BY
                     i % 10) g;
 
@@ -606,7 +631,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -629,7 +654,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -653,7 +678,7 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> $1::vector
+                embedding {operator} $1::vector
             LIMIT 10
         )
         SELECT array_agg(ctid) from cte;"
@@ -684,7 +709,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(
@@ -695,6 +720,46 @@ pub mod tests {
 
             assert_eq!(cnt.unwrap(), 312);
         }
+
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_l2_sanity_check() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING diskann(embedding vector_l2_ops)
+                WITH (num_neighbors=10, search_list_size=10);
+
+            INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[3,3,3]');
+            ",
+        ))?;
+
+        // Query vector [1,1,1] should return [1,1,1]; [2,2,2] should return [2,2,2];
+        // and [3,3,3] should return [3,3,3].  (Note that if vectors or the query vector
+        // were normalized, then the results would be different.)
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[1,1,1]"], res.unwrap());
+
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[2,2,2]"], res.unwrap());
+
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[3,3,3]"], res.unwrap());
+
+        Spi::run(&"drop index idxtest;".to_string())?;
 
         Ok(())
     }
@@ -713,20 +778,19 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
+        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
         assert_eq!(3, res.unwrap());
 
-        Spi::run(&format!(
-            "
+        Spi::run(
+            &"
         set enable_seqscan = 0;
         explain analyze select * from test order by embedding <=> '[0,0,0]';
-        ",
-        ))?;
+        "
+            .to_string(),
+        )?;
 
-        Spi::run(&format!("drop index idxtest;",))?;
+        Spi::run(&"drop index idxtest;".to_string())?;
 
         Ok(())
     }
@@ -747,23 +811,25 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&format!(
-            "   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;",
-        ))?;
+        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
         assert_eq!(2, res.unwrap());
 
-        Spi::run(&format!("drop index idxtest;",))?;
+        Spi::run(&"drop index idxtest;".to_string())?;
 
         Ok(())
     }
 
     #[cfg(any(test, feature = "pg_test"))]
     pub unsafe fn test_index_updates(
+        distance_type: DistanceType,
         index_options: &str,
         expected_cnt: i64,
         name: &str,
     ) -> spi::Result<()> {
+        let operator_class = distance_type.get_operator_class();
+        let operator = distance_type.get_operator();
+
         let table_name = format!("test_data_index_updates_{}", name);
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
@@ -785,7 +851,7 @@ pub mod tests {
                 GROUP BY
                     i % {expected_cnt}) g;
 
-            CREATE INDEX ON {table_name} USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX ON {table_name} USING diskann (embedding {operator_class}) WITH ({index_options});
 
 
             SET enable_seqscan = 0;
@@ -795,15 +861,16 @@ pub mod tests {
             FROM
                 {table_name}
             ORDER BY
-                embedding <=> (
+                embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, 1536));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+        let test_vec: Option<Vec<f32>> = Spi::get_one(
+            &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
     FROM generate_series(1, 1536)"
-        ))?;
+                .to_string(),
+        )?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
                 &format!(
@@ -811,7 +878,7 @@ pub mod tests {
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+            WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
                 vec![(
@@ -850,7 +917,7 @@ pub mod tests {
         SET enable_seqscan = 0;
         SET enable_indexscan = 1;
         SET diskann.query_search_list_size = 2;
-        WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+        WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
             vec![(
@@ -864,13 +931,67 @@ pub mod tests {
         Ok(())
     }
 
+    pub fn verify_index_accuracy(expected_cnt: i64, dimensions: usize) -> spi::Result<()> {
+        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
+            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
+    FROM generate_series(1, {dimensions})"
+        ))?;
+
+        let cnt: Option<i64> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET diskann.query_search_list_size = 2;
+            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+        if cnt.unwrap() != expected_cnt {
+            // better debugging
+            let id: Option<String> = Spi::get_one_with_args(
+                &format!(
+                    "
+            SET enable_seqscan = 0;
+            SET enable_indexscan = 1;
+            SET diskann.query_search_list_size = 2;
+            WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from test_data where id in (select id from cte limit 1);
+            ",
+                ),
+                vec![(
+                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                    test_vec.clone().into_datum(),
+                )],
+            )?;
+
+            assert!(
+                cnt.unwrap() == expected_cnt,
+                "initial count is {} id is {}",
+                cnt.unwrap(),
+                id.unwrap()
+            );
+        }
+
+        assert!(
+            cnt.unwrap() == expected_cnt,
+            "initial count is {}",
+            cnt.unwrap()
+        );
+        Ok(())
+    }
+
     #[pg_test]
     pub unsafe fn test_index_small_accuracy() -> spi::Result<()> {
-        /* Test for the creation of connected graphs when the number of dimensions is small as is the
-        number of neighborss */
-        /* small num_neighbors is especially challenging for making sure no nodes get disconnected */
+        // Test for the creation of connected graphs when the number of dimensions is small as is the
+        // number of neighborss
+        // small num_neighbors is especially challenging for making sure no nodes get disconnected
         let index_options = "num_neighbors=10, search_list_size=10";
-        let expected_cnt = 300;
+        let expected_cnt = 1000;
         let dimensions = 2;
 
         Spi::run(&format!(
@@ -908,56 +1029,54 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
-            "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
-    FROM generate_series(1, {dimensions})"
-        ))?;
+        verify_index_accuracy(expected_cnt, dimensions)?;
+        Ok(())
+    }
 
-        let cnt: Option<i64> = Spi::get_one_with_args(
-                &format!(
-                    "
-            SET enable_seqscan = 0;
-            SET enable_indexscan = 1;
-            SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
-            ",
-                ),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
-            )?;
+    #[pg_test]
+    pub unsafe fn test_index_small_accuracy_insert_after_index_created() -> spi::Result<()> {
+        // Test for the creation of connected graphs when the number of dimensions is small as is the
+        // number of neighborss
+        // small num_neighbors is especially challenging for making sure no nodes get disconnected
+        let index_options = "num_neighbors=10, search_list_size=10";
+        let expected_cnt = 1000;
+        let dimensions = 2;
 
-        if cnt.unwrap() != expected_cnt {
-            /* better debugging */
-            let id: Option<i64> = Spi::get_one_with_args(
-                &format!(
-                    "
-            SET enable_seqscan = 0;
-            SET enable_indexscan = 1;
-            SET diskann.query_search_list_size = 2;
-            WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT id from cte limit 1;
-            ",
-                ),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
-            )?;
-
-            assert!(
-                cnt.unwrap() == expected_cnt,
-                "initial count is {} id is {}",
-                cnt.unwrap(),
-                id.unwrap()
+        Spi::run(&format!(
+            "CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimensions})
             );
-        }
+            
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
-        assert!(
-            cnt.unwrap() == expected_cnt,
-            "initial count is {}",
-            cnt.unwrap()
-        );
+            select setseed(0.5);
+           -- generate 300 vectors
+            INSERT INTO test_data (id, embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    i % {expected_cnt},
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, {dimensions} * {expected_cnt}) i
+                GROUP BY
+                    i % {expected_cnt}) g;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimensions}));"))?;
+
+        verify_index_accuracy(expected_cnt, dimensions)?;
         Ok(())
     }
 }
