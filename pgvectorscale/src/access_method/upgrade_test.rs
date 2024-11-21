@@ -30,8 +30,9 @@ pub mod tests {
         extname: &str,
         amname: &str,
     ) {
-        let semver = Version::parse(version).unwrap();
-        if cfg!(feature = "pg17") && semver < Version::parse("0.4.0").unwrap() {
+        if cfg!(feature = "pg17")
+            && semver::Version::parse(version).unwrap() < semver::Version::parse("0.4.0").unwrap()
+        {
             // PG17 was not supported before 0.4.0
             return;
         }
