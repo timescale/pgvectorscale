@@ -23,9 +23,33 @@ jobs:
     container:
       image: timescaledev/rust-builder:latest-ubuntu-stable
 
+    env:
+      PG_SRC_DIR: pgbuild
+      PG_INSTALL_DIR: postgresql
+      PG_MAJOR_VER: 17
+      PG_MINOR_VER: 0
+      MAKE_JOBS: 6
+      PG_CONFIG_PATH: postgresql/bin/pg_config
+      TAG: ${{ github.event.inputs.tag }}
+      TAG_DIR: pgvectorscale
+      TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
+  
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Install PostgreSQL ${{ env.PG_MAJOR_VER }}
+        uses: ./.github/actions/install-postgres
+        with:
+          pg-version: ${{ env.PG_MAJOR_VER }}.${{ env.PG_MINOR_VER }}
+          pg-src-dir: ~/${{ env.PG_SRC_DIR }}
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+  
+      - name: Install pgrx
+        uses: ./.github/actions/install-pgrx
+        with:
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+          pgrx-version: 0.12.5  
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
