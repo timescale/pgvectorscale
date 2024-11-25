@@ -445,7 +445,10 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic]
     unsafe fn test_plain_storage_num_dimensions_ip() -> spi::Result<()> {
+        // Should panic because combination of inner product and plain storage
+        // is not supported.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             DistanceType::InnerProduct,
             "num_neighbors=38, storage_layout = plain, num_dimensions=768",
@@ -478,7 +481,10 @@ mod tests {
     }
 
     #[pg_test]
+    #[should_panic]
     unsafe fn test_plain_storage_index_updates_ip() -> spi::Result<()> {
+        // Should panic because combination of inner product and plain storage
+        // is not supported.
         crate::access_method::build::tests::test_index_updates(
             DistanceType::InnerProduct,
             "storage_layout = plain, num_neighbors=30",

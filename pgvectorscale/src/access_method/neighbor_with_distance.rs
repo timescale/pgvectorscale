@@ -17,6 +17,7 @@ pub struct DistanceWithTieBreak {
 impl DistanceWithTieBreak {
     pub fn new(distance: Distance, from: IndexPointer, to: IndexPointer) -> Self {
         assert!(!distance.is_nan());
+        assert!(distance >= 0.0);
         DistanceWithTieBreak {
             distance,
             from,

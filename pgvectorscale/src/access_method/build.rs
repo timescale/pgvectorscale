@@ -91,6 +91,10 @@ pub extern "C" fn ambuild(
         DistanceType::from_u16(result)
     };
 
+    if distance_type == DistanceType::InnerProduct && opt.get_storage_type() == StorageType::Plain {
+        error!("Inner product distance type is not supported with plain storage");
+    }
+
     let meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
