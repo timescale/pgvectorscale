@@ -969,11 +969,15 @@ impl ArchivedData for ArchivedSbqNode {
 mod tests {
     use pgrx::*;
 
+    use crate::access_method::distance::DistanceType;
+
     #[pg_test]
     unsafe fn test_bq_speedup_storage_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "storage_layout = io_optimized",
             "bq_speedup_default_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -982,8 +986,10 @@ mod tests {
     unsafe fn test_bq_speedup_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "num_neighbors=10, storage_layout = io_optimized",
             "bq_speedup_few_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1017,17 +1023,42 @@ mod tests {
     }
 
     #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_cosine() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "storage_layout = io_optimized, num_dimensions=768",
             "bq_speedup_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
 
     #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_updates() -> spi::Result<()> {
+    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_l2() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::L2,
+            "storage_layout = io_optimized, num_dimensions=768",
+            "bq_speedup_num_dimensions",
+            3072,
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_speedup_storage_index_updates_cosine() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
+            DistanceType::Cosine,
+            "storage_layout = io_optimized, num_neighbors=10",
+            300,
+            "bq_speedup",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_speedup_storage_index_updates_l2() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            DistanceType::L2,
             "storage_layout = io_optimized, num_neighbors=10",
             300,
             "bq_speedup",
@@ -1038,8 +1069,10 @@ mod tests {
     #[pg_test]
     unsafe fn test_bq_compressed_index_creation_default_neighbors() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "storage_layout = memory_optimized",
             "bq_compressed_default_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1048,8 +1081,10 @@ mod tests {
     unsafe fn test_bq_compressed_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "num_neighbors=10, storage_layout = memory_optimized",
             "bq_compressed_few_neighbors",
+            1536,
         )?;
         Ok(())
     }
@@ -1091,15 +1126,29 @@ mod tests {
     #[pg_test]
     unsafe fn test_bq_compressed_storage_index_creation_num_dimensions() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
+            DistanceType::Cosine,
             "storage_layout = memory_optimized, num_dimensions=768",
             "bq_compressed_num_dimensions",
+            3072,
         )?;
         Ok(())
     }
 
     #[pg_test]
-    unsafe fn test_bq_compressed_storage_index_updates() -> spi::Result<()> {
+    unsafe fn test_bq_compressed_storage_index_updates_cosine() -> spi::Result<()> {
         crate::access_method::build::tests::test_index_updates(
+            DistanceType::Cosine,
+            "storage_layout = memory_optimized, num_neighbors=10",
+            300,
+            "bq_compressed",
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_updates_l2() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_updates(
+            DistanceType::L2,
             "storage_layout = memory_optimized, num_neighbors=10",
             300,
             "bq_compressed",

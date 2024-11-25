@@ -1,5 +1,7 @@
 use pgrx::*;
 
+use crate::access_method::distance::DistanceType;
+
 use super::{distance::preprocess_cosine, meta_page};
 
 //Ported from pg_vector code
@@ -99,7 +101,9 @@ impl PgVector {
         let dim = (*casted).dim;
         let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
 
-        preprocess_cosine(raw_slice);
+        if meta_page.get_distance_type() == DistanceType::Cosine {
+            preprocess_cosine(raw_slice);
+        }
         casted
     }
 
