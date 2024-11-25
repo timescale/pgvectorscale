@@ -20,9 +20,6 @@ jobs:
   clippy:
     runs-on: ubuntu-latest
 
-    container:
-      image: timescaledev/rust-builder:latest-ubuntu-stable
-
     env:
       MAKE_JOBS: 6
       PG_CONFIG_PATH: postgresql/bin/pg_config
