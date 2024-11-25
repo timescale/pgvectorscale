@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: timescaledev/rust-builder:ubuntu-1.65
+      image: timescaledev/rust-builder:latest-ubuntu-stable
 
     steps:
       - name: Checkout
@@ -21,7 +21,7 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: timescaledev/rust-builder:ubuntu-1.65
+      image: timescaledev/rust-builder:latest-ubuntu-stable
 
     steps:
       - name: Checkout
