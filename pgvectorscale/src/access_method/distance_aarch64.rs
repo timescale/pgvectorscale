@@ -26,7 +26,7 @@ impl S {
     }
 
     unsafe fn horizontal_add_ps(a: S) -> f32 {
-         aarch64::vaddvq_f32(a.0) 
+        aarch64::vaddvq_f32(a.0)
     }
 
     unsafe fn fmadd_ps(a: S, b: S, c: S) -> S {

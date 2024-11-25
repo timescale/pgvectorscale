@@ -163,7 +163,7 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
         return super::distance_x86::distance_cosine_x86_avx2(a, b);
     }
 
-    #[cfg(all(any(target_arch = "arm", target_arch = "aarch64")))]
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     unsafe {
         return super::distance_aarch64::distance_cosine_aarch64_neon(a, b);
     }
