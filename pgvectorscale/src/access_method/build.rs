@@ -84,7 +84,7 @@ pub extern "C" fn ambuild(
 
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
-        if fmgr_info == std::ptr::null_mut() {
+        if fmgr_info.is_null() {
             error!("No distance type function found for index");
         }
         let result = FunctionCall0Coll(fmgr_info, InvalidOid).value() as u16;
