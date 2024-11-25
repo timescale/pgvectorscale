@@ -81,13 +81,13 @@ mod tests {
     use super::*;
 
     fn make_test_relation() -> PgRelation {
-        Spi::run(&format!(
+        Spi::run(
             "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
                 WITH (num_neighbors=30);",
-        ))
+        )
         .unwrap();
 
         let index_oid = Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")

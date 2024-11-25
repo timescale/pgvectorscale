@@ -14,13 +14,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify formatting
-        run: cd pgvectorscale && cargo fmt --check
+      - name: Rustfmt
+        run: cargo fmt --all -- --check
 
-      - name: Check formatting failure
-        if: failure()
-        run: |
-          echo "cargo version is"
-          cargo --version
+  clippy:
+    runs-on: ubuntu-latest
 
+    container:
+      image: timescaledev/rust-builder:ubuntu-1.65
 
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Clippy
+        run: cd pgvectorscale && cargo clippy --all-targets --all-features -- -D warnings
