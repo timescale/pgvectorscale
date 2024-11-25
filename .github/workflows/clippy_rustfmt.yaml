@@ -1,0 +1,52 @@
+name: Clippy and rustfmt
+on:
+  pull_request:
+  push:
+    branches:
+    - main
+    - staging
+    - trying
+  workflow_dispatch:
+    inputs:
+      container-image:
+        description: 'Container image to pull from DockerHub'
+        required: false
+
+jobs:
+  clippy:
+    name: Clippy/rustfmt Test
+    runs-on: ubuntu-20.04
+    container:
+      # Duplicated from ci.yml
+      image: ${{ inputs.container-image || 'timescaledev/toolkit-builder-test:debian-11-amd64' }}
+      env:
+        # TODO: See TODOs on duplicate block in ci.yml
+        CARGO_INCREMENTAL: 0
+        CARGO_NET_RETRY: 10
+        CI: 1
+        RUST_BACKTRACE: short
+
+    steps:
+    - name: Checkout Repository
+      uses: actions/checkout@v3
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+
+    - name: chown Repository
+      run: chown -R postgres .
+
+    - name: Cache cargo target dir
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-clippy-target-${{ hashFiles('Cargo.lock', '.github/workflows/clippy_rustfmt.yml') }}
+        restore-keys: ${{ runner.os }}-clippy-target-
+
+    - name: Run Clippy
+      # Github captures stdout and stderr separately and then intermingles them
+      # in the wrong order.  We don't actually care to distinguish, so redirect
+      # stderr to stdout so we get the proper order.
+      run: su postgres -c 'sh tools/build clippy 2>&1'
+
+    - name: Verify formatting
+      run: su postgres -c 'cargo fmt --check 2>&1'
