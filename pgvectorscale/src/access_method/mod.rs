@@ -19,6 +19,8 @@ mod upgrade_test;
 mod vacuum;
 
 pub mod distance;
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+mod distance_aarch64;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
 mod sbq;
@@ -166,6 +168,7 @@ DO $$
 DECLARE
   have_cos_ops int;
   have_l2_ops int;
+  have_ip_ops int;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -183,35 +186,51 @@ BEGIN
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
+    -- Has inner product operator class been installed previously?
+    SELECT count(*)
+    INTO have_ip_ops
+    FROM pg_catalog.pg_opclass c
+    WHERE c.opcname = 'vector_ip_ops'
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
+
     IF have_cos_ops = 0 THEN
-        -- Fresh install from scratch
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
         FOR TYPE vector USING diskann AS
 	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_cosine();
-
-        CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
-            FUNCTION 1 distance_type_l2();
     ELSIF have_l2_ops = 0 THEN
-        -- Upgrade to add L2 distance support and update cosine opclass to
-        -- include the distance_type_cosine function
+        -- Upgrade from 0.4.0 to 0.5.0.  Update cosine opclass to include
+        -- the distance_type_cosine function.
         INSERT INTO pg_amproc (oid, amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
         SELECT  (select (max(oid)::int + 1)::oid from pg_amproc), c.opcfamily, c.opcintype, c.opcintype, 1, '@extschema@.distance_type_l2'::regproc
         FROM pg_opclass c, pg_am a
         WHERE a.oid = c.opcmethod AND c.opcname = 'vector_cosine_ops' AND a.amname = 'diskann';
+    END IF;
 
+    IF have_l2_ops = 0 THEN
         CREATE OPERATOR CLASS vector_l2_ops
         FOR TYPE vector USING diskann AS
             OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_l2();
     END IF;
+
+    IF have_ip_ops = 0 THEN
+        CREATE OPERATOR CLASS vector_ip_ops
+        FOR TYPE vector USING diskann AS
+            OPERATOR 1 <#> (vector, vector) FOR ORDER BY float_ops,
+            FUNCTION 1 distance_type_inner_product();
+    END IF;
 END;
 $$;
 "#,
     name = "diskann_ops_operator",
-    requires = [amhandler, distance_type_cosine, distance_type_l2]
+    requires = [
+        amhandler,
+        distance_type_cosine,
+        distance_type_l2,
+        distance_type_inner_product
+    ]
 );
 
 #[pg_guard]

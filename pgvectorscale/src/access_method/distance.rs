@@ -6,6 +6,7 @@ pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
 pub enum DistanceType {
     Cosine = 0,
     L2 = 1,
+    InnerProduct = 2,
 }
 
 impl DistanceType {
@@ -13,6 +14,7 @@ impl DistanceType {
         match value {
             0 => DistanceType::Cosine,
             1 => DistanceType::L2,
+            2 => DistanceType::InnerProduct,
             _ => panic!("Unknown DistanceType number {}", value),
         }
     }
@@ -21,6 +23,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => "<=>",
             DistanceType::L2 => "<->",
+            DistanceType::InnerProduct => "<#>",
         }
     }
 
@@ -28,6 +31,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => "vector_cosine_ops",
             DistanceType::L2 => "vector_l2_ops",
+            DistanceType::InnerProduct => "vector_ip_ops",
         }
     }
 
@@ -35,6 +39,7 @@ impl DistanceType {
         match self {
             DistanceType::Cosine => distance_cosine,
             DistanceType::L2 => distance_l2,
+            DistanceType::InnerProduct => distance_inner_product,
         }
     }
 }
@@ -47,6 +52,11 @@ pub fn distance_type_cosine() -> i16 {
 #[pg_extern(immutable, parallel_safe, create_or_replace)]
 pub fn distance_type_l2() -> i16 {
     DistanceType::L2 as i16
+}
+
+#[pg_extern(immutable, parallel_safe)]
+pub fn distance_type_inner_product() -> i16 {
+    DistanceType::InnerProduct as i16
 }
 
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
@@ -62,6 +72,11 @@ pub fn init() {
     if !is_x86_feature_detected!("avx2") || !is_x86_feature_detected!("fma") {
         panic!("On x86, pgvectorscale requires the CPU to support AVX2 and FMA. See https://github.com/timescale/pgvectorscale/issues/115");
     }
+
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    if !std::arch::is_aarch64_feature_detected!("neon") {
+        panic!("On aarch64, pgvectorscale requires the CPU to support Neon. See https://github.com/timescale/pgvectorscale/issues/115");
+    }
 }
 
 #[inline]
@@ -70,6 +85,11 @@ pub fn distance_l2(a: &[f32], b: &[f32]) -> f32 {
     //note safety is guraranteed by compile_error above
     unsafe {
         return super::distance_x86::distance_l2_x86_avx2(a, b);
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    unsafe {
+        return super::distance_aarch64::distance_l2_aarch64_neon(a, b);
     }
 
     #[allow(unreachable_code)]
@@ -146,11 +166,35 @@ pub fn distance_l2_optimized_for_few_dimensions(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline]
+/// Negative inner product for use as distance function
+pub fn distance_inner_product(a: &[f32], b: &[f32]) -> f32 {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    unsafe {
+        return -super::distance_x86::inner_product_x86_avx2(a, b);
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    unsafe {
+        return -super::distance_aarch64::inner_product_aarch64_neon(a, b);
+    }
+
+    #[allow(unreachable_code)]
+    {
+        -inner_product_unoptimized(a, b)
+    }
+}
+
+#[inline]
 pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     //note safety is guraranteed by compile_error above
     unsafe {
         return super::distance_x86::distance_cosine_x86_avx2(a, b);
+    }
+
+    #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+    unsafe {
+        return super::distance_aarch64::distance_cosine_aarch64_neon(a, b);
     }
 
     #[allow(unreachable_code)]
@@ -160,11 +204,16 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
 }
 
 #[inline(always)]
+pub fn inner_product_unoptimized(a: &[f32], b: &[f32]) -> f32 {
+    a.iter().zip(b).map(|(a, b)| *a * *b).sum()
+}
+
+#[inline(always)]
 pub fn distance_cosine_unoptimized(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
     debug_assert!(preprocess_cosine_get_norm(a).is_none());
     debug_assert!(preprocess_cosine_get_norm(b).is_none());
-    let res: f32 = a.iter().zip(b).map(|(a, b)| *a * *b).sum();
+    let res: f32 = inner_product_unoptimized(a, b);
     (1.0 - res).max(0.0)
 }
 
@@ -267,3 +316,114 @@ pub fn distance_xor_optimized(a: &[u64], b: &[u64]) -> usize {
             .sum(),
     }
 }
+
+macro_rules! distance_l2_simd_body {
+    ($x:ident, $y:ident) => {{
+        let mut accum0 = S::setzero_ps();
+        let mut accum1 = S::setzero_ps();
+        let mut accum2 = S::setzero_ps();
+        let mut accum3 = S::setzero_ps();
+
+        //assert!(x.len() == y.len());
+        let mut x = &$x[..];
+        let mut y = &$y[..];
+
+        // Operations have to be done in terms of the vector width
+        // so that it will work with any size vector.
+        // the width of a vector type is provided as a constant
+        // so the compiler is free to optimize it more.
+        // S::VF32_WIDTH is a constant, 4 when using SSE, 8 when using AVX2, etc
+        while x.len() >= S::VF32_WIDTH * 4 {
+            //load data from your vec into an SIMD value
+            accum0 = accum0
+                + ((S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0]))
+                    * (S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0])));
+            accum1 = accum1
+                + ((S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1]))
+                    * (S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1])));
+            accum2 = accum2
+                + ((S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2]))
+                    * (S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2])));
+            accum3 = accum3
+                + ((S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3]))
+                    * (S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3])));
+
+            // Move each slice to the next position
+            x = &x[S::VF32_WIDTH * 4..];
+            y = &y[S::VF32_WIDTH * 4..];
+        }
+
+        let mut dist = S::horizontal_add_ps(accum0)
+            + S::horizontal_add_ps(accum1)
+            + S::horizontal_add_ps(accum2)
+            + S::horizontal_add_ps(accum3);
+
+        // compute for the remaining elements
+        for i in 0..x.len() {
+            let diff = x[i] - y[i];
+            dist += diff * diff;
+        }
+
+        assert!(dist >= 0.);
+        //dist.sqrt()
+        dist
+    }};
+}
+pub(crate) use distance_l2_simd_body;
+
+macro_rules! inner_product_simd_body {
+    ($x:ident, $y:ident) => {{
+        let mut accum0 = S::setzero_ps();
+        let mut accum1 = S::setzero_ps();
+        let mut accum2 = S::setzero_ps();
+        let mut accum3 = S::setzero_ps();
+        let mut x = &$x[..];
+        let mut y = &$y[..];
+
+        //assert!(x.len() == y.len());
+
+        // Operations have to be done in terms of the vector width
+        // so that it will work with any size vector.
+        // the width of a vector type is provided as a constant
+        // so the compiler is free to optimize it more.
+        while x.len() >= S::VF32_WIDTH * 4 {
+            accum0 = S::fmadd_ps(
+                S::loadu_ps(&x[S::VF32_WIDTH * 0]),
+                S::loadu_ps(&y[S::VF32_WIDTH * 0]),
+                accum0,
+            );
+            accum1 = S::fmadd_ps(
+                S::loadu_ps(&x[S::VF32_WIDTH * 1]),
+                S::loadu_ps(&y[S::VF32_WIDTH * 1]),
+                accum1,
+            );
+            accum2 = S::fmadd_ps(
+                S::loadu_ps(&x[S::VF32_WIDTH * 2]),
+                S::loadu_ps(&y[S::VF32_WIDTH * 2]),
+                accum2,
+            );
+            accum3 = S::fmadd_ps(
+                S::loadu_ps(&x[S::VF32_WIDTH * 3]),
+                S::loadu_ps(&y[S::VF32_WIDTH * 3]),
+                accum3,
+            );
+
+            // Move each slice to the next position
+            x = &x[S::VF32_WIDTH * 4..];
+            y = &y[S::VF32_WIDTH * 4..];
+        }
+
+        let mut dist = S::horizontal_add_ps(accum0)
+            + S::horizontal_add_ps(accum1)
+            + S::horizontal_add_ps(accum2)
+            + S::horizontal_add_ps(accum3);
+
+        // compute for the remaining elements
+        for i in 0..x.len() {
+            dist += x[i] * y[i];
+        }
+
+        dist
+    }};
+}
+pub(crate) use inner_product_simd_body;
