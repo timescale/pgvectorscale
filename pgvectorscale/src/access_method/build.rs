@@ -91,6 +91,10 @@ pub extern "C" fn ambuild(
         DistanceType::from_u16(result)
     };
 
+    if distance_type == DistanceType::InnerProduct && opt.get_storage_type() == StorageType::Plain {
+        error!("Inner product distance type is not supported with plain storage");
+    }
+
     let meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
@@ -755,6 +759,43 @@ pub mod tests {
 
         let res: Option<Vec<String>> = Spi::get_one(
             "WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[3,3,3]"], res.unwrap());
+
+        Spi::run(&"drop index idxtest;".to_string())?;
+
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_ip_sanity_check() -> spi::Result<()> {
+        Spi::run(&format!(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING diskann(embedding vector_ip_ops)
+                WITH (num_neighbors=10, search_list_size=10);
+
+            INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[3,3,3]');
+            ",
+        ))?;
+
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[3,3,3]"], res.unwrap());
+
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <#> '[2,2,2]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[3,3,3]"], res.unwrap());
+
+        let res: Option<Vec<String>> = Spi::get_one(
+            "WITH cte as (select * from test order by embedding <#> '[3,3,3]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());

@@ -230,6 +230,12 @@ pub mod tests {
                 &[],
             )
             .unwrap();
+        client
+            .execute(
+                "CREATE INDEX idxtest_ip ON test USING diskann(embedding vector_ip_ops);",
+                &[],
+            )
+            .unwrap();
     }
 
     #[ignore]

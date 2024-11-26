@@ -63,7 +63,11 @@ pub unsafe fn distance_l2_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
 }
 
 pub unsafe fn distance_cosine_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    super::distance::distance_cosine_simd_body!(x, y)
+    (1.0 - super::distance::inner_product_simd_body!(x, y)).max(0.0)
+}
+
+pub unsafe fn inner_product_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
+    super::distance::inner_product_simd_body!(x, y)
 }
 
 #[cfg(test)]

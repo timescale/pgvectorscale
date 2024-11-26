@@ -166,8 +166,8 @@ To enable pgvectorscale:
     LIMIT 10
     ```
 
-    Note: pgvectorscale currently supports: cosine distance (`<=>`) queries, for indices created with `vector_cosine_ops`; and L2 distance (`<->`) queries, for indices created with `vector_l2_ops`.  This is the same syntax used by `pgvector`.  If you would like additional distance types,
-    [create an issue](https://github.com/timescale/pgvectorscale/issues).
+    Note: pgvectorscale currently supports: cosine distance (`<=>`) queries, for indices created with `vector_cosine_ops`; L2 distance (`<->`) queries, for indices created with `vector_l2_ops`; and inner product (`<#>`) queries, for indices created with `vector_ip_ops`.  This is the same syntax used by `pgvector`.  If you would like additional distance types,
+    [create an issue](https://github.com/timescale/pgvectorscale/issues).  (Note: inner product indices are not compatible with plain storage.)
 
 ## Tuning
 

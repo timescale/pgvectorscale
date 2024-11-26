@@ -26,10 +26,15 @@ simdeez::simd_runtime_generate!(
 );
 
 simdeez::simd_runtime_generate!(
-    pub fn distance_cosine_x86(x: &[f32], y: &[f32]) -> f32 {
-        super::distance::distance_cosine_simd_body!(x, y)
+    pub fn inner_product_x86(x: &[f32], y: &[f32]) -> f32 {
+        super::distance::inner_product_simd_body!(x, y)
     }
 );
+
+/// Calculate the cosine distance between two normal vectors
+pub unsafe fn distance_cosine_x86_avx2(x: &[f32], y: &[f32]) -> f32 {
+    (1.0 - inner_product_x86_avx2(x, y)).max(0.0)
+}
 
 #[cfg(test)]
 mod tests {
