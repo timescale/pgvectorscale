@@ -253,12 +253,11 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options() -> spi::Result<()> {
         Spi::run(
-            &"CREATE TABLE test(encoding vector(3));
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
-                WITH (num_neighbors=30);"
-                .to_string(),
+                WITH (num_neighbors=30);",
         )?;
 
         let index_oid =
@@ -277,11 +276,10 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options_defaults() -> spi::Result<()> {
         Spi::run(
-            &"CREATE TABLE test(encoding vector(3));
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
-               USING diskann(encoding);"
-                .to_string(),
+               USING diskann(encoding);",
         )?;
 
         let index_oid =
@@ -303,12 +301,11 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options_bq() -> spi::Result<()> {
         Spi::run(
-            &"CREATE TABLE test(encoding vector(3));
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
-               WITH (storage_layout = io_optimized);"
-                .to_string(),
+               WITH (storage_layout = io_optimized);",
         )?;
 
         let index_oid =
@@ -326,12 +323,11 @@ mod tests {
     #[pg_test]
     unsafe fn test_index_options_plain() -> spi::Result<()> {
         Spi::run(
-            &"CREATE TABLE test(encoding vector(3));
+            "CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
-               WITH (storage_layout = plain);"
-                .to_string(),
+               WITH (storage_layout = plain);",
         )?;
 
         let index_oid =
@@ -347,11 +343,11 @@ mod tests {
 
     #[pg_test]
     unsafe fn test_index_options_custom() -> spi::Result<()> {
-        Spi::run(&"CREATE TABLE test(encoding vector(3));
+        Spi::run("CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
-               WITH (storage_layout = plain, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4);".to_string())?;
+               WITH (storage_layout = plain, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4);")?;
 
         let index_oid =
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
@@ -371,11 +367,11 @@ mod tests {
 
     #[pg_test]
     unsafe fn test_index_options_custom_mem_optimized() -> spi::Result<()> {
-        Spi::run(&"CREATE TABLE test(encoding vector(3));
+        Spi::run("CREATE TABLE test(encoding vector(3));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
-               WITH (storage_layout = memory_optimized, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4, num_bits_per_dimension=5);".to_string())?;
+               WITH (storage_layout = memory_optimized, num_neighbors=40, search_list_size=18, num_dimensions=20, max_alpha=1.4, num_bits_per_dimension=5);")?;
 
         let index_oid =
             Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");

@@ -730,7 +730,7 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_l2_sanity_check() -> spi::Result<()> {
-        Spi::run(&format!(
+        Spi::run(
             "CREATE TABLE test(embedding vector(3));
 
             CREATE INDEX idxtest
@@ -740,7 +740,7 @@ pub mod tests {
 
             INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[3,3,3]');
             ",
-        ))?;
+        )?;
 
         // Query vector [1,1,1] should return [1,1,1]; [2,2,2] should return [2,2,2];
         // and [3,3,3] should return [3,3,3].  (Note that if vectors or the query vector
@@ -763,7 +763,7 @@ pub mod tests {
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
-        Spi::run(&"drop index idxtest;".to_string())?;
+        Spi::run("drop index idxtest;")?;
 
         Ok(())
     }
@@ -819,19 +819,18 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
         assert_eq!(3, res.unwrap());
 
         Spi::run(
-            &"
+            "
         set enable_seqscan = 0;
         explain analyze select * from test order by embedding <=> '[0,0,0]';
-        "
-            .to_string(),
+        ",
         )?;
 
-        Spi::run(&"drop index idxtest;".to_string())?;
+        Spi::run("drop index idxtest;")?;
 
         Ok(())
     }
@@ -852,11 +851,11 @@ pub mod tests {
             ",
         ))?;
 
-        let res: Option<i64> = Spi::get_one(&"   set enable_seqscan = 0;
-                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;".to_string())?;
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
         assert_eq!(2, res.unwrap());
 
-        Spi::run(&"drop index idxtest;".to_string())?;
+        Spi::run("drop index idxtest;")?;
 
         Ok(())
     }
@@ -908,9 +907,8 @@ pub mod tests {
             FROM generate_series(1, 1536));"))?;
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(
-            &"SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
-    FROM generate_series(1, 1536)"
-                .to_string(),
+            "SELECT('{' || array_to_string(array_agg(1.0), ',', '0') || '}')::real[] AS embedding
+    FROM generate_series(1, 1536)",
         )?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
@@ -979,14 +977,12 @@ pub mod tests {
         ))?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
-                &format!(
                     "
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
             WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
             ",
-                ),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),
@@ -996,14 +992,12 @@ pub mod tests {
         if cnt.unwrap() != expected_cnt {
             // better debugging
             let id: Option<String> = Spi::get_one_with_args(
-                &format!(
                     "
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
             WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from test_data where id in (select id from cte limit 1);
             ",
-                ),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),

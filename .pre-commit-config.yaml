@@ -3,8 +3,8 @@ repos:
     rev: v1.0
     hooks:
       - id: fmt
-        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
+        args: ["--all", "--"]
       - id: cargo-check
-        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
+        args: ["--"]
       - id: clippy
-        args: ["--manifest-path", "pgvectorscale/Cargo.toml", "--"]
+        args: ["--all-targets", "--", "-D", "warnings"]

@@ -15,7 +15,7 @@ pub struct ListSearchNeighbor {
 
 impl PartialOrd for ListSearchNeighbor {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.distance.partial_cmp(&other.distance)
+        Some(self.cmp(other))
     }
 }
 
