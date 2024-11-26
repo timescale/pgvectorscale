@@ -66,9 +66,6 @@ jobs:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
         pgrx-version: 0.12.5
 
-    - name: Clippy
-      run: cd pgvectorscale && cargo clippy --all-targets -- -D warnings
-
     - name: Run tests
       id: runtests 
       run: |

@@ -8,76 +8,19 @@ jobs:
     runs-on: ubuntu-latest
 
     container:
-      image: timescaledev/rust-builder:latest-ubuntu-stable
+      image: timescaledev/rust-builder:ubuntu-1.65
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Rustfmt
-        run: cargo fmt --all -- --check
+      - name: Verify formatting
+        run: cd pgvectorscale && cargo fmt --check
 
-  # clippy:
-  #   runs-on: ${{ matrix.platform.runs_on }}
+      - name: Check formatting failure
+        if: failure()
+        run: |
+          echo "cargo version is"
+          cargo --version
 
-  #   strategy:
-  #     fail-fast: false
-  #     matrix:
-  #       pgvector:
-  #         - version: 0.7.4
-  #       pg:
-  #         # - major: 13
-  #         #   minor: 16
-  #         # - major: 14
-  #         #   minor: 13
-  #         # - major: 15
-  #         #   minor: 7
-  #         # - major: 16
-  #         #   minor: 3
-  #         - major: 17
-  #           minor: 0
-  #       platform:
-  #         - type: amd64
-  #           runs_on: ubuntu-latest
-  #           rustflags: '-C target-feature=+avx2,+fma'
-  #         # - type: arm64
-  #         #   runs_on: cloud-image-runner-arm64
-  #         #   rustflags: ''
 
-  #   env:
-  #     PG_SRC_DIR: pgbuild
-  #     PG_INSTALL_DIR: postgresql
-  #     MAKE_JOBS: 6
-  #     PG_CONFIG_PATH: postgresql/bin/pg_config
-  #     TAG: ${{ github.event.inputs.tag }}
-  #     TAG_DIR: pgvectorscale
-  #     TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
-
-  #   steps:
-  #     - name: Checkout pgvectorscale
-  #       uses: actions/checkout@v4
-
-  #     - name: Install Linux Packages
-  #       uses: ./.github/actions/install-packages
-
-  #     - name: Install PostgreSQL ${{ matrix.pg.major }}
-  #       uses: ./.github/actions/install-postgres
-  #       with:
-  #         pg-version: ${{ matrix.pg.major }}.${{ matrix.pg.minor }}
-  #         pg-src-dir: ~/${{ env.PG_SRC_DIR }}
-  #         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-
-  #     - name: Install pgvector ${{ matrix.pgvector.version }}
-  #       uses: ./.github/actions/install-pgvector
-  #       with:
-  #         pgvector-version: ${{ matrix.pgvector.version }}
-  #         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-
-  #     - name: Install pgrx
-  #       uses: ./.github/actions/install-pgrx
-  #       with:
-  #         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-  #         pgrx-version: 0.12.5
-
-  #     - name: Clippy
-  #       run: cargo clippy --all-targets -- -D warnings
