@@ -770,7 +770,7 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_ip_sanity_check() -> spi::Result<()> {
-        Spi::run(&format!(
+        Spi::run(
             "CREATE TABLE test(embedding vector(3));
 
             CREATE INDEX idxtest
@@ -780,7 +780,7 @@ pub mod tests {
 
             INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[3,3,3]');
             ",
-        ))?;
+        )?;
 
         let res: Option<Vec<String>> = Spi::get_one(
             "WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
@@ -800,7 +800,7 @@ pub mod tests {
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
-        Spi::run(&"drop index idxtest;".to_string())?;
+        Spi::run("drop index idxtest;")?;
 
         Ok(())
     }

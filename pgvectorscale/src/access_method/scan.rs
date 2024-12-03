@@ -1,5 +1,6 @@
 use std::collections::BinaryHeap;
 
+use pg_sys::pgstat_assoc_relation;
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
@@ -293,11 +294,19 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
     }
 }
 
-/*
-struct TSVScanState<'a, 'b> {
-    iterator: *mut TSVResponseIterator<'a, 'b>,
+/// Hand implementation of `pgstat_count_index_scan` which is missing from pgrx.
+pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
+    if !indexrel.pgstat_info.is_null() {
+        let tmp = indexrel.pgstat_info;
+        (*tmp).counts.numscans += 1;
+    } else if indexrel.pgstat_enabled {
+        pgstat_assoc_relation(index_relation);
+        assert!(!indexrel.pgstat_info.is_null());
+        let tmp = indexrel.pgstat_info;
+        (*tmp).counts.numscans += 1;
+    }
 }
-*/
+
 #[pg_guard]
 pub extern "C" fn ambeginscan(
     index_relation: pg_sys::Relation,
@@ -313,6 +322,10 @@ pub extern "C" fn ambeginscan(
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
     let meta_page = MetaPage::fetch(&indexrel);
+
+    unsafe {
+        pgstat_count_index_scan(index_relation, indexrel);
+    }
 
     let state: TSVScanState = TSVScanState::new(meta_page);
     scandesc.opaque =
