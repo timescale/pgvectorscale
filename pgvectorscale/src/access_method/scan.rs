@@ -1,6 +1,8 @@
 use std::collections::BinaryHeap;
 
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
 use pg_sys::pgstat_assoc_relation;
+
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
@@ -295,30 +297,33 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 }
 
 /// Hand implementation of `pgstat_count_index_scan` which is missing from pgrx.
-#[cfg(any(feature = "pg16", feature = "pg17"))]
+#[allow(unused_variables)]
 pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
     if !indexrel.pgstat_info.is_null() {
         let tmp = indexrel.pgstat_info;
-        (*tmp).counts.numscans += 1;
-    } else if indexrel.pgstat_enabled {
-        pgstat_assoc_relation(index_relation);
-        assert!(!indexrel.pgstat_info.is_null());
-        let tmp = indexrel.pgstat_info;
-        (*tmp).counts.numscans += 1;
+        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
+        {
+            (*tmp).t_counts.t_numscans += 1;
+        }
+        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        {
+            (*tmp).counts.numscans += 1;
+        }
     }
-}
 
-/// Hand implementation of `pgstat_count_index_scan` for pre-pg15 versions.
-#[cfg(any(feature = "pg14", feature = "pg15"))]
-pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
-    if !indexrel.pgstat_info.is_null() {
-        let tmp = indexrel.pgstat_info;
-        (*tmp).t_counts.numscans += 1;
-    } else if indexrel.pgstat_enabled {
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    if indexrel.pgstat_info.is_null() && indexrel.pgstat_enabled {
         pgstat_assoc_relation(index_relation);
         assert!(!indexrel.pgstat_info.is_null());
         let tmp = indexrel.pgstat_info;
-        (*tmp).t_counts.numscans += 1;
+        #[cfg(feature = "pg15")]
+        {
+            (*tmp).t_counts.t_numscans += 1;
+        }
+        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        {
+            (*tmp).counts.numscans += 1;
+        }
     }
 }
 
