@@ -1,5 +1,8 @@
 use std::collections::BinaryHeap;
 
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+use pg_sys::pgstat_assoc_relation;
+
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
@@ -293,11 +296,37 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
     }
 }
 
-/*
-struct TSVScanState<'a, 'b> {
-    iterator: *mut TSVResponseIterator<'a, 'b>,
+/// Hand implementation of `pgstat_count_index_scan` which is missing from pgrx.
+#[allow(unused_variables)]
+pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
+    if !indexrel.pgstat_info.is_null() {
+        let tmp = indexrel.pgstat_info;
+        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
+        {
+            (*tmp).t_counts.t_numscans += 1;
+        }
+        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        {
+            (*tmp).counts.numscans += 1;
+        }
+    }
+
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    if indexrel.pgstat_info.is_null() && indexrel.pgstat_enabled {
+        pgstat_assoc_relation(index_relation);
+        assert!(!indexrel.pgstat_info.is_null());
+        let tmp = indexrel.pgstat_info;
+        #[cfg(feature = "pg15")]
+        {
+            (*tmp).t_counts.t_numscans += 1;
+        }
+        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        {
+            (*tmp).counts.numscans += 1;
+        }
+    }
 }
-*/
+
 #[pg_guard]
 pub extern "C" fn ambeginscan(
     index_relation: pg_sys::Relation,
@@ -313,6 +342,10 @@ pub extern "C" fn ambeginscan(
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
     let meta_page = MetaPage::fetch(&indexrel);
+
+    unsafe {
+        pgstat_count_index_scan(index_relation, indexrel);
+    }
 
     let state: TSVScanState = TSVScanState::new(meta_page);
     scandesc.opaque =
