@@ -297,6 +297,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 }
 
 /// Hand implementation of `pgstat_count_index_scan` which is missing from pgrx.
+/// TODO move to util/ports.rs
 #[allow(unused_variables)]
 pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
     if !indexrel.pgstat_info.is_null() {

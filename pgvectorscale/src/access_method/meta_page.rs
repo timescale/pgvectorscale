@@ -273,7 +273,7 @@ impl MetaPage {
             init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
         };
-        let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
+        let page = page::WritablePage::new(index, crate::util::page::PageType::MetaV2);
         meta.write_to_page(page);
         meta
     }
@@ -302,12 +302,12 @@ impl MetaPage {
 
     unsafe fn overwrite(index: &PgRelation, new_meta: &MetaPage) {
         let mut page = page::WritablePage::modify(index, META_BLOCK_NUMBER);
-        page.reinit(crate::util::page::PageType::Meta);
+        page.reinit(crate::util::page::PageType::MetaV2);
         new_meta.write_to_page(page);
 
         let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
         let page_type = page.get_type();
-        if page_type != crate::util::page::PageType::Meta {
+        if page_type != crate::util::page::PageType::MetaV2 {
             pgrx::error!(
                 "Problem upgrading meta page: wrong page type: {:?}",
                 page_type
@@ -322,6 +322,9 @@ impl MetaPage {
     /// Read the meta page for an index
     pub fn fetch(index: &PgRelation) -> MetaPage {
         unsafe {
+            // TODO read from `Tape` instead of `ReadablePage`
+            // upgrade path for MetaPageV2, or do we even need to introduce a MetaPageV2 at all?
+
             let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
             let page_type = page.get_type();
             if page_type == crate::util::page::PageType::MetaV1 {

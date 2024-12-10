@@ -32,11 +32,12 @@ pub enum PageType {
     PqQuantizerVector = 3,
     SbqMeans = 4,
     SbqNode = 5,
-    Meta = 6,
+    MetaV2 = 6,
+    Meta = 7,
 }
 
 impl PageType {
-    fn from_u8(value: u8) -> Self {
+    pub fn from_u8(value: u8) -> Self {
         match value {
             0 => PageType::MetaV1,
             1 => PageType::Node,
@@ -44,8 +45,17 @@ impl PageType {
             3 => PageType::PqQuantizerVector,
             4 => PageType::SbqMeans,
             5 => PageType::SbqNode,
-            6 => PageType::Meta,
+            6 => PageType::MetaV2,
+            7 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
+        }
+    }
+
+    /// `Tape` supports chaining of pages that might contain large data.
+    pub fn is_chained(self) -> bool {
+        match self {
+            PageType::Meta => true,
+            _ => false,
         }
     }
 }
@@ -133,6 +143,12 @@ impl<'a> WritablePage<'a> {
         let size = data.len();
         assert!(self.get_free_space() >= size);
         unsafe { self.add_item_unchecked(data) }
+    }
+
+    pub unsafe fn replace_item(&mut self, offset: OffsetNumber, data: &[u8]) {
+        let result =
+            pg_sys::PageIndexTupleOverwrite(self.page, offset, data.as_ptr() as _, data.len());
+        assert!(result);
     }
 
     pub unsafe fn add_item_unchecked(&mut self, data: &[u8]) -> OffsetNumber {

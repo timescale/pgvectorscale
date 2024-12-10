@@ -54,6 +54,10 @@ impl<'a> ReadableBuffer<'a> {
     pub fn get_owned_page(self) -> ReadablePage<'a> {
         self._page
     }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
 }
 
 pub struct WritableBuffer<'a> {
