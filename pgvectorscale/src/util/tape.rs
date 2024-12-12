@@ -120,6 +120,16 @@ mod tests {
                 );
                 node_page
             };
+            {
+                let mut page = WritablePage::modify(&indexrel, node_page);
+                let buf: Vec<u8> = vec![4; page.get_free_space() - 3];
+                println!(
+                    "Adding buf of size {} < {}",
+                    buf.len(),
+                    page.get_free_space()
+                );
+                page.add_item(&buf);
+            }
 
             {
                 let mut tape = Tape::resume(&indexrel, PageType::SbqMeans);
