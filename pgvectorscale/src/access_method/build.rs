@@ -1117,4 +1117,51 @@ pub mod tests {
         verify_index_accuracy(expected_cnt, dimensions)?;
         Ok(())
     }
+
+    #[pg_test]
+    pub unsafe fn test_high_dimension_index() -> spi::Result<()> {
+        let index_options = "num_neighbors=10, search_list_size=10";
+        let expected_cnt = 1000;
+
+        for dimensions in [4000, 8000, 12000, 16000] {
+            Spi::run(&format!(
+                "CREATE TABLE test_data (
+                    id int,
+                    embedding vector ({dimensions})
+                );
+
+                CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
+
+                select setseed(0.5);
+            -- generate 300 vectors
+                INSERT INTO test_data (id, embedding)
+                SELECT
+                    *
+                FROM (
+                    SELECT
+                        i % {expected_cnt},
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                    FROM
+                        generate_series(1, {dimensions} * {expected_cnt}) i
+                    GROUP BY
+                        i % {expected_cnt}) g;
+
+                SET enable_seqscan = 0;
+                -- perform index scans on the vectors
+                SELECT
+                    *
+                FROM
+                    test_data
+                ORDER BY
+                    embedding <=> (
+                        SELECT
+                            ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM generate_series(1, {dimensions}));"))?;
+
+            verify_index_accuracy(expected_cnt, dimensions)?;
+
+            Spi::run("DROP TABLE test_data CASCADE;")?;
+        }
+        Ok(())
+    }
 }
