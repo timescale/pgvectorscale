@@ -25,9 +25,6 @@ pub const NUM_DIMENSIONS_DEFAULT_SENTINEL: u32 = 0;
 pub const SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL: u32 = 0;
 const DEFAULT_MAX_ALPHA: f64 = 1.2;
 
-pub const MAX_DIMENSIONS_WITHOUT_SBQ: u32 = 2000;
-pub const MAX_DIMENSIONS: u32 = 64000;
-
 impl TSVIndexOptions {
     //note: this should only be used when building a new index. The options aren't really versioned.
     //therefore, we should move all the options to the meta page when building the index (meta pages are properly versioned).

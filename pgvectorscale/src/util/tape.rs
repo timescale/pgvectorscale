@@ -1,4 +1,4 @@
-//! `Tape`` provides a simple infinite-tape read/write abstraction over postgres pages.
+//! Tape provides a simple infinite-tape-writing abstraction over postgres pages.
 
 use super::page::{PageType, ReadablePage, WritablePage};
 use pgrx::{

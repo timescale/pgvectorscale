@@ -52,6 +52,8 @@ impl PageType {
     }
 
     /// `ChainTape` supports chaining of pages that might contain large data.
+    /// This is not supported for all page types.  Note that `Tape` requires
+    /// that the page type not be chained.
     pub fn is_chained(self) -> bool {
         matches!(self, PageType::SbqMeans)
     }

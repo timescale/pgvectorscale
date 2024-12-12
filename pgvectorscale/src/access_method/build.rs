@@ -62,7 +62,13 @@ impl<'a, 'b> BuildState<'a, 'b> {
     }
 }
 
+/// Maximum number of dimensions supported by pgvector's vector type.  Also
+/// the maximum number of dimensions that can be indexed with diskann.
 pub const MAX_DIMENSION: u32 = 16000;
+
+/// Maximum number of dimensions that can be indexed with diskann without
+/// using the SBQ storage type.
+pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
 #[pg_guard]
 pub extern "C" fn ambuild(
@@ -75,7 +81,7 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}",
+        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}.",
         opt.get_num_neighbors(),
         opt.search_list_size,
         opt.max_alpha,
@@ -87,7 +93,7 @@ pub extern "C" fn ambuild(
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
         if fmgr_info.is_null() {
-            error!("Internal error: no distance type function found for index");
+            error!("No distance type function found for index");
         }
         let result = FunctionCall0Coll(fmgr_info, InvalidOid).value() as u16;
         DistanceType::from_u16(result)
@@ -102,8 +108,19 @@ pub extern "C" fn ambuild(
 
     if meta_page.get_num_dimensions_to_index() == 0 {
         error!("No dimensions to index");
-    } else if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION {
+    }
+
+    if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION {
         error!("Too many dimensions to index (max is {})", MAX_DIMENSION);
+    }
+
+    if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION_NO_SBQ
+        && meta_page.get_storage_type() == StorageType::Plain
+    {
+        error!(
+            "Too many dimensions to index without plain storage (max is {}).  Use storag_layout=memory_optimized instead.",
+            MAX_DIMENSION_NO_SBQ
+        );
     }
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
