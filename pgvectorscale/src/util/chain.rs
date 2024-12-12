@@ -21,6 +21,10 @@ struct ChainItemHeader {
 
 const ARCHIVED_CHAIN_HEADER_SIZE: usize = std::mem::size_of::<ArchivedChainItemHeader>();
 
+// Empirically-measured slop factor for how much `pg_sys::PageGetFreeSpace` can
+// overestimate the free space in a page in our usage patterns.
+const PG_SLOP_SIZE: usize = 4;
+
 pub struct ChainTapeWriter<'a, S: StatsNodeWrite> {
     page_type: PageType,
     index: &'a PgRelation,
@@ -46,22 +50,26 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
     /// Write chained data to the tape, returning an `ItemPointer` to the start of the data.
     pub fn write(&mut self, mut data: &[u8]) -> Result<super::ItemPointer> {
         let mut current_page = WritablePage::modify(self.index, self.current);
-        let header_size = ARCHIVED_CHAIN_HEADER_SIZE;
 
-        if current_page.get_free_space() <= header_size {
+        // If there isn't enough space for the header plus some data, start a new page.
+        if current_page.get_free_space() + PG_SLOP_SIZE < ARCHIVED_CHAIN_HEADER_SIZE + 1 {
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
         }
 
+        // ItemPointer to the first item in the chain.
         let mut result: Option<super::ItemPointer> = None;
 
-        while header_size + data.len() > current_page.get_free_space() {
+        // Write the data in chunks, creating new pages as needed.
+        while ARCHIVED_CHAIN_HEADER_SIZE + data.len() + PG_SLOP_SIZE > current_page.get_free_space()
+        {
             let next_page = WritablePage::new(self.index, self.page_type);
             let header = ChainItemHeader {
                 next: next_page.get_block_number(),
             };
             let header_bytes = rkyv::to_bytes::<_, 256>(&header).unwrap();
-            let data_size = current_page.get_free_space() - header_size;
+            let data_size =
+                current_page.get_free_space() - PG_SLOP_SIZE - ARCHIVED_CHAIN_HEADER_SIZE;
             let chunk = &data[..data_size];
             let combined = [header_bytes.as_slice(), chunk].concat();
             let offset_number = current_page.add_item(combined.as_ref());
@@ -74,6 +82,7 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
             data = &data[data_size..];
         }
 
+        // Write the last chunk of data.
         let header = ChainItemHeader {
             next: InvalidBlockNumber,
         };
@@ -151,7 +160,10 @@ impl<'a, S: StatsNodeRead> Iterator for ChainedItemIterator<'a, S> {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
-    use pgrx::{pg_sys, pg_test, Spi};
+    use pgrx::{
+        pg_sys::{self, BLCKSZ},
+        pg_test, Spi,
+    };
 
     use crate::access_method::stats::InsertStats;
 
@@ -174,16 +186,84 @@ mod tests {
     }
 
     #[pg_test]
+    #[allow(clippy::needless_range_loop)]
     fn test_chain_tape() {
-        let mut stats = InsertStats::default();
+        let mut rstats = InsertStats::default();
+        let mut wstats = InsertStats::default();
+
         let index = make_test_relation();
-        let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut stats);
-        let data = b"hello world";
-        let ip = tape.write(data).unwrap();
-        let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut stats);
-        let mut iter = reader.read(ip);
-        let item = iter.next().unwrap();
-        assert_eq!(item.get_data_slice(), data);
-        assert!(iter.next().is_none());
+        {
+            let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
+            let data = b"hello world";
+            let ip = tape.write(data).unwrap();
+            let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+
+            let mut iter = reader.read(ip);
+            let item = iter.next().unwrap();
+            assert_eq!(item.get_data_slice(), data);
+            assert!(iter.next().is_none());
+        }
+
+        for data_size in BLCKSZ - 100..BLCKSZ + 100 {
+            let mut bigdata = vec![0u8; data_size as usize];
+            for i in 0..bigdata.len() {
+                bigdata[i] = (i % 256) as u8;
+            }
+
+            let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
+            for _ in 0..10 {
+                let ip = tape.write(&bigdata).unwrap();
+                let mut count = 0;
+                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                for item in reader.read(ip) {
+                    assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
+                    count += item.len;
+                }
+                assert_eq!(count, bigdata.len());
+            }
+        }
+
+        for data_size in (2 * BLCKSZ - 100)..(2 * BLCKSZ + 100) {
+            // create data buffer of length > 1 page
+            let mut bigdata = vec![0u8; data_size as usize];
+            for i in 0..bigdata.len() {
+                bigdata[i] = (i % 256) as u8;
+            }
+
+            let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
+            for _ in 0..10 {
+                let ip = tape.write(&bigdata).unwrap();
+                let mut count = 0;
+                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                for item in reader.read(ip) {
+                    assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
+                    count += item.len;
+                }
+                assert_eq!(count, bigdata.len());
+            }
+        }
+
+        for data_size in (3 * BLCKSZ - 100)..(3 * BLCKSZ + 100) {
+            // create data buffer of length > 1 page
+            let mut bigdata = vec![0u8; data_size as usize];
+            for i in 0..bigdata.len() {
+                bigdata[i] = (i % 256) as u8;
+            }
+
+            let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
+            for _ in 0..10 {
+                let ip = tape.write(&bigdata).unwrap();
+                let mut count = 0;
+                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                for item in reader.read(ip) {
+                    assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
+                    count += item.len;
+                }
+                assert_eq!(count, bigdata.len());
+            }
+        }
+
+        // assert_eq!(wstats.node_writes, 2);
+        // assert_eq!(rstats.node_reads, 3);
     }
 }
