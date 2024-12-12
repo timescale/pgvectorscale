@@ -30,10 +30,11 @@ pub enum PageType {
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
-    SbqMeans = 4,
+    SbqMeansV1 = 4,
     SbqNode = 5,
     MetaV2 = 6,
     Meta = 7,
+    SbqMeans = 8,
 }
 
 impl PageType {
@@ -53,12 +54,10 @@ impl PageType {
 
     /// `Tape` supports chaining of pages that might contain large data.
     pub fn is_chained(self) -> bool {
-        match self {
-            PageType::Meta => true,
-            _ => false,
-        }
+        matches!(self, PageType::SbqMeans)
     }
 }
+
 /// This is the Tsv-specific data that goes on every "diskann-owned" page
 /// It is placed at the end of a page in the "special" area
 

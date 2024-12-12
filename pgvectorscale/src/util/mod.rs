@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod chain;
 pub mod page;
 pub mod ports;
 pub mod table_slot;
@@ -57,6 +58,12 @@ impl<'a> ReadableBuffer<'a> {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn advance(&mut self, len: usize) {
+        assert!(self.len >= len);
+        self.ptr = unsafe { self.ptr.add(len) };
+        self.len -= len;
     }
 }
 
