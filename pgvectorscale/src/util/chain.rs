@@ -147,3 +147,43 @@ impl<'a, S: StatsNodeRead> Iterator for ChainedItemIterator<'a, S> {
         }
     }
 }
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::{pg_sys, pg_test, Spi};
+
+    use crate::access_method::stats::InsertStats;
+
+    use super::*;
+
+    fn make_test_relation() -> PgRelation {
+        Spi::run(
+            "CREATE TABLE test(encoding vector(3));
+        CREATE INDEX idxtest
+                  ON test
+               USING diskann(encoding)
+                WITH (num_neighbors=30);",
+        )
+        .unwrap();
+
+        let index_oid = Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")
+            .unwrap()
+            .expect("oid was null");
+        unsafe { PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid)) }
+    }
+
+    #[pg_test]
+    fn test_chain_tape() {
+        let mut stats = InsertStats::default();
+        let index = make_test_relation();
+        let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut stats);
+        let data = b"hello world";
+        let ip = tape.write(data).unwrap();
+        let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut stats);
+        let mut iter = reader.read(ip);
+        let item = iter.next().unwrap();
+        assert_eq!(item.get_data_slice(), data);
+        assert!(iter.next().is_none());
+    }
+}

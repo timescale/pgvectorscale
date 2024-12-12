@@ -117,7 +117,7 @@ impl SbqMeans {
                 quantizer
             }
             _ => {
-                pgrx::error!("Invalid page type for SbqMeans");
+                pgrx::error!("Invalid page type {} for SbqMeans", page_type as u8);
             }
         }
     }

@@ -122,19 +122,6 @@ mod tests {
             };
 
             {
-                let mut tape = Tape::resume(&indexrel, PageType::SbqMeans);
-                let ip = tape.write(&[99]);
-                assert_eq!(
-                    ip.block_number, tape.current,
-                    "Tape block number should match IP"
-                );
-                assert_ne!(
-                    tape.current, node_page,
-                    "Data can only be written to page of its type"
-                );
-            }
-
-            {
                 let mut tape = Tape::resume(&indexrel, PageType::PqQuantizerVector);
                 let ip = tape.write(&[99]);
                 assert_eq!(
