@@ -10,8 +10,6 @@
 //! back.  Reads are done via an iterator that returns `ReadableBuffer` objects for the segments
 //! of the data.
 
-use anyhow::Result;
-
 use pgrx::{
     pg_sys::{BlockNumber, InvalidBlockNumber},
     PgRelation,
@@ -45,7 +43,7 @@ pub struct ChainTapeWriter<'a, S: StatsNodeWrite> {
 }
 
 impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
-    /// Create a ChainingTape that starts writing on a new page.
+    /// Create a ChainTape that starts writing on a new page.
     pub fn new(index: &'a PgRelation, page_type: PageType, stats: &'a mut S) -> Self {
         assert!(page_type.is_chained());
         let page = WritablePage::new(index, page_type);
@@ -60,7 +58,7 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
     }
 
     /// Write chained data to the tape, returning an `ItemPointer` to the start of the data.
-    pub fn write(&mut self, mut data: &[u8]) -> Result<super::ItemPointer> {
+    pub fn write(&mut self, mut data: &[u8]) -> super::ItemPointer {
         let mut current_page = WritablePage::modify(self.index, self.current);
 
         // If there isn't enough space for the header plus some data, start a new page.
@@ -105,7 +103,7 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         current_page.commit();
         self.stats.record_write();
 
-        Ok(result)
+        result
     }
 }
 
@@ -207,7 +205,7 @@ mod tests {
             let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
             for _ in 0..100 {
                 let data = b"hello world";
-                let ip = tape.write(data).unwrap();
+                let ip = tape.write(data);
                 let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
 
                 let mut iter = reader.read(ip);
@@ -226,7 +224,7 @@ mod tests {
 
             let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
             for _ in 0..10 {
-                let ip = tape.write(&bigdata).unwrap();
+                let ip = tape.write(&bigdata);
                 let mut count = 0;
                 let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {
@@ -246,7 +244,7 @@ mod tests {
 
             let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
             for _ in 0..10 {
-                let ip = tape.write(&bigdata).unwrap();
+                let ip = tape.write(&bigdata);
                 let mut count = 0;
                 let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {
@@ -266,7 +264,7 @@ mod tests {
 
             let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
             for _ in 0..10 {
-                let ip = tape.write(&bigdata).unwrap();
+                let ip = tape.write(&bigdata);
                 let mut count = 0;
                 let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {

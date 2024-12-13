@@ -134,7 +134,7 @@ impl SbqMeans {
         };
         let mut tape = ChainTapeWriter::new(index, PageType::SbqMeans, stats);
         let buf = rkyv::to_bytes::<_, 1024>(&bq).unwrap();
-        tape.write(&buf).unwrap()
+        tape.write(&buf)
     }
 }
 

@@ -118,7 +118,7 @@ pub extern "C" fn ambuild(
         && meta_page.get_storage_type() == StorageType::Plain
     {
         error!(
-            "Too many dimensions to index without plain storage (max is {}).  Use storag_layout=memory_optimized instead.",
+            "Too many dimensions to index with plain storage (max is {}).  Use storage_layout=memory_optimized instead.",
             MAX_DIMENSION_NO_SBQ
         );
     }
@@ -898,7 +898,7 @@ pub mod tests {
             );
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO {table_name} (id, embedding)
             SELECT
                 *
@@ -1056,7 +1056,7 @@ pub mod tests {
             );
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO test_data (id, embedding)
             SELECT
                 *
@@ -1106,7 +1106,7 @@ pub mod tests {
             CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO test_data (id, embedding)
             SELECT
                 *
@@ -1150,7 +1150,7 @@ pub mod tests {
                 CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
                 select setseed(0.5);
-            -- generate 300 vectors
+            -- generate {expected_cnt} vectors
                 INSERT INTO test_data (id, embedding)
                 SELECT
                     *

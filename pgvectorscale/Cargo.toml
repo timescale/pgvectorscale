@@ -20,7 +20,6 @@ pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg_test = []
 
 [dependencies]
-anyhow = "1.0.94"
 memoffset = "0.9.0"
 pgrx = "=0.12.5"
 rkyv = { version = "0.7.42", features = ["validation"] }
