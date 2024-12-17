@@ -2,8 +2,8 @@
 //! are too big to fit in a single page.  See `Tape` for a simpler version that assumes each data
 //! item fits in a single page.
 //!
-//! All page entries begin with a header that contains a block number of the next page in the chain,
-//! if applicable.  If there is a next page, the entry continues (at position 1) on that page.
+//! All page entries begin with a header that contains an item pointer to the next chunk in the chain,
+//! if applicable.  The last chunk in the chain has an invalid item pointer.
 //!
 //! The implementation supports an append-only sequence of writes via `ChainTapeWriter` and reads
 //! via `ChainTapeReader`.  The writer returns an `ItemPointer` that can be used to read the data
@@ -26,10 +26,10 @@ use super::{
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize)]
 #[archive(check_bytes)]
 struct ChainItemHeader {
-    next: BlockNumber,
+    next: ItemPointer,
 }
 
-const CHAIN_HEADER_SIZE: usize = std::mem::size_of::<ArchivedChainItemHeader>();
+const CHAIN_ITEM_HEADER_SIZE: usize = std::mem::size_of::<ArchivedChainItemHeader>();
 
 // Empirically-measured slop factor for how much `pg_sys::PageGetFreeSpace` can
 // overestimate the free space in a page in our usage patterns.
@@ -62,7 +62,7 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         let mut current_page = WritablePage::modify(self.index, self.current);
 
         // If there isn't enough space for the header plus some data, start a new page.
-        if current_page.get_free_space() + PG_SLOP_SIZE < CHAIN_HEADER_SIZE + 1 {
+        if current_page.get_free_space() < CHAIN_ITEM_HEADER_SIZE + PG_SLOP_SIZE + 1 {
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
         }
@@ -71,13 +71,13 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         let mut result: Option<super::ItemPointer> = None;
 
         // Write the data in chunks, creating new pages as needed.
-        while CHAIN_HEADER_SIZE + data.len() + PG_SLOP_SIZE > current_page.get_free_space() {
+        while CHAIN_ITEM_HEADER_SIZE + data.len() + PG_SLOP_SIZE > current_page.get_free_space() {
             let next_page = WritablePage::new(self.index, self.page_type);
             let header = ChainItemHeader {
-                next: next_page.get_block_number(),
+                next: ItemPointer::new(next_page.get_block_number(), 1),
             };
             let header_bytes = rkyv::to_bytes::<_, 256>(&header).unwrap();
-            let data_size = current_page.get_free_space() - PG_SLOP_SIZE - CHAIN_HEADER_SIZE;
+            let data_size = current_page.get_free_space() - PG_SLOP_SIZE - CHAIN_ITEM_HEADER_SIZE;
             let chunk = &data[..data_size];
             let combined = [header_bytes.as_slice(), chunk].concat();
             let offset_number = current_page.add_item(combined.as_ref());
@@ -92,7 +92,7 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
 
         // Write the last chunk of data.
         let header = ChainItemHeader {
-            next: InvalidBlockNumber,
+            next: ItemPointer::new_invalid(),
         };
         let header_bytes = rkyv::to_bytes::<_, 256>(&header).unwrap();
         let combined = [header_bytes.as_slice(), data].concat();
@@ -107,13 +107,13 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
     }
 }
 
-pub struct ChainTapeReader<'a, S: StatsNodeRead> {
+pub struct ChainItemReader<'a, S: StatsNodeRead> {
     page_type: PageType,
     index: &'a PgRelation,
     stats: &'a mut S,
 }
 
-impl<'a, S: StatsNodeRead> ChainTapeReader<'a, S> {
+impl<'a, S: StatsNodeRead> ChainItemReader<'a, S> {
     pub fn new(index: &'a PgRelation, page_type: PageType, stats: &'a mut S) -> Self {
         assert!(page_type.is_chained());
         Self {
@@ -123,8 +123,8 @@ impl<'a, S: StatsNodeRead> ChainTapeReader<'a, S> {
         }
     }
 
-    pub fn read(&'a mut self, ip: ItemPointer) -> ChainedItemIterator<'a, S> {
-        ChainedItemIterator {
+    pub fn read(&'a mut self, ip: ItemPointer) -> ChainItemIterator<'a, S> {
+        ChainItemIterator {
             index: self.index,
             ip,
             page_type: self.page_type,
@@ -133,14 +133,14 @@ impl<'a, S: StatsNodeRead> ChainTapeReader<'a, S> {
     }
 }
 
-pub struct ChainedItemIterator<'a, S: StatsNodeRead> {
+pub struct ChainItemIterator<'a, S: StatsNodeRead> {
     index: &'a PgRelation,
     ip: ItemPointer,
     page_type: PageType,
     stats: &'a mut S,
 }
 
-impl<'a, S: StatsNodeRead> Iterator for ChainedItemIterator<'a, S> {
+impl<'a, S: StatsNodeRead> Iterator for ChainItemIterator<'a, S> {
     type Item = ReadableBuffer<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -154,11 +154,13 @@ impl<'a, S: StatsNodeRead> Iterator for ChainedItemIterator<'a, S> {
             assert!(page.get_type() == self.page_type);
             let mut item = page.get_item_unchecked(self.ip.offset);
             let slice = item.get_data_slice();
-            let header_slice = &slice[..CHAIN_HEADER_SIZE];
-            let header =
-                rkyv::from_bytes::<ChainItemHeader>(header_slice).expect("failed to read header");
-            self.ip = ItemPointer::new(header.next, 1);
-            item.advance(CHAIN_HEADER_SIZE);
+            assert!(slice.len() > CHAIN_ITEM_HEADER_SIZE);
+            let header_slice = &slice[..CHAIN_ITEM_HEADER_SIZE];
+
+            let header = rkyv::check_archived_root::<ChainItemHeader>(header_slice).unwrap();
+            self.ip = ItemPointer::new(header.next.block_number, header.next.offset);
+
+            item.advance(CHAIN_ITEM_HEADER_SIZE);
 
             Some(item)
         }
@@ -203,14 +205,14 @@ mod tests {
         {
             // ChainTape can be used for small items too
             let mut tape = ChainTapeWriter::new(&index, PageType::SbqMeans, &mut wstats);
-            for _ in 0..100 {
-                let data = b"hello world";
-                let ip = tape.write(data);
-                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+            for i in 0..100 {
+                let data = format!("hello world {i}");
+                let ip = tape.write(data.as_bytes());
+                let mut reader = ChainItemReader::new(&index, PageType::SbqMeans, &mut rstats);
 
                 let mut iter = reader.read(ip);
                 let item = iter.next().unwrap();
-                assert_eq!(item.get_data_slice(), data);
+                assert_eq!(item.get_data_slice(), data.as_bytes());
                 assert!(iter.next().is_none());
             }
         }
@@ -226,7 +228,7 @@ mod tests {
             for _ in 0..10 {
                 let ip = tape.write(&bigdata);
                 let mut count = 0;
-                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                let mut reader = ChainItemReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {
                     assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
                     count += item.len;
@@ -246,7 +248,7 @@ mod tests {
             for _ in 0..10 {
                 let ip = tape.write(&bigdata);
                 let mut count = 0;
-                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                let mut reader = ChainItemReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {
                     assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
                     count += item.len;
@@ -266,7 +268,7 @@ mod tests {
             for _ in 0..10 {
                 let ip = tape.write(&bigdata);
                 let mut count = 0;
-                let mut reader = ChainTapeReader::new(&index, PageType::SbqMeans, &mut rstats);
+                let mut reader = ChainItemReader::new(&index, PageType::SbqMeans, &mut rstats);
                 for item in reader.read(ip) {
                     assert_eq!(item.get_data_slice(), &bigdata[count..count + item.len]);
                     count += item.len;

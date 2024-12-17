@@ -20,7 +20,7 @@ use pgrx::{
 use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 
 use crate::util::{
-    chain::{ChainTapeReader, ChainTapeWriter},
+    chain::{ChainItemReader, ChainTapeWriter},
     page::{PageType, ReadablePage},
     table_slot::TableSlot,
     tape::Tape,
@@ -106,7 +106,7 @@ impl SbqMeans {
         match page_type {
             PageType::SbqMeansV1 => SbqMeansV1::load(index, quantizer, qip, stats),
             PageType::SbqMeans => {
-                let mut tape_reader = ChainTapeReader::new(index, PageType::SbqMeans, stats);
+                let mut tape_reader = ChainItemReader::new(index, PageType::SbqMeans, stats);
                 let mut buf: Vec<u8> = Vec::new();
                 for item in tape_reader.read(qip) {
                     buf.extend_from_slice(item.get_data_slice());

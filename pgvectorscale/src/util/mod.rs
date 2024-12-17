@@ -94,6 +94,13 @@ impl ItemPointer {
         }
     }
 
+    pub fn new_invalid() -> Self {
+        Self {
+            block_number: pgrx::pg_sys::InvalidBlockNumber,
+            offset: pgrx::pg_sys::InvalidOffsetNumber,
+        }
+    }
+
     pub fn is_valid(&self) -> bool {
         self.block_number != pgrx::pg_sys::InvalidBlockNumber
             && self.offset != pgrx::pg_sys::InvalidOffsetNumber
