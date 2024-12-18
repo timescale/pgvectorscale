@@ -25,7 +25,7 @@ jobs:
             minor: 0
         platform:
           - type: amd64
-            runs_on: ubuntu-latest
+            runs_on: ubuntu-22.04
             rustflags: '-C target-feature=+avx2,+fma'
           - type: arm64
             runs_on: cloud-image-runner-arm64
