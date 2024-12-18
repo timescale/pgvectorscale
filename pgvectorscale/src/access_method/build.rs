@@ -62,6 +62,14 @@ impl<'a, 'b> BuildState<'a, 'b> {
     }
 }
 
+/// Maximum number of dimensions supported by pgvector's vector type.  Also
+/// the maximum number of dimensions that can be indexed with diskann.
+pub const MAX_DIMENSION: u32 = 16000;
+
+/// Maximum number of dimensions that can be indexed with diskann without
+/// using the SBQ storage type.
+pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
+
 #[pg_guard]
 pub extern "C" fn ambuild(
     heaprel: pg_sys::Relation,
@@ -73,7 +81,7 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build. num_neighbors={} search_list_size={}, max_alpha={}, storage_layout={:?}",
+        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}.",
         opt.get_num_neighbors(),
         opt.search_list_size,
         opt.max_alpha,
@@ -98,10 +106,22 @@ pub extern "C" fn ambuild(
     let meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
-    assert!(
-        meta_page.get_num_dimensions_to_index() > 0
-            && meta_page.get_num_dimensions_to_index() <= 2000
-    );
+    if meta_page.get_num_dimensions_to_index() == 0 {
+        error!("No dimensions to index");
+    }
+
+    if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION {
+        error!("Too many dimensions to index (max is {})", MAX_DIMENSION);
+    }
+
+    if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION_NO_SBQ
+        && meta_page.get_storage_type() == StorageType::Plain
+    {
+        error!(
+            "Too many dimensions to index with plain storage (max is {}).  Use storage_layout=memory_optimized instead.",
+            MAX_DIMENSION_NO_SBQ
+        );
+    }
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -878,7 +898,7 @@ pub mod tests {
             );
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO {table_name} (id, embedding)
             SELECT
                 *
@@ -1036,7 +1056,7 @@ pub mod tests {
             );
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO test_data (id, embedding)
             SELECT
                 *
@@ -1086,7 +1106,7 @@ pub mod tests {
             CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
 
             select setseed(0.5);
-           -- generate 300 vectors
+           -- generate {expected_cnt} vectors
             INSERT INTO test_data (id, embedding)
             SELECT
                 *
@@ -1112,6 +1132,53 @@ pub mod tests {
             FROM generate_series(1, {dimensions}));"))?;
 
         verify_index_accuracy(expected_cnt, dimensions)?;
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_high_dimension_index() -> spi::Result<()> {
+        let index_options = "num_neighbors=10, search_list_size=10";
+        let expected_cnt = 1000;
+
+        for dimensions in [4000, 8000, 12000, 16000] {
+            Spi::run(&format!(
+                "CREATE TABLE test_data (
+                    id int,
+                    embedding vector ({dimensions})
+                );
+
+                CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
+
+                select setseed(0.5);
+            -- generate {expected_cnt} vectors
+                INSERT INTO test_data (id, embedding)
+                SELECT
+                    *
+                FROM (
+                    SELECT
+                        i % {expected_cnt},
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                    FROM
+                        generate_series(1, {dimensions} * {expected_cnt}) i
+                    GROUP BY
+                        i % {expected_cnt}) g;
+
+                SET enable_seqscan = 0;
+                -- perform index scans on the vectors
+                SELECT
+                    *
+                FROM
+                    test_data
+                ORDER BY
+                    embedding <=> (
+                        SELECT
+                            ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM generate_series(1, {dimensions}));"))?;
+
+            verify_index_accuracy(expected_cnt, dimensions)?;
+
+            Spi::run("DROP TABLE test_data CASCADE;")?;
+        }
         Ok(())
     }
 }

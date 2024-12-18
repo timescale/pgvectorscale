@@ -1,4 +1,5 @@
 pub mod buffer;
+pub mod chain;
 pub mod page;
 pub mod ports;
 pub mod table_slot;
@@ -54,6 +55,16 @@ impl<'a> ReadableBuffer<'a> {
     pub fn get_owned_page(self) -> ReadablePage<'a> {
         self._page
     }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn advance(&mut self, len: usize) {
+        assert!(self.len >= len);
+        self.ptr = unsafe { self.ptr.add(len) };
+        self.len -= len;
+    }
 }
 
 pub struct WritableBuffer<'a> {
@@ -80,6 +91,13 @@ impl ItemPointer {
         Self {
             block_number,
             offset,
+        }
+    }
+
+    pub fn new_invalid() -> Self {
+        Self {
+            block_number: pgrx::pg_sys::InvalidBlockNumber,
+            offset: pgrx::pg_sys::InvalidOffsetNumber,
         }
     }
 

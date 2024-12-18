@@ -30,25 +30,35 @@ pub enum PageType {
     Node = 1,
     PqQuantizerDef = 2,
     PqQuantizerVector = 3,
-    SbqMeans = 4,
+    SbqMeansV1 = 4,
     SbqNode = 5,
     Meta = 6,
+    SbqMeans = 7,
 }
 
 impl PageType {
-    fn from_u8(value: u8) -> Self {
+    pub fn from_u8(value: u8) -> Self {
         match value {
             0 => PageType::MetaV1,
             1 => PageType::Node,
             2 => PageType::PqQuantizerDef,
             3 => PageType::PqQuantizerVector,
-            4 => PageType::SbqMeans,
+            4 => PageType::SbqMeansV1,
             5 => PageType::SbqNode,
             6 => PageType::Meta,
+            7 => PageType::SbqMeans,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
+
+    /// `ChainTape` supports chaining of pages that might contain large data.
+    /// This is not supported for all page types.  Note that `Tape` requires
+    /// that the page type not be chained.
+    pub fn is_chained(self) -> bool {
+        matches!(self, PageType::SbqMeans)
+    }
 }
+
 /// This is the Tsv-specific data that goes on every "diskann-owned" page
 /// It is placed at the end of a page in the "special" area
 

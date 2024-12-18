@@ -2,8 +2,8 @@
 
 use super::page::{PageType, ReadablePage, WritablePage};
 use pgrx::{
-    pg_sys::{BlockNumber, BLCKSZ},
-    *,
+    pg_sys::{BlockNumber, ForkNumber, RelationGetNumberOfBlocksInFork, BLCKSZ},
+    PgRelation,
 };
 
 pub struct Tape<'a> {
@@ -13,8 +13,9 @@ pub struct Tape<'a> {
 }
 
 impl<'a> Tape<'a> {
-    /// Create a Tape that starts writing on a new page.
+    /// Create a `Tape` that starts writing on a new page.
     pub unsafe fn new(index: &'a PgRelation, page_type: PageType) -> Self {
+        assert!(!page_type.is_chained());
         let page = WritablePage::new(index, page_type);
         let block_number = page.get_block_number();
         page.commit();
@@ -27,10 +28,8 @@ impl<'a> Tape<'a> {
 
     /// Create a Tape that resumes writing on the newest page of the given type, if possible.
     pub unsafe fn resume(index: &'a PgRelation, page_type: PageType) -> Self {
-        let nblocks = pg_sys::RelationGetNumberOfBlocksInFork(
-            index.as_ptr(),
-            pg_sys::ForkNumber::MAIN_FORKNUM,
-        );
+        assert!(!page_type.is_chained());
+        let nblocks = RelationGetNumberOfBlocksInFork(index.as_ptr(), ForkNumber::MAIN_FORKNUM);
         let mut current_block = None;
         for block in (0..nblocks).rev() {
             if ReadablePage::read(index, block).get_type() == page_type {
@@ -51,14 +50,12 @@ impl<'a> Tape<'a> {
     pub unsafe fn write(&mut self, data: &[u8]) -> super::ItemPointer {
         let size = data.len();
         assert!(size < BLCKSZ as usize);
+        assert!(!self.page_type.is_chained());
 
         let mut current_page = WritablePage::modify(self.index, self.current);
 
-        //don't split data over pages. Depending on packing,
-        //we may have to implement that in the future.
+        // Don't split data over pages.  (See chain.rs for that.)
         if current_page.get_free_space() < size {
-            //TODO update forward pointer;
-
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
             if current_page.get_free_space() < size {
@@ -69,6 +66,7 @@ impl<'a> Tape<'a> {
 
         let item_pointer = super::ItemPointer::with_page(&current_page, offset_number);
         current_page.commit();
+
         item_pointer
     }
 
@@ -78,6 +76,8 @@ impl<'a> Tape<'a> {
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
 mod tests {
+    use pgrx::{pg_sys, pg_test, Spi};
+
     use super::*;
 
     fn make_test_relation() -> PgRelation {
@@ -120,19 +120,6 @@ mod tests {
                 );
                 node_page
             };
-
-            {
-                let mut tape = Tape::resume(&indexrel, PageType::SbqMeans);
-                let ip = tape.write(&[99]);
-                assert_eq!(
-                    ip.block_number, tape.current,
-                    "Tape block number should match IP"
-                );
-                assert_ne!(
-                    tape.current, node_page,
-                    "Data can only be written to page of its type"
-                );
-            }
 
             {
                 let mut tape = Tape::resume(&indexrel, PageType::PqQuantizerVector);
