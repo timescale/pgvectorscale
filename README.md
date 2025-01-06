@@ -74,8 +74,8 @@ You can install pgvectorscale from source and install it in an existing PostgreS
     # install prerequisites
     ## rust
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    ## pgrx
-    cargo install --locked cargo-pgrx
+    ## cargo-pgrx with the same version as pgrx
+    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
     cargo pgrx init --pg17 pg_config
 
     #download, build and install pgvectorscale

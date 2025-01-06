@@ -20,7 +20,7 @@ To create a pgvectorscale developer environment, you need the following on your 
   
 * [Cargo-pgrx][cargo-pgrx]:
     ```shell
-    cargo install --locked cargo-pgrx
+    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
     ```
   You must reinstall cargo-pgrx whenever you update Rust, cargo-pgrx must 
   be built with the same compiler as pgvectorscale.
