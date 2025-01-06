@@ -32,10 +32,8 @@ jobs:
         platform:
           - type: amd64
             runs_on: ubuntu-latest
-            rustflags: '-C target-feature=+avx2,+fma'
           - type: arm64
             runs_on: cloud-image-runner-arm64
-            rustflags: ''
 
     env:
       PG_SRC_DIR: pgbuild
@@ -81,7 +79,7 @@ jobs:
       id: debbuild
       run: |
         export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-        (cd ${{ env.TAG_DIR }} &&  ${{ matrix.platform.rustflags != '' && format('RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} make package)
+        (cd ${{ env.TAG_DIR }} && make package)
         bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ matrix.pg.major }}"
 
   # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
