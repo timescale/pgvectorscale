@@ -26,10 +26,8 @@ jobs:
         platform:
           - type: amd64
             runs_on: ubuntu-22.04
-            rustflags: '-C target-feature=+avx2,+fma'
           - type: arm64
             runs_on: cloud-image-runner-arm64
-            rustflags: ''
 
     env:
       PG_SRC_DIR: pgbuild
@@ -70,12 +68,10 @@ jobs:
       id: clippy
       run: |
         cd pgvectorscale
-        ${{ matrix.platform.rustflags != '' && format('export RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }}
         cargo clippy --all-targets --no-default-features --features 'pg_test pg${{ matrix.pg.major }}'
 
     - name: Run tests
       id: runtests 
       run: |
         cd pgvectorscale
-        ${{ matrix.platform.rustflags != '' && format('export RUSTFLAGS="{0}"',  matrix.platform.rustflags) || '' }} 
         cargo pgrx test -- pg${{ matrix.pg.major }}
