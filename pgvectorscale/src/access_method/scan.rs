@@ -1,8 +1,5 @@
 use std::collections::BinaryHeap;
 
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-use pg_sys::pgstat_assoc_relation;
-
 use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
@@ -10,7 +7,7 @@ use crate::{
         graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage, pg_vector::PgVector,
         sbq::SbqSpeedupStorage,
     },
-    util::{buffer::PinnedBufferShare, HeapPointer, IndexPointer},
+    util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},
 };
 
 use super::{
@@ -293,37 +290,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         self.resort_buffer
             .pop()
             .map(|rd| (rd.heap_pointer, rd.index_pointer))
-    }
-}
-
-/// Hand implementation of `pgstat_count_index_scan` which is missing from pgrx.
-#[allow(unused_variables)]
-pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
-    if !indexrel.pgstat_info.is_null() {
-        let tmp = indexrel.pgstat_info;
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
-        {
-            (*tmp).t_counts.t_numscans += 1;
-        }
-        #[cfg(any(feature = "pg16", feature = "pg17"))]
-        {
-            (*tmp).counts.numscans += 1;
-        }
-    }
-
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
-    if indexrel.pgstat_info.is_null() && indexrel.pgstat_enabled {
-        pgstat_assoc_relation(index_relation);
-        assert!(!indexrel.pgstat_info.is_null());
-        let tmp = indexrel.pgstat_info;
-        #[cfg(feature = "pg15")]
-        {
-            (*tmp).t_counts.t_numscans += 1;
-        }
-        #[cfg(any(feature = "pg16", feature = "pg17"))]
-        {
-            (*tmp).counts.numscans += 1;
-        }
     }
 }
 
