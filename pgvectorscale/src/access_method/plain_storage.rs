@@ -161,7 +161,10 @@ impl PlainStorageLsnPrivateData {
 
 impl<'a> Storage for PlainStorage<'a> {
     type QueryDistanceMeasure = PlainDistanceMeasure;
-    type NodeDistanceMeasure<'b> = IndexFullDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = IndexFullDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 

@@ -613,7 +613,10 @@ pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
 impl<'a> Storage for SbqSpeedupStorage<'a> {
     type QueryDistanceMeasure = SbqSearchDistanceMeasure;
-    type NodeDistanceMeasure<'b> = SbqNodeDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = SbqNodeDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedSbqNode;
     type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
