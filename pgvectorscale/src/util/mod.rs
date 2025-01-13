@@ -73,7 +73,7 @@ pub struct WritableBuffer<'a> {
     ptr: *mut u8,
 }
 
-impl<'a> WritableBuffer<'a> {
+impl WritableBuffer<'_> {
     pub fn get_data_slice(&mut self) -> &mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }

@@ -27,7 +27,7 @@ impl<'a> LockRelationForExtension<'a> {
     }
 }
 
-impl<'a> Drop for LockRelationForExtension<'a> {
+impl Drop for LockRelationForExtension<'_> {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {
@@ -116,7 +116,7 @@ impl<'a> LockedBufferExclusive<'a> {
     }
 }
 
-impl<'a> Drop for LockedBufferExclusive<'a> {
+impl Drop for LockedBufferExclusive<'_> {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {
@@ -129,7 +129,7 @@ impl<'a> Drop for LockedBufferExclusive<'a> {
     }
 }
 
-impl<'a> Deref for LockedBufferExclusive<'a> {
+impl Deref for LockedBufferExclusive<'_> {
     type Target = Buffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
@@ -172,7 +172,7 @@ impl<'a> LockedBufferShare<'a> {
     }
 }
 
-impl<'a> Drop for LockedBufferShare<'a> {
+impl Drop for LockedBufferShare<'_> {
     /// drop both unlock and unpins the buffer.
     fn drop(&mut self) {
         unsafe {
@@ -185,7 +185,7 @@ impl<'a> Drop for LockedBufferShare<'a> {
     }
 }
 
-impl<'a> Deref for LockedBufferShare<'a> {
+impl Deref for LockedBufferShare<'_> {
     type Target = Buffer;
     fn deref(&self) -> &Self::Target {
         &self.buffer
