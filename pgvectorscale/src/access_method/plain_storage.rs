@@ -117,7 +117,7 @@ impl<'a> IndexFullDistanceMeasure<'a> {
     }
 }
 
-impl<'a> NodeDistanceMeasure for IndexFullDistanceMeasure<'a> {
+impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -159,9 +159,12 @@ impl PlainStorageLsnPrivateData {
     }
 }
 
-impl<'a> Storage for PlainStorage<'a> {
+impl Storage for PlainStorage<'_> {
     type QueryDistanceMeasure = PlainDistanceMeasure;
-    type NodeDistanceMeasure<'b> = IndexFullDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = IndexFullDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 

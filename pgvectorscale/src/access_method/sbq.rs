@@ -382,7 +382,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
     }
 }
 
-impl<'a> NodeDistanceMeasure for SbqNodeDistanceMeasure<'a> {
+impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -611,9 +611,12 @@ impl<'a> SbqSpeedupStorage<'a> {
 
 pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
-impl<'a> Storage for SbqSpeedupStorage<'a> {
+impl Storage for SbqSpeedupStorage<'_> {
     type QueryDistanceMeasure = SbqSearchDistanceMeasure;
-    type NodeDistanceMeasure<'b> = SbqNodeDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = SbqNodeDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedSbqNode;
     type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
