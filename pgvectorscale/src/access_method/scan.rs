@@ -7,8 +7,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        graph_neighbor_store::GraphNeighborStore, meta_page::MetaPage, pg_vector::PgVector,
-        sbq::SbqSpeedupStorage,
+        graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
+        pg_vector::PgVector, sbq::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, HeapPointer, IndexPointer},
 };
@@ -54,7 +54,7 @@ impl TSVScanState {
         &mut self,
         index: &PgRelation,
         heap: &PgRelation,
-        query: PgVector,
+        query: LabeledVector,
         search_list_size: usize,
     ) {
         let meta_page = MetaPage::fetch(index);
@@ -66,16 +66,30 @@ impl TSVScanState {
                 let stats = QuantizerStats::new();
                 let bq =
                     PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
-                let it =
-                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
+                let it = TSVResponseIterator::new(
+                    &bq,
+                    index,
+                    query,
+                    labels,
+                    search_list_size,
+                    meta_page,
+                    stats,
+                );
                 StorageState::Plain(it)
             }
             StorageType::SbqSpeedup | StorageType::SbqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
                 let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
-                let it =
-                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
+                let it = TSVResponseIterator::new(
+                    &bq,
+                    index,
+                    query,
+                    labels,
+                    search_list_size,
+                    meta_page,
+                    stats,
+                );
                 StorageState::SbqSpeedup(quantizer, it)
             }
         };
@@ -166,6 +180,7 @@ struct TSVResponseIterator<QDM, PD> {
     next_calls: i32,
     next_calls_with_resort: i32,
     full_distance_comparisons: i32,
+    labels: Option<Vec<u16>>,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -173,6 +188,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         storage: &S,
         index: &PgRelation,
         query: PgVector,
+        labels: Option<Vec<u16>>,
         search_list_size: usize,
         //FIXME?
         _meta_page: MetaPage,
@@ -181,7 +197,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
-        let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
+        let lsr = graph.greedy_search_streaming_init(query, labels, search_list_size, storage);
         let resort_size = super::guc::TSV_RESORT_SIZE.get() as usize;
 
         Self {
@@ -195,6 +211,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             next_calls: 0,
             next_calls_with_resort: 0,
             full_distance_comparisons: 0,
+            labels,
         }
     }
 }
@@ -357,28 +374,27 @@ pub extern "C" fn ambeginscan(
 #[pg_guard]
 pub extern "C" fn amrescan(
     scan: pg_sys::IndexScanDesc,
-    _keys: pg_sys::ScanKey,
+    keys: pg_sys::ScanKey,
     nkeys: ::std::os::raw::c_int,
     orderbys: pg_sys::ScanKey,
     norderbys: ::std::os::raw::c_int,
 ) {
-    if norderbys == 0 {
-        panic!("No order by keys provided");
-    }
-    if norderbys > 1 {
-        panic!("Too many order by provided");
-    }
+    assert_eq!(norderbys, 1);
+    assert!(nkeys == 0 || nkeys == 1);
+
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
     if nkeys > 0 {
-        scan.xs_recheck = true;
+        scan.xs_recheck = true; //TODO: what is this?
     }
 
-    let orderby_keys = unsafe {
+    let orderbys = unsafe {
         std::slice::from_raw_parts(orderbys as *const pg_sys::ScanKeyData, norderbys as _)
     };
+    let keys =
+        unsafe { std::slice::from_raw_parts(keys as *const pg_sys::ScanKeyData, nkeys as _) };
 
     let search_list_size = super::guc::TSV_QUERY_SEARCH_LIST_SIZE.get() as usize;
 
@@ -386,13 +402,30 @@ pub extern "C" fn amrescan(
 
     let query = unsafe {
         PgVector::from_datum(
-            orderby_keys[0].sk_argument,
+            orderbys[0].sk_argument,
             &state.meta_page,
             true, /* needed for search */
             true, /* needed for resort */
         )
     };
-    state.initialize(&indexrel, &heaprel, query, search_list_size);
+
+    let labels: Option<Vec<u16>> = (nkeys > 0).then(|| {
+        let arr = unsafe { Array::<i32>::from_datum(keys[0].sk_argument, false).unwrap() };
+        arr.into_iter().flatten().map(|i| i as u16).collect()
+    });
+
+    warning!(
+        "amrescan({:?},\n {:?},\n {},\n {:?},\n {})",
+        scan,
+        keys,
+        nkeys,
+        orderbys,
+        norderbys
+    );
+
+    warning!("Query labels: {:?}", labels);
+
+    state.initialize(&indexrel, &heaprel, query, labels, search_list_size);
 }
 
 #[pg_guard]

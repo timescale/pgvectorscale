@@ -8,6 +8,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    labels::LabeledVector,
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
     pg_vector::PgVector,
@@ -48,7 +49,7 @@ pub trait Storage {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        full_vector: &[f32],
+        labvec: LabeledVector,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -73,7 +74,11 @@ pub trait Storage {
         stats: &mut S,
     ) -> Self::NodeDistanceMeasure<'a>;
 
-    fn get_query_distance_measure(&self, query: PgVector) -> Self::QueryDistanceMeasure;
+    fn get_query_distance_measure(
+        &self,
+        query: PgVector,
+        labels: Option<Vec<u16>>,
+    ) -> Self::QueryDistanceMeasure;
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,

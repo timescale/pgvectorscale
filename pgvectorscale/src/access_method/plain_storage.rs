@@ -2,6 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    labels::LabeledVector,
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
@@ -10,10 +11,10 @@ use super::{
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
-    storage_common::get_attribute_number_from_index,
+    storage_common::{get_index_label_attribute, get_index_vector_attribute},
 };
 
-use pgrx::{PgBox, PgRelation};
+use pgrx::{notice, pg_sys::AttrNumber, PgBox, PgRelation};
 
 use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
@@ -25,7 +26,8 @@ pub struct PlainStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: DistanceFn,
     heap_rel: &'a PgRelation,
-    heap_attr: pgrx::pg_sys::AttrNumber,
+    heap_attr: AttrNumber,
+    label_attr: Option<AttrNumber>,
 }
 
 impl<'a> PlainStorage<'a> {
@@ -38,7 +40,8 @@ impl<'a> PlainStorage<'a> {
             index,
             distance_fn,
             heap_rel,
-            heap_attr: get_attribute_number_from_index(index),
+            heap_attr: get_index_vector_attribute(index),
+            label_attr: get_index_label_attribute(index),
         }
     }
 
@@ -51,7 +54,8 @@ impl<'a> PlainStorage<'a> {
             index: index_relation,
             distance_fn,
             heap_rel,
-            heap_attr: get_attribute_number_from_index(index_relation),
+            heap_attr: get_index_vector_attribute(index_relation),
+            label_attr: get_index_label_attribute(index_relation),
         }
     }
 
@@ -64,13 +68,14 @@ impl<'a> PlainStorage<'a> {
             index: index_relation,
             distance_fn,
             heap_rel,
-            heap_attr: get_attribute_number_from_index(index_relation),
+            heap_attr: get_index_vector_attribute(index_relation),
+            label_attr: get_index_label_attribute(index_relation),
         }
     }
 }
 
 pub enum PlainDistanceMeasure {
-    Full(PgVector),
+    Full(PgVector, Option<Vec<u16>>),
 }
 
 impl PlainDistanceMeasure {
@@ -161,7 +166,10 @@ impl PlainStorageLsnPrivateData {
 
 impl<'a> Storage for PlainStorage<'a> {
     type QueryDistanceMeasure = PlainDistanceMeasure;
-    type NodeDistanceMeasure<'b> = IndexFullDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = IndexFullDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 
@@ -171,14 +179,15 @@ impl<'a> Storage for PlainStorage<'a> {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        full_vector: &[f32],
+        labvec: LabeledVector,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
         //OPT: avoid the clone?
-        let node = Node::new_for_full_vector(full_vector.to_vec(), heap_pointer, meta_page);
+        notice!("Creating SbqNode with labels {:?}", labvec.labels());
+        let node = Node::new_for_full_vector(labvec, heap_pointer, meta_page);
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
@@ -210,8 +219,12 @@ impl<'a> Storage for PlainStorage<'a> {
         IndexFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(&self, query: PgVector) -> PlainDistanceMeasure {
-        PlainDistanceMeasure::Full(query)
+    fn get_query_distance_measure(
+        &self,
+        query: PgVector,
+        labels: Option<Vec<u16>>,
+    ) -> PlainDistanceMeasure {
+        PlainDistanceMeasure::Full(query, labels)
     }
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
@@ -230,7 +243,7 @@ impl<'a> Storage for PlainStorage<'a> {
         };
         let slot = slot_opt?;
         match qdm {
-            PlainDistanceMeasure::Full(query) => {
+            PlainDistanceMeasure::Full(query, _) => {
                 let datum = unsafe {
                     slot.get_attribute(self.heap_attr)
                         .expect("vector attribute should exist in the heap")
@@ -278,7 +291,7 @@ impl<'a> Storage for PlainStorage<'a> {
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
+            PlainDistanceMeasure::Full(query, _) => PlainDistanceMeasure::calculate_distance(
                 self.distance_fn,
                 query.to_index_slice(),
                 node.vector.as_slice(),
@@ -313,7 +326,7 @@ impl<'a> Storage for PlainStorage<'a> {
             let node_neighbor = rn_neighbor.get_archived_node();
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
+                PlainDistanceMeasure::Full(query, _) => PlainDistanceMeasure::calculate_distance(
                     self.distance_fn,
                     query.to_index_slice(),
                     node_neighbor.vector.as_slice(),

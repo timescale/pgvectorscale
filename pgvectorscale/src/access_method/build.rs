@@ -19,6 +19,7 @@ use crate::util::*;
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
 use super::graph_neighbor_store::BuilderNeighborCache;
+use super::labels::LabeledVector;
 use super::sbq::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
@@ -172,16 +173,18 @@ unsafe fn aminsert_internal(
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
     let mut meta_page = MetaPage::fetch(&index_relation);
-    let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
-    if vec.is_none() {
-        //todo handle NULLs?
+
+    let labvec = LabeledVector::from_datums(values, isnull, &meta_page);
+    if labvec.is_none() {
+        // TODO: check this handling of nulls
         return false;
     }
-    let vec = vec.unwrap();
-    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
+    let labvec = labvec.unwrap();
 
+    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();
+
     match &mut storage {
         StorageType::Plain => {
             let plain = PlainStorage::load_for_insert(
@@ -192,7 +195,7 @@ unsafe fn aminsert_internal(
             insert_storage(
                 &plain,
                 &index_relation,
-                vec,
+                labvec,
                 heap_pointer,
                 &mut meta_page,
                 &mut stats,
@@ -208,7 +211,7 @@ unsafe fn aminsert_internal(
             insert_storage(
                 &bq,
                 &index_relation,
-                vec,
+                labvec,
                 heap_pointer,
                 &mut meta_page,
                 &mut stats,
@@ -221,22 +224,23 @@ unsafe fn aminsert_internal(
 unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
-    vector: PgVector,
+    labvec: LabeledVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
     let mut tape = Tape::resume(index_relation, S::page_type());
-    let index_pointer = storage.create_node(
-        vector.to_index_slice(),
-        heap_pointer,
-        meta_page,
-        &mut tape,
-        stats,
-    );
+    let index_pointer = storage.create_node(labvec, heap_pointer, meta_page, &mut tape, stats);
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(index_relation, index_pointer, vector, storage, stats)
+    graph.insert(
+        index_relation,
+        index_pointer,
+        labvec.vec(),
+        labvec.into_labels(),
+        storage,
+        stats,
+    )
 }
 
 #[pg_guard]
@@ -244,10 +248,10 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
-fn do_heap_scan<'a>(
+fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
-    heap_relation: &'a PgRelation,
-    index_relation: &'a PgRelation,
+    heap_relation: &PgRelation,
+    index_relation: &PgRelation,
     meta_page: MetaPage,
 ) -> usize {
     let storage = meta_page.get_storage_type();
@@ -444,14 +448,38 @@ unsafe extern "C" fn build_callback(
             let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
             if let Some(vec) = vec {
                 let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
+                let labels: Option<Array<i32>> = if state.meta_page.has_labels() {
+                    Array::<i32>::from_datum(*values.add(1), *isnull.add(1))
+                } else {
+                    None
+                };
+                build_callback_memory_wrapper(
+                    index_relation,
+                    heap_pointer,
+                    vec,
+                    labels,
+                    state,
+                    *bq,
+                );
             }
         }
         StorageBuildState::Plain(plain, state) => {
             let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
             if let Some(vec) = vec {
                 let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
+                let labels: Option<Array<i32>> = if state.meta_page.has_labels() {
+                    Array::<i32>::from_datum(*values.add(1), *isnull.add(1))
+                } else {
+                    None
+                };
+                build_callback_memory_wrapper(
+                    index_relation,
+                    heap_pointer,
+                    vec,
+                    labels,
+                    state,
+                    *plain,
+                );
             }
         }
     }
@@ -462,28 +490,40 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
     vector: PgVector,
+    labels: Option<Array<i32>>,
     state: &mut BuildState,
     storage: &mut S,
 ) {
     let mut old_context = state.memcxt.set_as_current();
 
-    build_callback_internal(index, heap_pointer, vector, state, storage);
+    build_callback_internal(index, heap_pointer, vector, labels, state, storage);
 
     old_context.set_as_current();
     state.memcxt.reset();
 }
+
+// fn pg_array_to_vec<T>(mut arr: Array<Option<T>>) -> Vec<T>
+// where
+//     T: UnboxDatum,
+// {
+//     arr.iter_deny_null().collect()
+// }
 
 #[inline(always)]
 fn build_callback_internal<S: Storage>(
     index: PgRelation,
     heap_pointer: ItemPointer,
     vector: PgVector,
+    labels: Option<Array<i32>>,
     state: &mut BuildState,
     storage: &mut S,
 ) {
     check_for_interrupts!();
 
     state.ntuples += 1;
+
+    let labels: Option<Vec<u16>> =
+        labels.map(|labels| labels.into_iter().flatten().map(|x| x as u16).collect());
 
     if state.ntuples % 1000 == 0 {
         debug1!(
@@ -503,6 +543,7 @@ fn build_callback_internal<S: Storage>(
         &state.meta_page,
         &mut state.tape,
         &mut state.stats,
+        labels,
     );
 
     state

@@ -2,6 +2,7 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    labels::LabeledVector,
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     stats::{
@@ -9,12 +10,13 @@ use super::{
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
-    storage_common::get_attribute_number_from_index,
+    storage_common::{get_index_label_attribute, get_index_vector_attribute},
 };
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
+    notice,
+    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgBox, PgRelation,
 };
 use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
@@ -298,7 +300,7 @@ impl SbqQuantizer {
 
 pub struct SbqSearchDistanceMeasure {
     quantized_vector: Vec<SbqVectorElement>,
-    query: PgVector,
+    query: LabeledVector,
     num_dimensions_for_neighbors: usize,
     quantized_dimensions: usize,
 }
@@ -306,11 +308,11 @@ pub struct SbqSearchDistanceMeasure {
 impl SbqSearchDistanceMeasure {
     pub fn new(
         quantizer: &SbqQuantizer,
-        query: PgVector,
+        query: LabeledVector,
         num_dimensions_for_neighbors: usize,
     ) -> SbqSearchDistanceMeasure {
         SbqSearchDistanceMeasure {
-            quantized_vector: quantizer.quantize(query.to_index_slice()),
+            quantized_vector: quantizer.quantize(query.vec().to_index_slice()),
             query,
             num_dimensions_for_neighbors,
             quantized_dimensions: quantizer.quantized_size(num_dimensions_for_neighbors),
@@ -445,7 +447,8 @@ pub struct SbqSpeedupStorage<'a> {
     pub distance_fn: DistanceFn,
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
-    heap_attr: pgrx::pg_sys::AttrNumber,
+    heap_attr: AttrNumber,
+    label_attr: Option<AttrNumber>,
     qv_cache: RefCell<QuantizedVectorCache>,
     num_dimensions_for_neighbors: usize,
 }
@@ -461,7 +464,8 @@ impl<'a> SbqSpeedupStorage<'a> {
             distance_fn: meta_page.get_distance_function(),
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
-            heap_attr: get_attribute_number_from_index(index),
+            heap_attr: get_index_vector_attribute(index),
+            label_attr: get_index_label_attribute(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
@@ -486,7 +490,8 @@ impl<'a> SbqSpeedupStorage<'a> {
             distance_fn: meta_page.get_distance_function(),
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
-            heap_attr: get_attribute_number_from_index(index_relation),
+            heap_attr: get_index_vector_attribute(index_relation),
+            label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
@@ -504,7 +509,8 @@ impl<'a> SbqSpeedupStorage<'a> {
             //OPT: get rid of clone
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
-            heap_attr: get_attribute_number_from_index(index_relation),
+            heap_attr: get_index_vector_attribute(index_relation),
+            label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
             num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
@@ -613,7 +619,10 @@ pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
 impl<'a> Storage for SbqSpeedupStorage<'a> {
     type QueryDistanceMeasure = SbqSearchDistanceMeasure;
-    type NodeDistanceMeasure<'b> = SbqNodeDistanceMeasure<'b> where Self: 'b;
+    type NodeDistanceMeasure<'b>
+        = SbqNodeDistanceMeasure<'b>
+    where
+        Self: 'b;
     type ArchivedType = ArchivedSbqNode;
     type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
@@ -623,19 +632,24 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        full_vector: &[f32],
+        labvec: LabeledVector,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
-        let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
+        notice!("Creating SbqNode with labels {:?}", labvec.labels());
+
+        let bq_vector = self
+            .quantizer
+            .vector_for_new_node(meta_page, labvec.vec().to_full_slice());
 
         let node = SbqNode::with_meta(
             &self.quantizer,
             heap_pointer,
             meta_page,
             bq_vector.as_slice(),
+            labvec.into_labels(),
         );
 
         let index_pointer: IndexPointer = node.write(tape, stats);
@@ -686,8 +700,17 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         SbqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(&self, query: PgVector) -> SbqSearchDistanceMeasure {
-        SbqSearchDistanceMeasure::new(&self.quantizer, query, self.num_dimensions_for_neighbors)
+    fn get_query_distance_measure(
+        &self,
+        query: PgVector,
+        labels: Option<Vec<u16>>,
+    ) -> SbqSearchDistanceMeasure {
+        SbqSearchDistanceMeasure::new(
+            &self.quantizer,
+            query,
+            labels,
+            self.num_dimensions_for_neighbors,
+        )
     }
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
@@ -825,6 +848,7 @@ pub struct SbqNode {
     pub bq_vector: Vec<u64>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
     neighbor_vectors: Vec<Vec<u64>>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
+    labels: Option<Vec<u16>>,
 }
 
 impl SbqNode {
@@ -833,6 +857,7 @@ impl SbqNode {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[SbqVectorElement],
+        labels: Option<Vec<u16>>,
     ) -> Self {
         Self::new(
             heap_pointer,
@@ -841,6 +866,7 @@ impl SbqNode {
             meta_page.get_num_dimensions_for_neighbors() as usize,
             quantizer.num_bits_per_dimension,
             bq_vector,
+            labels,
         )
     }
 
@@ -851,6 +877,7 @@ impl SbqNode {
         num_dimensions_for_neighbors: usize,
         num_bits_per_dimension: u8,
         bq_vector: &[SbqVectorElement],
+        labels: Option<Vec<u16>>,
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
         let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
@@ -878,6 +905,7 @@ impl SbqNode {
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers,
             neighbor_vectors,
+            labels,
         }
     }
 
@@ -897,6 +925,7 @@ impl SbqNode {
             num_dimensions_for_neighbors,
             num_bits_per_dimension,
             &v,
+            Some(vec![]),
         );
         n.serialize_to_vec().len()
     }

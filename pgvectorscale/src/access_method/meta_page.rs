@@ -16,6 +16,7 @@ use super::options::{
 use super::sbq::SbqNode;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
+use super::storage_common::get_num_index_attributes;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 2;
@@ -76,6 +77,7 @@ impl MetaPageV1 {
             max_alpha: self.max_alpha,
             init_ids: ItemPointer::new(self.init_ids_block_number, self.init_ids_offset),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
+            has_labels: false,
         }
     }
 }
@@ -117,6 +119,8 @@ pub struct MetaPage {
     max_alpha: f64,
     init_ids: ItemPointer,
     quantizer_metadata: ItemPointer,
+    /// Does the index have labels along with vectors?
+    has_labels: bool,
 }
 
 impl MetaPage {
@@ -180,6 +184,10 @@ impl MetaPage {
         }
 
         Some(vec![self.init_ids])
+    }
+
+    pub fn has_labels(&self) -> bool {
+        self.has_labels
     }
 
     pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
@@ -254,6 +262,8 @@ impl MetaPage {
             );
         }
 
+        let has_labels = get_num_index_attributes(index) == 2;
+
         let meta = MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
             version: TSV_VERSION,
@@ -272,6 +282,7 @@ impl MetaPage {
             max_alpha: opt.max_alpha,
             init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
+            has_labels,
         };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
         meta.write_to_page(page);

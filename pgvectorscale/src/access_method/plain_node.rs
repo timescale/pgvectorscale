@@ -6,6 +6,7 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
+use super::labels::LabeledVector;
 use super::neighbor_with_distance::NeighborWithDistance;
 use super::storage::ArchivedData;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
@@ -19,18 +20,19 @@ pub struct Node {
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
     pub heap_item_pointer: HeapPointer,
+    labels: Option<Vec<u16>>,
 }
 
 impl Node {
     fn new_internal(
-        vector: Vec<f32>,
+        labvec: LabeledVector,
         pq_vector: Vec<u8>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
     ) -> Self {
         let num_neighbors = meta_page.get_num_neighbors();
         Self {
-            vector,
+            vector: labvec.vec().to_index_slice().to_vec(),
             // always use vectors of num_clusters on length because we never want the serialized size of a Node to change
             pq_vector,
             // always use vectors of num_neighbors on length because we never want the serialized size of a Node to change
@@ -38,16 +40,17 @@ impl Node {
                 .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
                 .collect(),
             heap_item_pointer,
+            labels: labvec.into_labels(),
         }
     }
 
     pub fn new_for_full_vector(
-        vector: Vec<f32>,
+        labvec: LabeledVector,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
     ) -> Self {
         let pq_vector = Vec::with_capacity(0);
-        Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
+        Self::new_internal(labvec, pq_vector, heap_item_pointer, meta_page)
     }
 }
 

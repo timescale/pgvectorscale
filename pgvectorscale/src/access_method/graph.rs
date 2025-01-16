@@ -269,6 +269,7 @@ impl<'a> Graph<'a> {
         &self,
         index_pointer: IndexPointer,
         query: PgVector,
+        labels: Option<Vec<u16>>,
         meta_page: &MetaPage,
         storage: &S,
         stats: &mut GreedySearchStats,
@@ -278,7 +279,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
-        let dm = storage.get_query_distance_measure(query);
+        let dm = storage.get_query_distance_measure(query, labels);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
@@ -301,6 +302,7 @@ impl<'a> Graph<'a> {
     pub fn greedy_search_streaming_init<S: Storage>(
         &self,
         query: PgVector,
+        labels: Option<Vec<u16>>,
         search_list_size: usize,
         storage: &S,
     ) -> ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData> {
@@ -309,7 +311,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = storage.get_query_distance_measure(query);
+        let dm = storage.get_query_distance_measure(query, labels);
 
         ListSearchResult::new(
             init_ids.unwrap(),
@@ -442,6 +444,7 @@ impl<'a> Graph<'a> {
         index: &PgRelation,
         index_pointer: IndexPointer,
         vec: PgVector,
+        labels: Option<Vec<u16>>,
         storage: &S,
         stats: &mut InsertStats,
     ) {
@@ -468,6 +471,7 @@ impl<'a> Graph<'a> {
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
+            labels,
             meta_page,
             storage,
             &mut stats.greedy_search_stats,
