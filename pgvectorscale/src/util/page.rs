@@ -61,7 +61,6 @@ impl PageType {
 
 /// This is the Tsv-specific data that goes on every "diskann-owned" page
 /// It is placed at the end of a page in the "special" area
-
 #[repr(C)]
 struct TsvPageOpaqueData {
     page_type: u8, // stores the PageType enum as an integer (u8 because we doubt we'll have more than 256 types).
@@ -225,7 +224,7 @@ impl<'a> WritablePage<'a> {
     }
 }
 
-impl<'a> Drop for WritablePage<'a> {
+impl Drop for WritablePage<'_> {
     // drop aborts the xlog if it has not been committed.
     fn drop(&mut self) {
         if !self.committed {
@@ -236,7 +235,7 @@ impl<'a> Drop for WritablePage<'a> {
     }
 }
 
-impl<'a> Deref for WritablePage<'a> {
+impl Deref for WritablePage<'_> {
     type Target = Page;
     fn deref(&self) -> &Self::Target {
         &self.page
@@ -281,7 +280,7 @@ impl<'a> ReadablePage<'a> {
     }
 }
 
-impl<'a> Deref for ReadablePage<'a> {
+impl Deref for ReadablePage<'_> {
     type Target = Page;
     fn deref(&self) -> &Self::Target {
         &self.page
