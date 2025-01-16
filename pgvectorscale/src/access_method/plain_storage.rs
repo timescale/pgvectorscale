@@ -75,7 +75,7 @@ impl<'a> PlainStorage<'a> {
 }
 
 pub enum PlainDistanceMeasure {
-    Full(PgVector, Option<Vec<u16>>),
+    Full(LabeledVector),
 }
 
 impl PlainDistanceMeasure {
@@ -179,15 +179,16 @@ impl<'a> Storage for PlainStorage<'a> {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        labvec: LabeledVector,
+        full_vector: &[f32],
+        labels: Option<Vec<u16>>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
         //OPT: avoid the clone?
-        notice!("Creating SbqNode with labels {:?}", labvec.labels());
-        let node = Node::new_for_full_vector(labvec, heap_pointer, meta_page);
+        notice!("Creating SbqNode with labels {:?}", labels);
+        let node = Node::new_for_full_vector(full_vector.to_vec(), labels, heap_pointer, meta_page);
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
@@ -219,12 +220,8 @@ impl<'a> Storage for PlainStorage<'a> {
         IndexFullDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
-    ) -> PlainDistanceMeasure {
-        PlainDistanceMeasure::Full(query, labels)
+    fn get_query_distance_measure(&self, query: LabeledVector) -> PlainDistanceMeasure {
+        PlainDistanceMeasure::Full(query)
     }
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
@@ -243,7 +240,7 @@ impl<'a> Storage for PlainStorage<'a> {
         };
         let slot = slot_opt?;
         match qdm {
-            PlainDistanceMeasure::Full(query, _) => {
+            PlainDistanceMeasure::Full(query) => {
                 let datum = unsafe {
                     slot.get_attribute(self.heap_attr)
                         .expect("vector attribute should exist in the heap")
@@ -251,7 +248,7 @@ impl<'a> Storage for PlainStorage<'a> {
                 let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
                 Some(self.get_distance_function()(
                     vec.to_full_slice(),
-                    query.to_full_slice(),
+                    query.vec().to_full_slice(),
                 ))
             }
         }
@@ -291,9 +288,9 @@ impl<'a> Storage for PlainStorage<'a> {
         let node = rn.get_archived_node();
 
         let distance = match lsr.sdm.as_ref().unwrap() {
-            PlainDistanceMeasure::Full(query, _) => PlainDistanceMeasure::calculate_distance(
+            PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
                 self.distance_fn,
-                query.to_index_slice(),
+                query.vec().to_index_slice(),
                 node.vector.as_slice(),
                 &mut lsr.stats,
             ),
@@ -326,9 +323,9 @@ impl<'a> Storage for PlainStorage<'a> {
             let node_neighbor = rn_neighbor.get_archived_node();
 
             let distance = match lsr.sdm.as_ref().unwrap() {
-                PlainDistanceMeasure::Full(query, _) => PlainDistanceMeasure::calculate_distance(
+                PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
                     self.distance_fn,
-                    query.to_index_slice(),
+                    query.vec().to_index_slice(),
                     node_neighbor.vector.as_slice(),
                     &mut lsr.stats,
                 ),

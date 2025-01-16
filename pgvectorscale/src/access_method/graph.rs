@@ -10,6 +10,7 @@ use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
 
+use super::labels::LabeledVector;
 use super::neighbor_with_distance::{Distance, DistanceWithTieBreak};
 use super::pg_vector::PgVector;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
@@ -268,8 +269,7 @@ impl<'a> Graph<'a> {
     fn greedy_search_for_build<S: Storage>(
         &self,
         index_pointer: IndexPointer,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
+        query: LabeledVector,
         meta_page: &MetaPage,
         storage: &S,
         stats: &mut GreedySearchStats,
@@ -279,7 +279,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
-        let dm = storage.get_query_distance_measure(query, labels);
+        let dm = storage.get_query_distance_measure(query);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
@@ -301,8 +301,7 @@ impl<'a> Graph<'a> {
     /// the next elements.
     pub fn greedy_search_streaming_init<S: Storage>(
         &self,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
+        query: LabeledVector,
         search_list_size: usize,
         storage: &S,
     ) -> ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData> {
@@ -311,7 +310,7 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return ListSearchResult::empty();
         }
-        let dm = storage.get_query_distance_measure(query, labels);
+        let dm = storage.get_query_distance_measure(query);
 
         ListSearchResult::new(
             init_ids.unwrap(),
@@ -443,8 +442,7 @@ impl<'a> Graph<'a> {
         &mut self,
         index: &PgRelation,
         index_pointer: IndexPointer,
-        vec: PgVector,
-        labels: Option<Vec<u16>>,
+        vec: LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
     ) {
@@ -471,7 +469,6 @@ impl<'a> Graph<'a> {
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
-            labels,
             meta_page,
             storage,
             &mut stats.greedy_search_stats,

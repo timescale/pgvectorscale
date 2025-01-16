@@ -632,24 +632,23 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        labvec: LabeledVector,
+        full_vector: &[f32],
+        labels: Option<Vec<u16>>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
-        notice!("Creating SbqNode with labels {:?}", labvec.labels());
+        notice!("Creating SbqNode with labels {:?}", labels);
 
-        let bq_vector = self
-            .quantizer
-            .vector_for_new_node(meta_page, labvec.vec().to_full_slice());
+        let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
         let node = SbqNode::with_meta(
             &self.quantizer,
             heap_pointer,
             meta_page,
             bq_vector.as_slice(),
-            labvec.into_labels(),
+            labels,
         );
 
         let index_pointer: IndexPointer = node.write(tape, stats);
@@ -700,17 +699,8 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         SbqNodeDistanceMeasure::with_index_pointer(self, index_pointer, stats)
     }
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
-    ) -> SbqSearchDistanceMeasure {
-        SbqSearchDistanceMeasure::new(
-            &self.quantizer,
-            query,
-            labels,
-            self.num_dimensions_for_neighbors,
-        )
+    fn get_query_distance_measure(&self, query: LabeledVector) -> SbqSearchDistanceMeasure {
+        SbqSearchDistanceMeasure::new(&self.quantizer, query, self.num_dimensions_for_neighbors)
     }
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
@@ -735,7 +725,7 @@ impl<'a> Storage for SbqSpeedupStorage<'a> {
         let vec = unsafe { PgVector::from_datum(datum, meta_page, false, true) };
         Some(self.get_distance_function()(
             vec.to_full_slice(),
-            qdm.query.to_full_slice(),
+            qdm.query.vec().to_full_slice(),
         ))
     }
 

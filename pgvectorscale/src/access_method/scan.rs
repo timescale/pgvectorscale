@@ -8,7 +8,7 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 use crate::{
     access_method::{
         graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
-        pg_vector::PgVector, sbq::SbqSpeedupStorage,
+        sbq::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, HeapPointer, IndexPointer},
 };
@@ -66,30 +66,16 @@ impl TSVScanState {
                 let stats = QuantizerStats::new();
                 let bq =
                     PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
-                let it = TSVResponseIterator::new(
-                    &bq,
-                    index,
-                    query,
-                    labels,
-                    search_list_size,
-                    meta_page,
-                    stats,
-                );
+                let it =
+                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
             StorageType::SbqSpeedup | StorageType::SbqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
                 let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
-                let it = TSVResponseIterator::new(
-                    &bq,
-                    index,
-                    query,
-                    labels,
-                    search_list_size,
-                    meta_page,
-                    stats,
-                );
+                let it =
+                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::SbqSpeedup(quantizer, it)
             }
         };
@@ -180,15 +166,13 @@ struct TSVResponseIterator<QDM, PD> {
     next_calls: i32,
     next_calls_with_resort: i32,
     full_distance_comparisons: i32,
-    labels: Option<Vec<u16>>,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
     fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
         storage: &S,
         index: &PgRelation,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
+        query: LabeledVector,
         search_list_size: usize,
         //FIXME?
         _meta_page: MetaPage,
@@ -197,7 +181,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
-        let lsr = graph.greedy_search_streaming_init(query, labels, search_list_size, storage);
+        let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
         let resort_size = super::guc::TSV_RESORT_SIZE.get() as usize;
 
         Self {
@@ -211,7 +195,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             next_calls: 0,
             next_calls_with_resort: 0,
             full_distance_comparisons: 0,
-            labels,
         }
     }
 }
@@ -387,7 +370,7 @@ pub extern "C" fn amrescan(
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
     if nkeys > 0 {
-        scan.xs_recheck = true; //TODO: what is this?
+        scan.xs_recheck = true; // TODO: needed?
     }
 
     let orderbys = unsafe {
@@ -400,19 +383,7 @@ pub extern "C" fn amrescan(
 
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
 
-    let query = unsafe {
-        PgVector::from_datum(
-            orderbys[0].sk_argument,
-            &state.meta_page,
-            true, /* needed for search */
-            true, /* needed for resort */
-        )
-    };
-
-    let labels: Option<Vec<u16>> = (nkeys > 0).then(|| {
-        let arr = unsafe { Array::<i32>::from_datum(keys[0].sk_argument, false).unwrap() };
-        arr.into_iter().flatten().map(|i| i as u16).collect()
-    });
+    let query = unsafe { LabeledVector::from_scan_key_data(keys, orderbys, &state.meta_page) };
 
     warning!(
         "amrescan({:?},\n {:?},\n {},\n {:?},\n {})",
@@ -423,9 +394,9 @@ pub extern "C" fn amrescan(
         norderbys
     );
 
-    warning!("Query labels: {:?}", labels);
+    warning!("Query labels: {:?}", query.labels());
 
-    state.initialize(&indexrel, &heaprel, query, labels, search_list_size);
+    state.initialize(&indexrel, &heaprel, query, search_list_size);
 }
 
 #[pg_guard]

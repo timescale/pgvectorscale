@@ -49,7 +49,8 @@ pub trait Storage {
 
     fn create_node<S: StatsNodeWrite>(
         &self,
-        labvec: LabeledVector,
+        full_vector: &[f32],
+        labels: Option<Vec<u16>>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -74,11 +75,7 @@ pub trait Storage {
         stats: &mut S,
     ) -> Self::NodeDistanceMeasure<'a>;
 
-    fn get_query_distance_measure(
-        &self,
-        query: PgVector,
-        labels: Option<Vec<u16>>,
-    ) -> Self::QueryDistanceMeasure;
+    fn get_query_distance_measure(&self, query: LabeledVector) -> Self::QueryDistanceMeasure;
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
