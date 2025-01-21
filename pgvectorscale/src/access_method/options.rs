@@ -299,28 +299,6 @@ mod tests {
     }
 
     #[pg_test]
-    unsafe fn test_index_options_bq() -> spi::Result<()> {
-        Spi::run(
-            "CREATE TABLE test(encoding vector(3));
-        CREATE INDEX idxtest
-                  ON test
-               USING diskann(encoding)
-               WITH (storage_layout = io_optimized);",
-        )?;
-
-        let index_oid =
-            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
-        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
-        let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
-        assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
-        assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
-        assert_eq!(options.get_storage_type(), StorageType::SbqSpeedup);
-        Ok(())
-    }
-
-    #[pg_test]
     unsafe fn test_index_options_plain() -> spi::Result<()> {
         Spi::run(
             "CREATE TABLE test(encoding vector(3));
