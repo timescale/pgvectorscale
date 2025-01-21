@@ -2,7 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::LabeledVector,
+    labels::{test_overlap, Label, LabelSet, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
@@ -27,7 +27,7 @@ pub struct PlainStorage<'a> {
     pub distance_fn: DistanceFn,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
-    label_attr: Option<AttrNumber>,
+    _label_attr: Option<AttrNumber>,
 }
 
 impl<'a> PlainStorage<'a> {
@@ -41,7 +41,7 @@ impl<'a> PlainStorage<'a> {
             distance_fn,
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
-            label_attr: get_index_label_attribute(index),
+            _label_attr: get_index_label_attribute(index),
         }
     }
 
@@ -55,7 +55,7 @@ impl<'a> PlainStorage<'a> {
             distance_fn,
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            label_attr: get_index_label_attribute(index_relation),
+            _label_attr: get_index_label_attribute(index_relation),
         }
     }
 
@@ -69,7 +69,7 @@ impl<'a> PlainStorage<'a> {
             distance_fn,
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            label_attr: get_index_label_attribute(index_relation),
+            _label_attr: get_index_label_attribute(index_relation),
         }
     }
 }
@@ -138,6 +138,29 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
         let vec2 = node2.vector.as_slice();
         (self.storage.get_distance_function())(vec1, vec2)
     }
+
+    // unsafe fn get_labels<S: StatsNodeRead>(
+    //     &self,
+    //     index_pointer: IndexPointer,
+    //     stats: &mut S,
+    // ) -> &LabelSet {
+    //     let rn = Node::read(self.storage.index, index_pointer, stats);
+    //     let node = rn.get_archived_node();
+    //     node.get_labels()
+    // }
+
+    unsafe fn do_labels_overlap<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> bool {
+        let rn = Node::read(self.storage.index, index_pointer, stats);
+        let node = rn.get_archived_node();
+        test_overlap(
+            node.get_labels(),
+            self.readable_node.get_archived_node().get_labels(),
+        )
+    }
 }
 
 //todo move to storage_common
@@ -180,7 +203,7 @@ impl Storage for PlainStorage<'_> {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<Vec<u16>>,
+        labels: Option<&[Label]>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -223,6 +246,7 @@ impl Storage for PlainStorage<'_> {
     fn get_query_distance_measure(&self, query: LabeledVector) -> PlainDistanceMeasure {
         PlainDistanceMeasure::Full(query)
     }
+
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
         scan: &PgBox<pgrx::pg_sys::IndexScanDescData>,
@@ -260,21 +284,27 @@ impl Storage for PlainStorage<'_> {
         stats: &mut S,
     ) {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
-        //get neighbors copy before givining ownership of rn to the distance state
+        // Copy neighbors and labels before giving ownership of `rn`` to the distance state
         let neighbors: Vec<_> = rn.get_archived_node().iter_neighbors().collect();
+        let labels: Vec<LabelSet> = rn
+            .get_archived_node()
+            .iter_neighbor_labels()
+            .map(|x| x.clone())
+            .collect();
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
-        for n in neighbors {
+        for (n, label) in neighbors.into_iter().zip(labels) {
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist, neighbors_of, n),
+                &label,
             ))
         }
     }
 
     /* get_lsn and visit_lsn are different because the distance
     comparisons for SBQ get the vector from different places */
-    fn create_lsn_for_init_id(
+    fn create_lsn_for_start_node(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
@@ -300,6 +330,7 @@ impl Storage for PlainStorage<'_> {
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
+            node.get_labels(),
         )
     }
 
@@ -334,6 +365,7 @@ impl Storage for PlainStorage<'_> {
                 neighbor_index_pointer,
                 lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                 PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
+                node_neighbor.get_labels(),
             );
 
             lsr.insert_neighbor(lsn);

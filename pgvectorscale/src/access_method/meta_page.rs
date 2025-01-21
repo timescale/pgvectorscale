@@ -14,6 +14,7 @@ use super::options::{
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
 use super::sbq::SbqNode;
+use super::start_nodes::StartNodes;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 use super::storage_common::get_num_index_attributes;
@@ -75,7 +76,10 @@ impl MetaPageV1 {
             storage_type: StorageType::Plain as u8,
             search_list_size: self.search_list_size,
             max_alpha: self.max_alpha,
-            init_ids: ItemPointer::new(self.init_ids_block_number, self.init_ids_offset),
+            start_nodes: Some(StartNodes::new(ItemPointer::new(
+                self.init_ids_block_number,
+                self.init_ids_offset,
+            ))),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels: false,
         }
@@ -100,24 +104,31 @@ pub struct MetaPageHeader {
 #[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 pub struct MetaPage {
-    /// repeat the magic number and version from MetaPageHeader for sanity checks
+    /// Magic number from MetaPageHeader for sanity check
     magic_number: u32,
+    /// Version number from MetaPageHeader for sanity check
     version: u32,
+    /// Version of the extension when the index was built
     extension_version_when_built: String,
     /// The value of the DistanceType enum
     distance_type: u16,
-    /// number of total_dimensions in the vector
+    /// Number of vector dimensions
     num_dimensions: u32,
-    //number of dimensions in the vectors stored in the index
+    /// Number of vector dimensions that are indexed
     num_dimensions_to_index: u32,
+    /// Number of bits per dimension for Sbq
     bq_num_bits_per_dimension: u8,
-    /// the value of the TSVStorageLayout enum
+    /// The value of the TSVStorageLayout enum
     storage_type: u8,
-    /// max number of outgoing edges a node in the graph can have (R in the papers)
+    /// Max number of outgoing edges a node in the graph can have (R in the papers)
     num_neighbors: u32,
+    /// Search list size (L in the papers)
     search_list_size: u32,
+    /// Maximal alpha value for the index
     max_alpha: f64,
-    init_ids: ItemPointer,
+    /// Start nodes for search, one for each label
+    start_nodes: Option<StartNodes>,
+    /// Sbq means metadata
     quantizer_metadata: ItemPointer,
     /// Does the index have labels along with vectors?
     has_labels: bool,
@@ -178,12 +189,8 @@ impl MetaPage {
         ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize
     }
 
-    pub fn get_init_ids(&self) -> Option<Vec<IndexPointer>> {
-        if !self.init_ids.is_valid() {
-            return None;
-        }
-
-        Some(vec![self.init_ids])
+    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
+        self.start_nodes.as_ref()
     }
 
     pub fn has_labels(&self) -> bool {
@@ -280,7 +287,7 @@ impl MetaPage {
             bq_num_bits_per_dimension,
             search_list_size: opt.search_list_size,
             max_alpha: opt.max_alpha,
-            init_ids: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
+            start_nodes: None,
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels,
         };
@@ -370,16 +377,13 @@ impl MetaPage {
     }
 
     /// Change the init ids for an index.
-    pub fn update_init_ids<S: StatsNodeModify>(
+    pub fn set_start_nodes<S: StatsNodeModify>(
         index: &PgRelation,
-        init_ids: Vec<IndexPointer>,
+        start_nodes: StartNodes,
         stats: &mut S,
     ) {
-        assert_eq!(init_ids.len(), 1); //change this if we support multiple
-        let id = init_ids[0];
-
         let mut meta = Self::fetch(index);
-        meta.init_ids = id;
+        meta.start_nodes = Some(start_nodes);
 
         unsafe {
             Self::overwrite(index, &meta);

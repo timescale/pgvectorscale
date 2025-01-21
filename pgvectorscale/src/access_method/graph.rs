@@ -5,22 +5,21 @@ use std::{cmp::Ordering, collections::HashSet};
 use pgrx::PgRelation;
 
 use crate::access_method::storage::NodeDistanceMeasure;
-
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
-
-use super::labels::LabeledVector;
-use super::neighbor_with_distance::{Distance, DistanceWithTieBreak};
-use super::pg_vector::PgVector;
+use super::labels::{label_vec_to_set, Label, LabelSet, LabeledVector};
+use super::meta_page::MetaPage;
+use super::neighbor_with_distance::{Distance, DistanceWithTieBreak, NeighborWithDistance};
+use super::start_nodes::StartNodes;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
 use super::storage::Storage;
-use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
     distance_with_tie_break: DistanceWithTieBreak,
     private_data: PD,
+    labels: LabelSet,
 }
 
 impl<PD> PartialOrd for ListSearchNeighbor<PD> {
@@ -49,16 +48,22 @@ impl<PD> ListSearchNeighbor<PD> {
         index_pointer: IndexPointer,
         distance_with_tie_break: DistanceWithTieBreak,
         private_data: PD,
+        labels: &[Label],
     ) -> Self {
         Self {
             index_pointer,
             private_data,
             distance_with_tie_break,
+            labels: labels.try_into().unwrap(),
         }
     }
 
     pub fn get_private_data(&self) -> &PD {
         &self.private_data
+    }
+
+    pub fn get_labels(&self) -> &LabelSet {
+        &self.labels
     }
 }
 
@@ -105,7 +110,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         };
         res.stats.record_call();
         for index_pointer in init_ids {
-            let lsn = storage.create_lsn_for_init_id(&mut res, index_pointer, gns);
+            let lsn = storage.create_lsn_for_start_node(&mut res, index_pointer, gns);
             res.insert_neighbor(lsn);
         }
         res
@@ -152,8 +157,8 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         }
 
         let head = self.candidates.pop().unwrap();
-        let idx = self.visited.partition_point(|x| *x < head.0);
-        self.visited.insert(idx, head.0);
+        let idx = self.visited.partition_point(|x| *x < head.0); // TODO: O(n)
+        self.visited.insert(idx, head.0); // TODO: O(n)
         Some(idx)
     }
 
@@ -189,8 +194,8 @@ impl<'a> Graph<'a> {
         &self.neighbor_store
     }
 
-    fn get_init_ids(&self) -> Option<Vec<ItemPointer>> {
-        self.meta_page.get_init_ids()
+    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
+        self.meta_page.get_start_nodes()
     }
 
     fn add_neighbors<S: Storage>(
@@ -274,16 +279,17 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut GreedySearchStats,
     ) -> HashSet<NeighborWithDistance> {
-        let init_ids = self.get_init_ids();
+        let init_ids = self.get_start_nodes();
         if init_ids.is_none() {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
+        let start_nodes = init_ids.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = meta_page.get_search_list_size_for_build() as usize;
 
         let mut l = ListSearchResult::new(
-            init_ids.unwrap(),
+            start_nodes,
             dm,
             Some(index_pointer),
             search_list_size,
@@ -305,15 +311,16 @@ impl<'a> Graph<'a> {
         search_list_size: usize,
         storage: &S,
     ) -> ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData> {
-        let init_ids = self.get_init_ids();
-        if init_ids.is_none() {
-            //no nodes in the graph
+        let start_nodes = self.get_start_nodes();
+        if start_nodes.is_none() {
+            // No nodes in the graph
             return ListSearchResult::empty();
         }
+        let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
 
         ListSearchResult::new(
-            init_ids.unwrap(),
+            start_nodes,
             dm,
             None,
             search_list_size,
@@ -339,6 +346,7 @@ impl<'a> Graph<'a> {
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
                         list_search_entry.distance_with_tie_break.clone(),
+                        list_search_entry.get_labels(),
                     ));
                 }
             }
@@ -438,18 +446,24 @@ impl<'a> Graph<'a> {
         results
     }
 
-    pub fn insert<S: Storage>(
+    fn update_start_nodes<S: Storage>(
         &mut self,
         index: &PgRelation,
         index_pointer: IndexPointer,
-        vec: LabeledVector,
+        vec: &LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
     ) {
-        if self.meta_page.get_init_ids().is_none() {
+        let start_nodes = self.meta_page.get_start_nodes();
+        if let Some(start_nodes) = start_nodes {
+            if start_nodes.contains(vec.labels()) {
+                return;
+            }
+        }
+
+        let mut start_nodes = if start_nodes.is_none() {
             //TODO probably better set off of centeroids
-            MetaPage::update_init_ids(index, vec![index_pointer], stats);
-            *self.meta_page = MetaPage::fetch(index);
+            let start_nodes = StartNodes::new(index_pointer);
 
             self.neighbor_store.set_neighbors(
                 storage,
@@ -460,12 +474,32 @@ impl<'a> Graph<'a> {
                 ),
                 stats,
             );
-        }
+
+            start_nodes
+        } else {
+            start_nodes.unwrap().clone()
+        };
+
+        start_nodes.add_node(vec.labels(), index_pointer);
+
+        MetaPage::set_start_nodes(index, start_nodes, stats);
+    }
+
+    pub fn insert<S: Storage>(
+        &mut self,
+        index: &PgRelation,
+        index_pointer: IndexPointer,
+        vec: LabeledVector,
+        storage: &S,
+        stats: &mut InsertStats,
+    ) {
+        self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
         let meta_page = self.get_meta_page();
 
         //TODO: make configurable?
-        #[allow(clippy::mutable_key_type)]
+        let labels = label_vec_to_set(vec.labels());
+
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
@@ -488,6 +522,7 @@ impl<'a> Graph<'a> {
             let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
+                &labels,
                 neighbor.get_distance_with_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
@@ -512,6 +547,7 @@ impl<'a> Graph<'a> {
         &mut self,
         from: IndexPointer,
         to: IndexPointer,
+        to_labels: &LabelSet,
         distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
@@ -519,6 +555,7 @@ impl<'a> Graph<'a> {
         let new = vec![NeighborWithDistance::new(
             to,
             distance_with_tie_break.clone(),
+            to_labels,
         )];
         let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
         n.contains(&new[0])

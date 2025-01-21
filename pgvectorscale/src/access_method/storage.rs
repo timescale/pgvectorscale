@@ -8,23 +8,28 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::LabeledVector,
+    labels::{Label, LabelSet, LabeledVector},
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
-    pg_vector::PgVector,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
 };
 
-/// NodeDistanceMeasure keeps the state to make distance comparison between two nodes.
+/// NodeDistanceMeasure keeps the state to make distance and label comparisons between two nodes.
 pub trait NodeDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> f32;
+
+    unsafe fn do_labels_overlap<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> bool;
 }
 
 pub trait ArchivedData {
@@ -50,7 +55,7 @@ pub trait Storage {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<Vec<u16>>,
+        labels: Option<&[Label]>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -95,7 +100,7 @@ pub trait Storage {
     ) where
         Self: Sized;
 
-    fn create_lsn_for_init_id(
+    fn create_lsn_for_start_node(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,

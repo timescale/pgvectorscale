@@ -13,6 +13,7 @@ pub mod pg_vector;
 mod plain_node;
 mod plain_storage;
 mod scan;
+mod start_nodes;
 pub mod stats;
 mod storage;
 mod storage_common;

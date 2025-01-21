@@ -2,6 +2,8 @@ use std::{cell::OnceCell, cmp::Ordering};
 
 use crate::util::{IndexPointer, ItemPointer};
 
+use super::labels::{Label, LabelSet};
+
 //TODO is this right?
 pub type Distance = f32;
 
@@ -96,13 +98,19 @@ impl Eq for DistanceWithTieBreak {}
 pub struct NeighborWithDistance {
     index_pointer: IndexPointer,
     distance: DistanceWithTieBreak,
+    labels: LabelSet,
 }
 
 impl NeighborWithDistance {
-    pub fn new(neighbor_index_pointer: ItemPointer, distance: DistanceWithTieBreak) -> Self {
+    pub fn new(
+        neighbor_index_pointer: ItemPointer,
+        distance: DistanceWithTieBreak,
+        labels: &[Label],
+    ) -> Self {
         Self {
             index_pointer: neighbor_index_pointer,
             distance,
+            labels: labels.try_into().unwrap(),
         }
     }
 
@@ -112,6 +120,10 @@ impl NeighborWithDistance {
 
     pub fn get_distance_with_tie_break(&self) -> &DistanceWithTieBreak {
         &self.distance
+    }
+
+    pub fn get_labels(&self) -> &LabelSet {
+        &self.labels
     }
 }
 

@@ -6,6 +6,7 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
+use super::labels::{label_vec_to_set, Label, LabelSet, INVALID_LABEL, MAX_LABELS_PER_NODE};
 use super::neighbor_with_distance::NeighborWithDistance;
 use super::storage::ArchivedData;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
@@ -19,13 +20,14 @@ pub struct Node {
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
     pub heap_item_pointer: HeapPointer,
-    labels: Option<Vec<u16>>,
+    labels: LabelSet,
+    neighbor_labels: Vec<LabelSet>,
 }
 
 impl Node {
     fn new_internal(
         vector: Vec<f32>,
-        labels: Option<Vec<u16>>,
+        labels: Option<&[Label]>,
         pq_vector: Vec<u8>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
@@ -40,13 +42,16 @@ impl Node {
                 .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
                 .collect(),
             heap_item_pointer,
-            labels,
+            labels: label_vec_to_set(labels),
+            neighbor_labels: (0..num_neighbors)
+                .map(|_| [INVALID_LABEL; MAX_LABELS_PER_NODE])
+                .collect(),
         }
     }
 
     pub fn new_for_full_vector(
         vector: Vec<f32>,
-        labels: Option<Vec<u16>>,
+        labels: Option<&[Label]>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
     ) -> Self {
@@ -74,6 +79,10 @@ impl ArchivedNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
+    pub fn neighbor_labels(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<LabelSet>> {
+        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_labels) }
+    }
+
     pub fn num_neighbors(&self) -> usize {
         self.neighbor_index_pointers
             .iter()
@@ -88,6 +97,10 @@ impl ArchivedNode {
             .map(|ip| ip.deserialize_item_pointer())
     }
 
+    pub fn iter_neighbor_labels(&self) -> impl Iterator<Item = &LabelSet> + '_ {
+        self.neighbor_labels.iter().take(self.num_neighbors())
+    }
+
     pub fn set_neighbors(
         mut self: Pin<&mut Self>,
         neighbors: &[NeighborWithDistance],
@@ -95,18 +108,30 @@ impl ArchivedNode {
     ) {
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
-            //TODO hate that we have to set each field like this
+            // TODO hate that we have to set each field like this
             a_index_pointer.block_number =
                 new_neighbor.get_index_pointer_to_neighbor().block_number;
             a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
+
+            let mut a_labels = self.as_mut().neighbor_labels().index_pin(i);
+            a_labels.copy_from_slice(new_neighbor.get_labels());
         }
-        //set the marker that the list ended
+        // Set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            let mut past_last_index_pointers =
-                self.neighbor_index_pointer().index_pin(neighbors.len());
+            let mut past_last_index_pointers = self
+                .as_mut()
+                .neighbor_index_pointer()
+                .index_pin(neighbors.len());
             past_last_index_pointers.block_number = InvalidBlockNumber;
             past_last_index_pointers.offset = InvalidOffsetNumber;
+
+            let mut past_last_labels = self.neighbor_labels().index_pin(neighbors.len());
+            past_last_labels.copy_from_slice(&[INVALID_LABEL; MAX_LABELS_PER_NODE]);
         }
+    }
+
+    pub fn get_labels(&self) -> &LabelSet {
+        &self.labels
     }
 }
 
