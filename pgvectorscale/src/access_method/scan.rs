@@ -67,7 +67,7 @@ impl TSVScanState {
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
-            StorageType::SbqCompression => {
+            StorageType::SbqSpeedup | StorageType::SbqCompression => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
                 let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
