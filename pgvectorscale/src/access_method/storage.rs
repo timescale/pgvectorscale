@@ -150,9 +150,7 @@ impl StorageType {
         match value.to_lowercase().as_str() {
             "plain" => StorageType::Plain,
             "bq_compression" | "memory_optimized" => StorageType::SbqCompression,
-            _ => panic!(
-                "Invalid storage type. Must be either 'plain' or 'bq_compression' aka 'memory_optimized'"
-            ),
+            _ => panic!("Invalid storage type. Must be either 'plain' or 'memory_optimized'"),
         }
     }
 }

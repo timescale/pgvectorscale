@@ -181,7 +181,7 @@ pub unsafe fn init() {
     pg_sys::add_string_reloption(
         RELOPT_KIND_TSV,
         "storage_layout".as_pg_cstr(),
-        "Storage layout: either memory_optimized, io_optimized, or plain".as_pg_cstr(),
+        "Storage layout: either memory_optimized or plain".as_pg_cstr(),
         super::storage::DEFAULT_STORAGE_TYPE_STR.as_pg_cstr(),
         Some(validate_storage_layout),
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
