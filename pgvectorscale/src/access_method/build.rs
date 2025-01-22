@@ -201,7 +201,7 @@ unsafe fn aminsert_internal(
                 &mut stats,
             );
         }
-        StorageType::SbqSpeedup | StorageType::SbqCompression => {
+        StorageType::SbqCompression => {
             let bq = SbqSpeedupStorage::load_for_insert(
                 &heap_relation,
                 &index_relation,
@@ -286,7 +286,7 @@ fn do_heap_scan(
 
             finalize_index_build(&mut plain, &mut bs, write_stats)
         }
-        StorageType::SbqSpeedup | StorageType::SbqCompression => {
+        StorageType::SbqCompression => {
             let mut bq =
                 SbqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
 

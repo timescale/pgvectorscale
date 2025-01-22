@@ -181,7 +181,7 @@ pub unsafe fn init() {
     pg_sys::add_string_reloption(
         RELOPT_KIND_TSV,
         "storage_layout".as_pg_cstr(),
-        "Storage layout: either memory_optimized, io_optimized, or plain".as_pg_cstr(),
+        "Storage layout: either memory_optimized or plain".as_pg_cstr(),
         super::storage::DEFAULT_STORAGE_TYPE_STR.as_pg_cstr(),
         Some(validate_storage_layout),
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
@@ -295,28 +295,6 @@ mod tests {
             options.bq_num_bits_per_dimension,
             SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         );
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_index_options_bq() -> spi::Result<()> {
-        Spi::run(
-            "CREATE TABLE test(encoding vector(3));
-        CREATE INDEX idxtest
-                  ON test
-               USING diskann(encoding)
-               WITH (storage_layout = io_optimized);",
-        )?;
-
-        let index_oid =
-            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
-        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
-        let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.get_num_neighbors(), NUM_NEIGHBORS_DEFAULT_SENTINEL);
-        assert_eq!(options.search_list_size, 100);
-        assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
-        assert_eq!(options.num_dimensions, NUM_DIMENSIONS_DEFAULT_SENTINEL);
-        assert_eq!(options.get_storage_type(), StorageType::SbqSpeedup);
         Ok(())
     }
 

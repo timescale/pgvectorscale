@@ -44,10 +44,6 @@ pub fn label_vec_to_set(labels: Option<&[Label]>) -> LabelSet {
     set
 }
 
-pub fn new_labelset() -> LabelSet {
-    [INVALID_LABEL; MAX_LABELS_PER_NODE]
-}
-
 pub struct LabeledVector {
     vec: PgVector,
     labels: Option<LabelVec>,

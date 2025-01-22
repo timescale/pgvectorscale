@@ -102,8 +102,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             tie_break_item_pointer,
             candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
             visited: Vec::with_capacity(search_list_size * 2),
-            //candidate_storage: Vec::with_capacity(search_list_size * neigbors),
-            //best_candidate: Vec::with_capacity(search_list_size * neigbors),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
             stats: GreedySearchStats::new(),
             sdm: Some(sdm),

@@ -8,7 +8,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{Label, LabelSet, LabeledVector},
+    labels::{Label, LabeledVector},
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
     stats::{
@@ -138,7 +138,7 @@ pub trait Storage {
 #[derive(PartialEq, Debug)]
 pub enum StorageType {
     Plain = 0,
-    SbqSpeedup = 1,
+    // R.I.P. SbqSpeedup = 1,
     SbqCompression = 2,
 }
 
@@ -148,7 +148,6 @@ impl StorageType {
     pub fn from_u8(value: u8) -> Self {
         match value {
             0 => StorageType::Plain,
-            1 => StorageType::SbqSpeedup,
             2 => StorageType::SbqCompression,
             _ => panic!("Invalid storage type"),
         }
@@ -157,11 +156,8 @@ impl StorageType {
     pub fn from_str(value: &str) -> Self {
         match value.to_lowercase().as_str() {
             "plain" => StorageType::Plain,
-            "bq_speedup" | "io_optimized" => StorageType::SbqSpeedup,
             "bq_compression" | "memory_optimized" => StorageType::SbqCompression,
-            _ => panic!(
-                "Invalid storage type. Must be one of 'plain', 'bq_speedup', 'bq_compression'"
-            ),
+            _ => panic!("Invalid storage type. Must be either 'plain' or 'memory_optimized'"),
         }
     }
 }
