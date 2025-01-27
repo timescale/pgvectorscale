@@ -100,12 +100,14 @@ pub trait Storage {
     ) where
         Self: Sized;
 
+    /// Create a ListSearchNeighbor for the start node of the search.  If start node
+    /// already processed (e.g. because multiple labels use it), return None.
     fn create_lsn_for_start_node(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
         gns: &GraphNeighborStore,
-    ) -> ListSearchNeighbor<Self::LSNPrivateData>
+    ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>>
     where
         Self: Sized;
 

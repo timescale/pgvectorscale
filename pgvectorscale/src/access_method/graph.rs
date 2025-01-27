@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::PgRelation;
+use pgrx::{info, PgRelation};
 
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -89,7 +89,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
     }
 
     fn new<S: Storage<QueryDistanceMeasure = QDM, LSNPrivateData = PD>>(
-        init_ids: Vec<ItemPointer>,
+        start_nodes: Vec<ItemPointer>,
         sdm: S::QueryDistanceMeasure,
         tie_break_item_pointer: Option<ItemPointer>,
         search_list_size: usize,
@@ -97,6 +97,8 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         gns: &GraphNeighborStore,
         storage: &S,
     ) -> Self {
+        info!("ListSearchResult::new, start_nodes={:?}", start_nodes);
+
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
             tie_break_item_pointer,
@@ -107,9 +109,11 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             sdm: Some(sdm),
         };
         res.stats.record_call();
-        for index_pointer in init_ids {
+        for index_pointer in start_nodes {
             let lsn = storage.create_lsn_for_start_node(&mut res, index_pointer, gns);
-            res.insert_neighbor(lsn);
+            if let Some(lsn) = lsn {
+                res.insert_neighbor(lsn);
+            }
         }
         res
     }
@@ -186,6 +190,10 @@ impl<'a> Graph<'a> {
             neighbor_store,
             meta_page,
         }
+    }
+
+    pub fn debug_dump(&self) {
+        self.neighbor_store.debug_dump();
     }
 
     pub fn get_neighbor_store(&self) -> &GraphNeighborStore {
@@ -452,9 +460,14 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) {
+        info!(
+            "graph::update_start_nodes, index_pointer={:?}",
+            index_pointer
+        );
         let start_nodes = self.meta_page.get_start_nodes();
         if let Some(start_nodes) = start_nodes {
             if start_nodes.contains(vec.labels()) {
+                info!("graph::update_start_nodes, already contains");
                 return;
             }
         }
@@ -481,6 +494,11 @@ impl<'a> Graph<'a> {
         start_nodes.add_node(vec.labels(), index_pointer);
 
         MetaPage::set_start_nodes(index, start_nodes, stats);
+        *self.meta_page = MetaPage::fetch(index);
+        info!(
+            "graph::update_start_nodes, updated, meta_page={:?}",
+            self.meta_page
+        );
     }
 
     pub fn insert<S: Storage>(
@@ -491,6 +509,7 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) {
+        info!("graph::insert, index_pointer={:?}", index_pointer);
         self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
         let meta_page = self.get_meta_page();

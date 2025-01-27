@@ -77,6 +77,7 @@ pub extern "C" fn ambuild(
     indexrel: pg_sys::Relation,
     index_info: *mut pg_sys::IndexInfo,
 ) -> *mut pg_sys::IndexBuildResult {
+    info!("ambuild");
     let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
     let opt = TSVIndexOptions::from_relation(&index_relation);
@@ -123,6 +124,8 @@ pub extern "C" fn ambuild(
             MAX_DIMENSION_NO_SBQ
         );
     }
+
+    info!("meta_page: {:?}", meta_page);
 
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
@@ -254,6 +257,8 @@ fn do_heap_scan(
     index_relation: &PgRelation,
     meta_page: MetaPage,
 ) -> usize {
+    info!("do_heap_scan");
+
     let storage = meta_page.get_storage_type();
 
     let mut mp2 = meta_page.clone();
@@ -380,14 +385,18 @@ fn finalize_index_build<S: Storage>(
         }
     }
 
-    debug1!("write done");
+    info!("finalize_index_build done");
+    state.graph.debug_dump();
+    state.graph.get_meta_page().debug_dump();
+
+    info!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
         .as_secs_f64();
     if write_stats.num_nodes > 0 {
-        debug1!(
+        info!(
             "Writing took {}s or {}s/tuple.  Avg neighbors: {}",
             writing_took,
             writing_took / write_stats.num_nodes as f64,
@@ -395,7 +404,7 @@ fn finalize_index_build<S: Storage>(
         );
     }
     if write_stats.prune_stats.calls > 0 {
-        debug1!(
+        info!(
             "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
             write_stats.prune_stats.num_neighbors_before_prune / write_stats.prune_stats.calls,
             write_stats.prune_stats.num_neighbors_after_prune / write_stats.prune_stats.calls,
@@ -418,6 +427,7 @@ unsafe extern "C" fn build_callback_bq_train(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
+    info!("build_callback_bq_train");
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
@@ -441,6 +451,7 @@ unsafe extern "C" fn build_callback(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
+    info!("build_callback");
     let index_relation = unsafe { PgRelation::from_pg(index) };
     let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
@@ -491,12 +502,13 @@ fn build_callback_internal<S: Storage>(
     state: &mut BuildState,
     storage: &mut S,
 ) {
+    info!("build_callback_internal");
     check_for_interrupts!();
 
     state.ntuples += 1;
 
     if state.ntuples % 1000 == 0 {
-        debug1!(
+        info!(
             "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
             state.ntuples,
             Instant::now().duration_since(state.started).as_secs_f64(),
@@ -515,6 +527,8 @@ fn build_callback_internal<S: Storage>(
         &mut state.tape,
         &mut state.stats,
     );
+
+    info!("inserting into graph, index_pointer: {:?}", index_pointer);
 
     state
         .graph

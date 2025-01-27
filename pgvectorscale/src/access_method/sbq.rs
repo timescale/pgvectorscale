@@ -15,7 +15,7 @@ use super::{
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    notice,
+    debug1, info,
     pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgBox, PgRelation,
 };
@@ -618,8 +618,6 @@ impl Storage for SbqSpeedupStorage<'_> {
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
-        notice!("Creating SbqNode with labels {:?}", labels);
-
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
         let node = SbqNode::with_meta(heap_pointer, meta_page, bq_vector.as_slice(), labels);
@@ -733,9 +731,14 @@ impl Storage for SbqSpeedupStorage<'_> {
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
         gns: &GraphNeighborStore,
-    ) -> ListSearchNeighbor<Self::LSNPrivateData> {
+    ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>> {
+        info!(
+            "create_lsn_for_start_node, index_pointer={:?}",
+            index_pointer
+        );
         if !lsr.prepare_insert(index_pointer) {
-            panic!("should not have had an init id already inserted");
+            info!("already processed this start node");
+            return None;
         }
 
         let rn = unsafe { SbqNode::read(self.index, index_pointer, &mut lsr.stats) };
@@ -747,12 +750,12 @@ impl Storage for SbqSpeedupStorage<'_> {
             &mut lsr.stats,
         );
 
-        ListSearchNeighbor::new(
+        Some(ListSearchNeighbor::new(
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PhantomData::<bool>,
             node.get_labels(),
-        )
+        ))
     }
 
     fn visit_lsn(

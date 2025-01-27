@@ -14,7 +14,7 @@ use super::{
     storage_common::{get_index_label_attribute, get_index_vector_attribute},
 };
 
-use pgrx::{notice, pg_sys::AttrNumber, PgBox, PgRelation};
+use pgrx::{debug1, info, pg_sys::AttrNumber, PgBox, PgRelation};
 
 use crate::util::{
     page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
@@ -210,7 +210,7 @@ impl Storage for PlainStorage<'_> {
         stats: &mut S,
     ) -> ItemPointer {
         //OPT: avoid the clone?
-        notice!("Creating SbqNode with labels {:?}", labels);
+        debug1!("Creating plain node with labels {:?}", labels);
         let node = Node::new_for_full_vector(full_vector.to_vec(), labels, heap_pointer, meta_page);
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
@@ -309,9 +309,10 @@ impl Storage for PlainStorage<'_> {
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
         gns: &GraphNeighborStore,
-    ) -> ListSearchNeighbor<Self::LSNPrivateData> {
+    ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>> {
         if !lsr.prepare_insert(index_pointer) {
-            panic!("should not have had an init id already inserted");
+            info!("Node already processed, skipping");
+            return None;
         }
 
         let rn = unsafe { Node::read(self.index, index_pointer, &mut lsr.stats) };
@@ -326,12 +327,12 @@ impl Storage for PlainStorage<'_> {
             ),
         };
 
-        ListSearchNeighbor::new(
+        Some(ListSearchNeighbor::new(
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
             node.get_labels(),
-        )
+        ))
     }
 
     fn visit_lsn(

@@ -6,7 +6,7 @@ use crate::util::{ItemPointer, ReadableBuffer, WritableBuffer};
 use pgrx::PgRelation;
 use std::collections::HashMap;
 
-#[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[derive(Clone, Debug, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 pub struct StartNodes {
     /// Default starting node for the graph.

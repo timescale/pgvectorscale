@@ -8,9 +8,8 @@ pub type Label = u8;
 pub type LabelSet = [Label; MAX_LABELS_PER_NODE];
 pub type LabelVec = Vec<Label>;
 
-pub const INVALID_LABEL: u8 = 255;
+pub const INVALID_LABEL: u8 = 0;
 pub const MAX_LABELS_PER_NODE: usize = 8;
-pub const MAX_LABEL: u8 = 254;
 
 /// Returns true if the two label sets overlap.  Assumes labels are sorted.
 pub fn test_overlap(labels1: &[Label], labels2: &[Label]) -> bool {
@@ -31,6 +30,7 @@ pub fn test_overlap(labels1: &[Label], labels2: &[Label]) -> bool {
     false
 }
 
+/// Convert a label vector to a label set.
 pub fn label_vec_to_set(labels: Option<&[Label]>) -> LabelSet {
     let mut set = [INVALID_LABEL; MAX_LABELS_PER_NODE];
     if let Some(labels) = labels {
@@ -38,6 +38,7 @@ pub fn label_vec_to_set(labels: Option<&[Label]>) -> LabelSet {
         debug_assert!(labels.is_sorted());
 
         for (i, &label) in labels.iter().enumerate() {
+            debug_assert!(label != INVALID_LABEL);
             set[i] = label;
         }
     }

@@ -13,7 +13,6 @@ use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
-use super::sbq::SbqNode;
 use super::start_nodes::StartNodes;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
@@ -101,7 +100,7 @@ pub struct MetaPageHeader {
 
 /// This is metadata about the entire index.
 /// Stored as the first page (offset 2) in the index relation.
-#[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[derive(Clone, Debug, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 pub struct MetaPage {
     /// Magic number from MetaPageHeader for sanity check
@@ -135,6 +134,10 @@ pub struct MetaPage {
 }
 
 impl MetaPage {
+    pub fn debug_dump(&self) {
+        info!("MetaPage = {:?}", self);
+    }
+
     /// Number of dimensions in the vectors being stored.
     /// Has to be the same for all vectors in the graph and cannot change.
     pub fn get_num_dimensions(&self) -> u32 {
@@ -329,7 +332,8 @@ impl MetaPage {
                 Self::overwrite(index, &new_meta);
                 return new_meta;
             }
-            Self::get_meta_from_page(page)
+            let meta = Self::get_meta_from_page(page);
+            meta
         }
     }
 

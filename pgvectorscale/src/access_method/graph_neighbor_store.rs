@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use pgrx::info;
+use pgrx::pg_sys::TM_Result::TM_SelfModified;
+
 use crate::util::{IndexPointer, ItemPointer};
 
 use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
@@ -26,6 +29,16 @@ impl BuilderNeighborCache {
             neighbor_map: BTreeMap::new(),
         }
     }
+
+    pub fn debug_dump(&self) {
+        for (k, v) in self.neighbor_map.iter() {
+            info!("Node: {:?}", k);
+            for n in v {
+                info!("  Neighbor: {:?}", n);
+            }
+        }
+    }
+
     pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
         self.neighbor_map.iter()
     }
@@ -91,6 +104,13 @@ impl GraphNeighborStore {
                 storage.get_neighbors_with_distances_from_disk(neighbors_of, result, stats)
             }
         };
+    }
+
+    pub fn debug_dump(&self) {
+        match self {
+            GraphNeighborStore::Builder(b) => b.debug_dump(),
+            GraphNeighborStore::Disk => info!("GraphNeighborStore::Disk"),
+        }
     }
 
     pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(

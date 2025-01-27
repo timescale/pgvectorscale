@@ -351,17 +351,6 @@ pub extern "C" fn amrescan(
 
     let query = unsafe { LabeledVector::from_scan_key_data(keys, orderbys, &state.meta_page) };
 
-    warning!(
-        "amrescan({:?},\n {:?},\n {},\n {:?},\n {})",
-        scan,
-        keys,
-        nkeys,
-        orderbys,
-        norderbys
-    );
-
-    warning!("Query labels: {:?}", query.labels());
-
     state.initialize(&indexrel, &heaprel, query, search_list_size);
 }
 
