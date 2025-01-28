@@ -2,7 +2,7 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{label_vec_to_set, Label, LabelSet, LabeledVector},
+    labels::{do_labels_overlap, label_vec_to_set, Label, LabelSet, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     stats::{
@@ -15,7 +15,6 @@ use super::{
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
 use pgrx::{
-    debug1, info,
     pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
     PgBox, PgRelation,
 };
@@ -346,10 +345,15 @@ impl SbqSearchDistanceMeasure {
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
         count_ones as f32
     }
+
+    pub fn do_labels_overlap(&self, labels: &[Label]) -> bool {
+        self.query.do_labels_overlap(labels)
+    }
 }
 
 pub struct SbqNodeDistanceMeasure<'a> {
     vec: Vec<SbqVectorElement>,
+    labels: LabelSet,
     storage: &'a SbqSpeedupStorage<'a>,
 }
 
@@ -360,8 +364,10 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         stats: &mut T,
     ) -> Self {
         let cache = &mut storage.qv_cache.borrow_mut();
+        let (vec, labels) = cache.get(index_pointer, storage, stats);
         Self {
-            vec: cache.get(index_pointer, storage, stats).to_vec(),
+            vec: vec.to_vec(),
+            labels: *labels,
             storage,
         }
     }
@@ -374,7 +380,7 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
         stats: &mut T,
     ) -> f32 {
         let cache = &mut self.storage.qv_cache.borrow_mut();
-        let vec1 = cache.get(index_pointer, self.storage, stats);
+        let (vec1, _) = cache.get(index_pointer, self.storage, stats);
         distance_xor_optimized(vec1, self.vec.as_slice()) as f32
     }
 
@@ -383,12 +389,14 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> bool {
-        false // TODO
+        let cache = &mut self.storage.qv_cache.borrow_mut();
+        let (_, labels) = cache.get(index_pointer, self.storage, stats);
+        do_labels_overlap(&self.labels, labels)
     }
 }
 
 struct QuantizedVectorCache {
-    quantized_vector_map: HashMap<ItemPointer, Vec<SbqVectorElement>>,
+    quantized_vector_map: HashMap<ItemPointer, (Vec<SbqVectorElement>, LabelSet)>,
 }
 
 /* should be a LRU cache for quantized vector. For now cheat and never evict
@@ -406,12 +414,14 @@ impl QuantizedVectorCache {
         index_pointer: IndexPointer,
         storage: &SbqSpeedupStorage,
         stats: &mut S,
-    ) -> &[SbqVectorElement] {
-        self.quantized_vector_map
+    ) -> (&[SbqVectorElement], &LabelSet) {
+        let (vec, labels) = self
+            .quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
                 storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
-            })
+            });
+        (vec.as_slice(), labels)
     }
 
     /* Ensure that all these elements are in the cache. If the capacity isn't big enough throw an error.
@@ -503,10 +513,10 @@ impl<'a> SbqSpeedupStorage<'a> {
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> Vec<SbqVectorElement> {
+    ) -> (Vec<SbqVectorElement>, LabelSet) {
         let rn = unsafe { SbqNode::read(self.index, index_pointer, stats) };
         let node = rn.get_archived_node();
-        node.bq_vector.as_slice().to_vec()
+        (node.bq_vector.as_slice().to_vec(), node.labels)
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
@@ -552,13 +562,22 @@ impl<'a> SbqSpeedupStorage<'a> {
                         gns,
                         &mut lsr.stats,
                     );
-                    let labels = node_neighbor.get_labels().clone();
+
+                    // Skip neighbors that have no matching labels with the query
+                    if !lsr
+                        .sdm
+                        .as_ref()
+                        .unwrap()
+                        .do_labels_overlap(node_neighbor.get_labels())
+                    {
+                        continue;
+                    }
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
                         lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
-                        &labels,
+                        node_neighbor.get_labels(),
                     );
 
                     lsr.insert_neighbor(lsn);
@@ -573,12 +592,22 @@ impl<'a> SbqSpeedupStorage<'a> {
                         continue;
                     }
                     let mut cache = self.qv_cache.borrow_mut();
-                    let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
+                    let (bq_vector, _) = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
                     let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
                         bq_vector,
                         gns,
                         &mut lsr.stats,
                     );
+
+                    // Skip neighbors that have no matching labels with the query
+                    if !lsr
+                        .sdm
+                        .as_ref()
+                        .unwrap()
+                        .do_labels_overlap(neighbor.get_labels())
+                    {
+                        continue;
+                    }
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
@@ -732,12 +761,8 @@ impl Storage for SbqSpeedupStorage<'_> {
         index_pointer: ItemPointer,
         gns: &GraphNeighborStore,
     ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>> {
-        info!(
-            "create_lsn_for_start_node, index_pointer={:?}",
-            index_pointer
-        );
         if !lsr.prepare_insert(index_pointer) {
-            info!("already processed this start node");
+            // Already processed this start node
             return None;
         }
 

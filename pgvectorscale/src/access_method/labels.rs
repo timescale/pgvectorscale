@@ -11,14 +11,38 @@ pub type LabelVec = Vec<Label>;
 pub const INVALID_LABEL: u8 = 0;
 pub const MAX_LABELS_PER_NODE: usize = 8;
 
+fn trim(labels: &[Label]) -> &[Label] {
+    let len = labels.len();
+    let mut i = len;
+    while i > 0 && labels[i - 1] == INVALID_LABEL {
+        i -= 1;
+    }
+    &labels[..i]
+}
+
 /// Returns true if the two label sets overlap.  Assumes labels are sorted.
-pub fn test_overlap(labels1: &[Label], labels2: &[Label]) -> bool {
-    debug_assert!(labels1.is_sorted());
-    debug_assert!(labels2.is_sorted());
+pub fn do_labels_overlap(labels1: &[Label], labels2: &[Label]) -> bool {
+    debug_assert!(trim(labels1).is_sorted());
+    debug_assert!(trim(labels2).is_sorted());
+
+    // Special case: empty labels overlap
+    // TODO: confusing
+    if !labels1.is_empty()
+        && !labels2.is_empty()
+        && labels1[0] == INVALID_LABEL
+        && labels2[0] == INVALID_LABEL
+    {
+        return true;
+    }
 
     let mut i = 0;
     let mut j = 0;
-    while i < labels1.len() && j < labels2.len() {
+    while i < labels1.len()
+        && j < labels2.len()
+        && labels1[i] != INVALID_LABEL
+        && labels2[j] != INVALID_LABEL
+    {
+        #[allow(clippy::comparison_chain)]
         if labels1[i] == labels2[j] {
             return true;
         } else if labels1[i] < labels2[j] {
@@ -101,6 +125,13 @@ impl LabeledVector {
     pub fn labels(&self) -> Option<&[Label]> {
         self.labels.as_deref()
     }
+
+    pub fn do_labels_overlap(&self, other: &[Label]) -> bool {
+        match self.labels() {
+            Some(labels) => do_labels_overlap(labels, other),
+            _ => true,
+        }
+    }
 }
 
 /// Test cases for test_overlap
@@ -110,18 +141,18 @@ mod test {
 
     #[test]
     fn test_test_overlap() {
-        assert_eq!(test_overlap(&[], &[]), false);
-        assert_eq!(test_overlap(&[1], &[]), false);
-        assert_eq!(test_overlap(&[], &[1]), false);
-        assert_eq!(test_overlap(&[1], &[1]), true);
-        assert_eq!(test_overlap(&[1], &[2]), false);
-        assert_eq!(test_overlap(&[1, 2], &[2]), true);
-        assert_eq!(test_overlap(&[1, 2], &[3]), false);
-        assert_eq!(test_overlap(&[1, 2], &[2, 3]), true);
-        assert_eq!(test_overlap(&[1, 2], &[3, 4]), false);
-        assert_eq!(test_overlap(&[1, 2], &[2, 3]), true);
-        assert_eq!(test_overlap(&[1, 2], &[2, 3, 4]), true);
-        assert_eq!(test_overlap(&[1, 2], &[3, 4, 5]), false);
+        assert!(!do_labels_overlap(&[], &[]));
+        assert!(!do_labels_overlap(&[1], &[]));
+        assert!(!do_labels_overlap(&[], &[1]));
+        assert!(do_labels_overlap(&[1], &[1]));
+        assert!(!do_labels_overlap(&[1], &[2]));
+        assert!(do_labels_overlap(&[1, 2], &[2]));
+        assert!(!do_labels_overlap(&[1, 2], &[3]));
+        assert!(do_labels_overlap(&[1, 2], &[2, 3]));
+        assert!(!do_labels_overlap(&[1, 2], &[3, 4]));
+        assert!(do_labels_overlap(&[1, 2], &[2, 3]));
+        assert!(do_labels_overlap(&[1, 2], &[2, 3, 4]));
+        assert!(!do_labels_overlap(&[1, 2], &[3, 4, 5]));
     }
 
     /// Test label_vec_to_set

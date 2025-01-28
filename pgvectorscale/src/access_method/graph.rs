@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::{info, PgRelation};
+use pgrx::PgRelation;
 
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -97,8 +97,6 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         gns: &GraphNeighborStore,
         storage: &S,
     ) -> Self {
-        info!("ListSearchResult::new, start_nodes={:?}", start_nodes);
-
         let neigbors = meta_page.get_num_neighbors() as usize;
         let mut res = Self {
             tie_break_item_pointer,
@@ -192,6 +190,7 @@ impl<'a> Graph<'a> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn debug_dump(&self) {
         self.neighbor_store.debug_dump();
     }
@@ -460,19 +459,17 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) {
-        info!(
-            "graph::update_start_nodes, index_pointer={:?}",
-            index_pointer
-        );
         let start_nodes = self.meta_page.get_start_nodes();
         if let Some(start_nodes) = start_nodes {
             if start_nodes.contains(vec.labels()) {
-                info!("graph::update_start_nodes, already contains");
+                // TODO: maybe replace overloaded start nodes
                 return;
             }
         }
 
-        let mut start_nodes = if start_nodes.is_none() {
+        let mut start_nodes = if let Some(start_nodes) = start_nodes {
+            start_nodes.clone()
+        } else {
             //TODO probably better set off of centeroids
             let start_nodes = StartNodes::new(index_pointer);
 
@@ -487,18 +484,12 @@ impl<'a> Graph<'a> {
             );
 
             start_nodes
-        } else {
-            start_nodes.unwrap().clone()
         };
 
         start_nodes.add_node(vec.labels(), index_pointer);
 
         MetaPage::set_start_nodes(index, start_nodes, stats);
         *self.meta_page = MetaPage::fetch(index);
-        info!(
-            "graph::update_start_nodes, updated, meta_page={:?}",
-            self.meta_page
-        );
     }
 
     pub fn insert<S: Storage>(
@@ -509,7 +500,6 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) {
-        info!("graph::insert, index_pointer={:?}", index_pointer);
         self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
         let meta_page = self.get_meta_page();
@@ -517,6 +507,7 @@ impl<'a> Graph<'a> {
         //TODO: make configurable?
         let labels = label_vec_to_set(vec.labels());
 
+        #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,

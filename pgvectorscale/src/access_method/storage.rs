@@ -25,6 +25,9 @@ pub trait NodeDistanceMeasure {
         stats: &mut S,
     ) -> f32;
 
+    // TODO: rework this to avoid reading node twice (once for distance and once for labels)
+    // TODO: apparently this is not needed?
+    #[allow(dead_code)]
     unsafe fn do_labels_overlap<S: StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,

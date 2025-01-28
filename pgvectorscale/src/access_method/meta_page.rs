@@ -332,8 +332,7 @@ impl MetaPage {
                 Self::overwrite(index, &new_meta);
                 return new_meta;
             }
-            let meta = Self::get_meta_from_page(page);
-            meta
+            Self::get_meta_from_page(page)
         }
     }
 

@@ -2,7 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{test_overlap, Label, LabelSet, LabeledVector},
+    labels::{do_labels_overlap, Label, LabelSet, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
@@ -90,6 +90,12 @@ impl PlainDistanceMeasure {
         stats.record_full_distance_comparison();
         (distance_fn)(query, vector)
     }
+
+    pub fn do_labels_overlap(&self, labels: &[Label]) -> bool {
+        match self {
+            PlainDistanceMeasure::Full(query) => query.do_labels_overlap(labels),
+        }
+    }
 }
 
 /* This is only applicable to plain, so keep here not in storage_common */
@@ -139,16 +145,6 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
         (self.storage.get_distance_function())(vec1, vec2)
     }
 
-    // unsafe fn get_labels<S: StatsNodeRead>(
-    //     &self,
-    //     index_pointer: IndexPointer,
-    //     stats: &mut S,
-    // ) -> &LabelSet {
-    //     let rn = Node::read(self.storage.index, index_pointer, stats);
-    //     let node = rn.get_archived_node();
-    //     node.get_labels()
-    // }
-
     unsafe fn do_labels_overlap<S: StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,
@@ -156,7 +152,7 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
     ) -> bool {
         let rn = Node::read(self.storage.index, index_pointer, stats);
         let node = rn.get_archived_node();
-        test_overlap(
+        do_labels_overlap(
             node.get_labels(),
             self.readable_node.get_archived_node().get_labels(),
         )
@@ -286,10 +282,11 @@ impl Storage for PlainStorage<'_> {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
         // Copy neighbors and labels before giving ownership of `rn`` to the distance state
         let neighbors: Vec<_> = rn.get_archived_node().iter_neighbors().collect();
+        #[allow(clippy::map_clone)]
         let labels: Vec<LabelSet> = rn
             .get_archived_node()
             .iter_neighbor_labels()
-            .map(|x| x.clone())
+            .map(|x| *x)
             .collect();
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
         for (n, label) in neighbors.into_iter().zip(labels) {
@@ -353,6 +350,16 @@ impl Storage for PlainStorage<'_> {
             let rn_neighbor =
                 unsafe { Node::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
             let node_neighbor = rn_neighbor.get_archived_node();
+
+            // Skip neighbors that have no matching labels with the query
+            if !lsr
+                .sdm
+                .as_ref()
+                .unwrap()
+                .do_labels_overlap(node_neighbor.get_labels())
+            {
+                continue;
+            }
 
             let distance = match lsr.sdm.as_ref().unwrap() {
                 PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(

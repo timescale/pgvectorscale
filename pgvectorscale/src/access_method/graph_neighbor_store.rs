@@ -1,7 +1,6 @@
 use std::collections::BTreeMap;
 
 use pgrx::info;
-use pgrx::pg_sys::TM_Result::TM_SelfModified;
 
 use crate::util::{IndexPointer, ItemPointer};
 
@@ -30,6 +29,7 @@ impl BuilderNeighborCache {
         }
     }
 
+    #[allow(dead_code)]
     pub fn debug_dump(&self) {
         for (k, v) in self.neighbor_map.iter() {
             info!("Node: {:?}", k);
@@ -106,6 +106,7 @@ impl GraphNeighborStore {
         };
     }
 
+    #[allow(dead_code)]
     pub fn debug_dump(&self) {
         match self {
             GraphNeighborStore::Builder(b) => b.debug_dump(),
