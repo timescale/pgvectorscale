@@ -2,7 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{do_labels_overlap, Label, LabelSet, LabeledVector},
+    labels::{Label, LabelSet, LabelSetView, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
@@ -91,9 +91,9 @@ impl PlainDistanceMeasure {
         (distance_fn)(query, vector)
     }
 
-    pub fn do_labels_overlap(&self, labels: &[Label]) -> bool {
+    pub fn labels(&self) -> &LabelSet {
         match self {
-            PlainDistanceMeasure::Full(query) => query.do_labels_overlap(labels),
+            PlainDistanceMeasure::Full(query) => query.labels(),
         }
     }
 }
@@ -150,12 +150,11 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> bool {
-        let rn = Node::read(self.storage.index, index_pointer, stats);
-        let node = rn.get_archived_node();
-        do_labels_overlap(
-            node.get_labels(),
-            self.readable_node.get_archived_node().get_labels(),
-        )
+        let rn1 = Node::read(self.storage.index, index_pointer, stats);
+        let rn2 = &self.readable_node;
+        let node1 = rn1.get_archived_node();
+        let node2 = rn2.get_archived_node();
+        node1.get_labels().matches(node2.get_labels())
     }
 }
 
@@ -199,7 +198,7 @@ impl Storage for PlainStorage<'_> {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<&[Label]>,
+        labels: LabelSet,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -280,21 +279,20 @@ impl Storage for PlainStorage<'_> {
         stats: &mut S,
     ) {
         let rn = unsafe { Node::read(self.index, neighbors_of, stats) };
-        // Copy neighbors and labels before giving ownership of `rn`` to the distance state
+        // Copy neighbors before giving ownership of `rn`` to the distance state
         let neighbors: Vec<_> = rn.get_archived_node().iter_neighbors().collect();
-        #[allow(clippy::map_clone)]
-        let labels: Vec<LabelSet> = rn
-            .get_archived_node()
-            .iter_neighbor_labels()
-            .map(|x| *x)
-            .collect();
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
-        for (n, label) in neighbors.into_iter().zip(labels) {
+        for n in neighbors.into_iter() {
+            // TODO: we are reading node twice
+            let labels = unsafe { Node::read(self.index, n, stats) }
+                .get_archived_node()
+                .get_labels()
+                .into();
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist, neighbors_of, n),
-                &label,
+                labels,
             ))
         }
     }
@@ -328,7 +326,7 @@ impl Storage for PlainStorage<'_> {
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
-            node.get_labels(),
+            node.get_labels().into(),
         ))
     }
 
@@ -356,7 +354,8 @@ impl Storage for PlainStorage<'_> {
                 .sdm
                 .as_ref()
                 .unwrap()
-                .do_labels_overlap(node_neighbor.get_labels())
+                .labels()
+                .matches(node_neighbor.get_labels())
             {
                 continue;
             }
@@ -373,7 +372,7 @@ impl Storage for PlainStorage<'_> {
                 neighbor_index_pointer,
                 lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                 PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
-                node_neighbor.get_labels(),
+                node_neighbor.get_labels().into(),
             );
 
             lsr.insert_neighbor(lsn);

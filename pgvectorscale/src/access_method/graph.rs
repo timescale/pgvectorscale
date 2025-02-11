@@ -8,7 +8,7 @@ use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
-use super::labels::{label_vec_to_set, Label, LabelSet, LabeledVector};
+use super::labels::{LabelSet, LabeledVector};
 use super::meta_page::MetaPage;
 use super::neighbor_with_distance::{Distance, DistanceWithTieBreak, NeighborWithDistance};
 use super::start_nodes::StartNodes;
@@ -48,13 +48,13 @@ impl<PD> ListSearchNeighbor<PD> {
         index_pointer: IndexPointer,
         distance_with_tie_break: DistanceWithTieBreak,
         private_data: PD,
-        labels: &[Label],
+        labels: LabelSet,
     ) -> Self {
         Self {
             index_pointer,
             private_data,
             distance_with_tie_break,
-            labels: labels.try_into().unwrap(),
+            labels,
         }
     }
 
@@ -351,7 +351,7 @@ impl<'a> Graph<'a> {
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
                         list_search_entry.distance_with_tie_break.clone(),
-                        list_search_entry.get_labels(),
+                        list_search_entry.get_labels().clone(),
                     ));
                 }
             }

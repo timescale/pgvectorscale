@@ -8,7 +8,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{Label, LabeledVector},
+    labels::{LabelSet, LabeledVector},
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
     stats::{
@@ -25,9 +25,6 @@ pub trait NodeDistanceMeasure {
         stats: &mut S,
     ) -> f32;
 
-    // TODO: rework this to avoid reading node twice (once for distance and once for labels)
-    // TODO: apparently this is not needed?
-    #[allow(dead_code)]
     unsafe fn do_labels_overlap<S: StatsNodeRead>(
         &self,
         index_pointer: IndexPointer,
@@ -58,7 +55,7 @@ pub trait Storage {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<&[Label]>,
+        labels: LabelSet,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,

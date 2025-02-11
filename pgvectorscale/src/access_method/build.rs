@@ -1199,4 +1199,94 @@ pub mod tests {
         }
         Ok(())
     }
+
+    #[pg_test]
+    pub unsafe fn test_labeled_index() -> spi::Result<()> {
+        let index_options = "num_neighbors=10, search_list_size=10";
+        let expected_cnt = 1000;
+        let dimension = 128;
+
+        Spi::run(&format!(
+            "CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimension}),
+                labels integer[]
+            );
+
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding, labels) WITH ({index_options});
+
+            select setseed(0.5);
+
+            -- generate {expected_cnt} vectors along with labels
+            INSERT INTO test_data (id, embedding, labels)
+            SELECT
+                gs AS id,
+                ARRAY[
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8
+                ]::vector(128),
+                ARRAY[
+                    (floor(random() * 16 + 1))::int,
+                    (floor(random() * 16 + 1))::int
+                ]
+            FROM generate_series(1, 300) gs;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimension}));"))?;
+
+        verify_index_accuracy(expected_cnt, dimension)?;
+
+        Spi::run("DROP TABLE test_data CASCADE;")?;
+        Ok(())
+    }
 }

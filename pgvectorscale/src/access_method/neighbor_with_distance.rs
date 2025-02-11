@@ -2,7 +2,7 @@ use std::{cell::OnceCell, cmp::Ordering};
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::labels::{Label, LabelSet};
+use super::labels::LabelSet;
 
 //TODO is this right?
 pub type Distance = f32;
@@ -105,12 +105,12 @@ impl NeighborWithDistance {
     pub fn new(
         neighbor_index_pointer: ItemPointer,
         distance: DistanceWithTieBreak,
-        labels: &[Label],
+        labels: LabelSet,
     ) -> Self {
         Self {
             index_pointer: neighbor_index_pointer,
             distance,
-            labels: labels.try_into().unwrap(),
+            labels,
         }
     }
 

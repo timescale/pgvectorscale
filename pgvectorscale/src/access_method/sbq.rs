@@ -2,7 +2,7 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{do_labels_overlap, label_vec_to_set, Label, LabelSet, LabeledVector},
+    labels::{ArchivedLabelSet, LabelSet, LabelSetView, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     stats::{
@@ -345,10 +345,6 @@ impl SbqSearchDistanceMeasure {
         // one other check for distance(a,a), xor=0, count_ones=0, distance=0
         count_ones as f32
     }
-
-    pub fn do_labels_overlap(&self, labels: &[Label]) -> bool {
-        self.query.do_labels_overlap(labels)
-    }
 }
 
 pub struct SbqNodeDistanceMeasure<'a> {
@@ -367,7 +363,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         let (vec, labels) = cache.get(index_pointer, storage, stats);
         Self {
             vec: vec.to_vec(),
-            labels: *labels,
+            labels: labels.clone(),
             storage,
         }
     }
@@ -391,7 +387,7 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
     ) -> bool {
         let cache = &mut self.storage.qv_cache.borrow_mut();
         let (_, labels) = cache.get(index_pointer, self.storage, stats);
-        do_labels_overlap(&self.labels, labels)
+        labels.matches(&self.labels)
     }
 }
 
@@ -516,7 +512,7 @@ impl<'a> SbqSpeedupStorage<'a> {
     ) -> (Vec<SbqVectorElement>, LabelSet) {
         let rn = unsafe { SbqNode::read(self.index, index_pointer, stats) };
         let node = rn.get_archived_node();
-        (node.bq_vector.as_slice().to_vec(), node.labels)
+        (node.bq_vector.as_slice().to_vec(), (&node.labels).into())
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
@@ -568,7 +564,9 @@ impl<'a> SbqSpeedupStorage<'a> {
                         .sdm
                         .as_ref()
                         .unwrap()
-                        .do_labels_overlap(node_neighbor.get_labels())
+                        .query
+                        .labels()
+                        .matches(node_neighbor.get_labels())
                     {
                         continue;
                     }
@@ -577,7 +575,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                         neighbor_index_pointer,
                         lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
-                        node_neighbor.get_labels(),
+                        node_neighbor.get_labels().into(),
                     );
 
                     lsr.insert_neighbor(lsn);
@@ -604,7 +602,9 @@ impl<'a> SbqSpeedupStorage<'a> {
                         .sdm
                         .as_ref()
                         .unwrap()
-                        .do_labels_overlap(neighbor.get_labels())
+                        .query
+                        .labels()
+                        .matches(neighbor.get_labels())
                     {
                         continue;
                     }
@@ -613,7 +613,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                         neighbor_index_pointer,
                         lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
-                        neighbor.get_labels(),
+                        neighbor.get_labels().clone(),
                     );
 
                     lsr.insert_neighbor(lsn);
@@ -641,7 +641,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<&[Label]>,
+        labels: LabelSet,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -748,7 +748,7 @@ impl Storage for SbqSpeedupStorage<'_> {
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist as f32, neighbors_of, n),
-                arch.get_labels(),
+                arch.get_labels().into(),
             ))
         }
     }
@@ -779,7 +779,7 @@ impl Storage for SbqSpeedupStorage<'_> {
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PhantomData::<bool>,
-            node.get_labels(),
+            node.get_labels().into(),
         ))
     }
 
@@ -850,7 +850,7 @@ impl SbqNode {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[SbqVectorElement],
-        labels: Option<&[Label]>,
+        labels: LabelSet,
     ) -> Self {
         Self::new(
             heap_pointer,
@@ -866,7 +866,7 @@ impl SbqNode {
         num_neighbors: usize,
         _num_dimensions: usize,
         bq_vector: &[SbqVectorElement],
-        labels: Option<&[Label]>,
+        labels: LabelSet,
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
         let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
@@ -878,7 +878,7 @@ impl SbqNode {
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers,
             _neighbor_vectors: vec![],
-            labels: label_vec_to_set(labels),
+            labels,
         }
     }
 
@@ -886,7 +886,7 @@ impl SbqNode {
         let v: Vec<SbqVectorElement> =
             vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(hp, num_neighbors, num_dimensions, &v, None);
+        let n = Self::new(hp, num_neighbors, num_dimensions, &v, LabelSet::new());
         n.serialize_to_vec().len()
     }
 
@@ -963,7 +963,7 @@ impl ArchivedSbqNode {
             .map(|ip| ip.deserialize_item_pointer())
     }
 
-    pub fn get_labels(&self) -> &LabelSet {
+    pub fn get_labels(&self) -> &ArchivedLabelSet {
         &self.labels
     }
 }
