@@ -17,19 +17,13 @@ use super::{
     },
 };
 
-/// NodeDistanceMeasure keeps the state to make distance and label comparisons between two nodes.
+/// NodeDistanceMeasure keeps the state to make distance comparisons between two nodes.
 pub trait NodeDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> f32;
-
-    unsafe fn do_labels_overlap<S: StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> bool;
 }
 
 pub trait ArchivedData {

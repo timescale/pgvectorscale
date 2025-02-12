@@ -18,22 +18,12 @@ pub struct TSVIndexOptions {
     pub num_dimensions: u32,
     pub max_alpha: f64,
     pub bq_num_bits_per_dimension: u32,
-    pub max_label: i32,
-    pub labels_per_vector: i32,
 }
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
 pub const NUM_DIMENSIONS_DEFAULT_SENTINEL: u32 = 0;
 pub const SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL: u32 = 0;
 const DEFAULT_MAX_ALPHA: f64 = 1.2;
-
-const MAX_LABEL_DEFAULT: i32 = 255;
-const MAX_LABEL_MIN: i32 = 1;
-const MAX_LABEL_MAX: i32 = 32767;
-
-const LABELS_PER_VECTOR_DEFAULT: i32 = 8;
-const LABELS_PER_VECTOR_MIN: i32 = 1;
-const LABELS_PER_VECTOR_MAX: i32 = 32;
 
 impl TSVIndexOptions {
     //note: this should only be used when building a new index. The options aren't really versioned.
@@ -50,8 +40,6 @@ impl TSVIndexOptions {
             ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
             ops.bq_num_bits_per_dimension = SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
-            ops.max_label = MAX_LABEL_DEFAULT;
-            ops.labels_per_vector = LABELS_PER_VECTOR_DEFAULT;
             unsafe {
                 set_varsize_4b(
                     ops.as_ptr().cast(),
@@ -116,7 +104,7 @@ pub unsafe extern "C" fn amoptions(
     validate: bool,
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
-    let tab: [pg_sys::relopt_parse_elt; 8] = [
+    let tab: [pg_sys::relopt_parse_elt; 6] = [
         pg_sys::relopt_parse_elt {
             optname: "storage_layout".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
@@ -146,16 +134,6 @@ pub unsafe extern "C" fn amoptions(
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "max_label_value".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, max_label) as i32,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "labels_per_vector".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, labels_per_vector) as i32,
         },
     ];
 
@@ -245,26 +223,6 @@ pub unsafe fn init() {
         0,
         0,
         5000,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
-
-    pg_sys::add_int_reloption(
-        RELOPT_KIND_TSV,
-        "label_max".as_pg_cstr(),
-        "Maximum value allowed for a label".as_pg_cstr(),
-        MAX_LABEL_DEFAULT,
-        MAX_LABEL_MIN,
-        MAX_LABEL_MAX,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
-
-    pg_sys::add_int_reloption(
-        RELOPT_KIND_TSV,
-        "labels_per_vector".as_pg_cstr(),
-        "Number of labels per vector".as_pg_cstr(),
-        LABELS_PER_VECTOR_DEFAULT,
-        LABELS_PER_VECTOR_MIN,
-        LABELS_PER_VECTOR_MAX,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
 }
@@ -392,25 +350,6 @@ mod tests {
         assert_eq!(options.get_storage_type(), StorageType::SbqCompression);
         assert_eq!(options.num_dimensions, 20);
         assert_eq!(options.bq_num_bits_per_dimension, 5);
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_index_options_labels() -> spi::Result<()> {
-        Spi::run(
-            "CREATE TABLE test(encoding vector(3), labels integer[]);
-        CREATE INDEX idxtest
-                  ON test
-               USING diskann(encoding, labels)
-               WITH (max_label=1024, labels_per_vector=1);",
-        )?;
-
-        let index_oid =
-            Spi::get_one::<pg_sys::Oid>("SELECT 'idxtest'::regclass::oid")?.expect("oid was null");
-        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
-        let options = TSVIndexOptions::from_relation(&indexrel);
-        assert_eq!(options.max_label, 1024);
-        assert_eq!(options.labels_per_vector, 1);
         Ok(())
     }
 }

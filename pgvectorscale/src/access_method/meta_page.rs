@@ -81,8 +81,6 @@ impl MetaPageV1 {
             ))),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels: false,
-            max_label: 0,
-            labels_per_vector: 0,
         }
     }
 }
@@ -133,10 +131,6 @@ pub struct MetaPage {
     quantizer_metadata: ItemPointer,
     /// Whether the index has labels
     has_labels: bool,
-    /// Maximum value of a label
-    max_label: i32,
-    /// Maximum labels per vector
-    labels_per_vector: i32,
 }
 
 impl MetaPage {
@@ -193,15 +187,7 @@ impl MetaPage {
     }
 
     pub fn has_labels(&self) -> bool {
-        self.get_labels_per_vector() > 0
-    }
-
-    pub fn get_max_label(&self) -> i32 {
-        self.max_label
-    }
-
-    pub fn get_labels_per_vector(&self) -> i32 {
-        self.labels_per_vector
+        self.has_labels
     }
 
     pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
@@ -268,8 +254,6 @@ impl MetaPage {
         }
 
         let has_labels = get_num_index_attributes(index) == 2;
-        let labels_per_vector = if has_labels { opt.labels_per_vector } else { 0 };
-        let max_label = if has_labels { opt.max_label } else { 0 };
 
         let meta = MetaPage {
             magic_number: TSV_MAGIC_NUMBER,
@@ -286,8 +270,6 @@ impl MetaPage {
             start_nodes: None,
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels,
-            max_label,
-            labels_per_vector,
         };
         let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
         meta.write_to_page(page);
@@ -380,6 +362,7 @@ impl MetaPage {
         start_nodes: StartNodes,
         stats: &mut S,
     ) {
+        warning!("setting start nodes to {:?}", start_nodes);
         let mut meta = Self::fetch(index);
         meta.start_nodes = Some(start_nodes);
 

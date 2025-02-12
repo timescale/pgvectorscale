@@ -349,7 +349,7 @@ impl SbqSearchDistanceMeasure {
 
 pub struct SbqNodeDistanceMeasure<'a> {
     vec: Vec<SbqVectorElement>,
-    labels: LabelSet,
+    _labels: LabelSet,
     storage: &'a SbqSpeedupStorage<'a>,
 }
 
@@ -363,7 +363,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         let (vec, labels) = cache.get(index_pointer, storage, stats);
         Self {
             vec: vec.to_vec(),
-            labels: labels.clone(),
+            _labels: labels.clone(),
             storage,
         }
     }
@@ -378,16 +378,6 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
         let cache = &mut self.storage.qv_cache.borrow_mut();
         let (vec1, _) = cache.get(index_pointer, self.storage, stats);
         distance_xor_optimized(vec1, self.vec.as_slice()) as f32
-    }
-
-    unsafe fn do_labels_overlap<S: StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> bool {
-        let cache = &mut self.storage.qv_cache.borrow_mut();
-        let (_, labels) = cache.get(index_pointer, self.storage, stats);
-        labels.matches(&self.labels)
     }
 }
 
@@ -886,7 +876,7 @@ impl SbqNode {
         let v: Vec<SbqVectorElement> =
             vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(hp, num_neighbors, num_dimensions, &v, LabelSet::new());
+        let n = Self::new(hp, num_neighbors, num_dimensions, &v, LabelSet::default());
         n.serialize_to_vec().len()
     }
 

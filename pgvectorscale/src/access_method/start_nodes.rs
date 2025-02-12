@@ -4,43 +4,53 @@ use rkyv::{Archive, Deserialize, Serialize};
 use crate::access_method::labels::{Label, LabelSet};
 use crate::util::{ItemPointer, ReadableBuffer, WritableBuffer};
 use pgrx::PgRelation;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 use super::labels::LabelSetView;
 
-const OVERLOAD_THRESHHOLD: usize = 10;
+const OVERLOAD_THRESHHOLD: usize = 20;
 
 /// Start nodes for the graph.  For unlabeled vectorsets, this is a single node.  For
 /// labeled vectorsets, this is a map of labels to nodes.
-#[derive(Clone, Debug, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[derive(Clone, Debug, PartialEq, Eq, Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
 pub struct StartNodes {
     /// Default starting node for the graph.
     default_node: ItemPointer,
     /// Labeled starting nodes for the graph
-    labeled_nodes: HashMap<Label, ItemPointer>,
+    labeled_nodes: BTreeMap<Label, ItemPointer>,
     /// Load for a start node
-    node_count: HashMap<ItemPointer, usize>,
+    node_count: BTreeMap<ItemPointer, usize>,
 }
 
 impl StartNodes {
     pub fn new(default_node: ItemPointer) -> Self {
         Self {
             default_node,
-            labeled_nodes: HashMap::new(),
-            node_count: HashMap::new(),
+            labeled_nodes: BTreeMap::new(),
+            node_count: BTreeMap::new(),
         }
     }
 
-    pub fn is_overloaded(&self, label: ItemPointer) -> bool {
-        self.node_count
-            .get(&label)
-            .is_some_and(|count| *count > OVERLOAD_THRESHHOLD)
+    pub fn is_overloaded(&self, label: Label) -> bool {
+        let ip = self.labeled_nodes.get(&label);
+
+        if let Some(ip) = ip {
+            self.node_count
+                .get(ip)
+                .is_some_and(|count| *count > OVERLOAD_THRESHHOLD)
+        } else {
+            false
+        }
     }
 
-    pub fn insert(&mut self, label: Label, node: ItemPointer) {
-        self.labeled_nodes.insert(label, node);
+    pub fn upsert(&mut self, label: Label, node: ItemPointer) -> Option<ItemPointer> {
+        let old_node = self.labeled_nodes.insert(label, node);
+        if let Some(old_node) = old_node {
+            *self.node_count.entry(old_node).or_insert(0) -= 1;
+        }
         *self.node_count.entry(node).or_insert(0) += 1;
+        old_node
     }
 
     pub fn count_for_node(&self, node: ItemPointer) -> usize {
@@ -49,6 +59,31 @@ impl StartNodes {
 
     pub fn default_node(&self) -> ItemPointer {
         self.default_node
+    }
+
+    pub fn get_for_node(&self, labels: &LabelSet) -> Vec<ItemPointer> {
+        if labels.is_empty() {
+            vec![self.default_node]
+        } else {
+            labels
+                .iter()
+                .filter_map(|label| self.labeled_nodes.get(label).copied())
+                .collect()
+        }
+    }
+
+    pub fn contains(&self, label: Label) -> bool {
+        self.labeled_nodes.contains_key(&label)
+    }
+
+    pub fn contains_all(&self, labels: &LabelSet) -> bool {
+        labels
+            .iter()
+            .all(|label| self.labeled_nodes.contains_key(label))
+    }
+
+    pub fn contains_overloaded(&self, labels: &LabelSet) -> bool {
+        labels.iter().any(|label| self.is_overloaded(*label))
     }
 
     pub fn node_for_label(&self, label: Label) -> Option<ItemPointer> {

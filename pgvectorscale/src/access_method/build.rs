@@ -234,7 +234,7 @@ unsafe fn insert_storage<S: Storage>(
     let mut tape = Tape::resume(index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vec.vec().to_index_slice(),
-        vec.labels(),
+        vec.labels().clone(),
         heap_pointer,
         meta_page,
         &mut tape,
@@ -514,7 +514,7 @@ fn build_callback_internal<S: Storage>(
 
     let index_pointer = storage.create_node(
         vec.vec().to_index_slice(),
-        vec.labels(),
+        vec.labels().clone(),
         heap_pointer,
         &state.meta_page,
         &mut state.tape,

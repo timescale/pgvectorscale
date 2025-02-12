@@ -2,7 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{Label, LabelSet, LabelSetView, LabeledVector},
+    labels::{LabelSet, LabelSetView, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedNode, Node, ReadableNode},
@@ -143,18 +143,6 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
         let vec1 = node1.vector.as_slice();
         let vec2 = node2.vector.as_slice();
         (self.storage.get_distance_function())(vec1, vec2)
-    }
-
-    unsafe fn do_labels_overlap<S: StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> bool {
-        let rn1 = Node::read(self.storage.index, index_pointer, stats);
-        let rn2 = &self.readable_node;
-        let node1 = rn1.get_archived_node();
-        let node2 = rn2.get_archived_node();
-        node1.get_labels().matches(node2.get_labels())
     }
 }
 

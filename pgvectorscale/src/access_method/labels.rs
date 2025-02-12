@@ -6,24 +6,16 @@ use pgrx::{
 use rkyv::{Archive, Deserialize, Serialize};
 
 pub type Label = u16;
-pub const INVALID_LABEL: Label = u16::MAX;
 
 /// LabelSet is a set of labels.  It is stored as a sorted array of labels.
 /// LabelSets can be of varying lengths, but once constructed, they are immutable.
 ///
 /// Note: indices that do not have labels are represented as an empty labelset.
-#[derive(Archive, Deserialize, Serialize, Debug, Clone)]
+#[derive(Archive, Deserialize, Serialize, Debug, Clone, Default)]
 #[archive(check_bytes)]
 #[repr(C)]
 pub struct LabelSet {
     labels: Vec<Label>,
-}
-
-impl LabelSet {
-    /// Construct an empty label set
-    pub fn new() -> Self {
-        Self { labels: Vec::new() }
-    }
 }
 
 impl From<LabelSet> for Vec<Label> {
@@ -34,6 +26,16 @@ impl From<LabelSet> for Vec<Label> {
 
 impl From<Vec<Label>> for LabelSet {
     fn from(mut labels: Vec<Label>) -> Self {
+        labels.sort_unstable();
+        labels.dedup();
+
+        Self { labels }
+    }
+}
+
+impl From<&Vec<Label>> for LabelSet {
+    fn from(labels: &Vec<Label>) -> Self {
+        let mut labels = labels.clone();
         labels.sort_unstable();
         labels.dedup();
 
@@ -86,13 +88,12 @@ pub trait LabelSetView {
 
         let mut i = 0;
         let mut j = 0;
+
         while i < a.len() && j < b.len() {
-            if a[i] == b[j] {
-                return true;
-            } else if a[i] < b[j] {
-                i += 1;
-            } else {
-                j += 1;
+            match a[i].cmp(&b[j]) {
+                std::cmp::Ordering::Equal => return true,
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
             }
         }
         false
@@ -106,23 +107,6 @@ pub trait LabelSetView {
 impl LabelSetView for LabelSet {
     fn labels(&self) -> &[Label] {
         &self.labels
-    }
-}
-
-impl ArchivedLabelSet {
-    pub fn matches(&self, other: &ArchivedLabelSet) -> bool {
-        let mut i = 0;
-        let mut j = 0;
-        while i < self.labels.len() && j < other.labels.len() {
-            if self.labels[i] == other.labels[j] {
-                return true;
-            } else if self.labels[i] < other.labels[j] {
-                i += 1;
-            } else {
-                j += 1;
-            }
-        }
-        false
     }
 }
 
@@ -157,10 +141,10 @@ impl LabeledVector {
             if let Some(arr) = arr {
                 arr.into_iter().flatten().map(|x| x as Label).collect()
             } else {
-                LabelSet::new()
+                LabelSet::default()
             }
         } else {
-            LabelSet::new()
+            LabelSet::default()
         };
 
         Some(Self::new(vec, labels))

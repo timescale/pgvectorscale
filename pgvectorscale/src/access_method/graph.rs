@@ -2,13 +2,13 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::PgRelation;
+use pgrx::{warning, PgRelation};
 
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
 use super::graph_neighbor_store::GraphNeighborStore;
-use super::labels::{LabelSet, LabeledVector};
+use super::labels::{LabelSet, LabelSetView, LabeledVector};
 use super::meta_page::MetaPage;
 use super::neighbor_with_distance::{Distance, DistanceWithTieBreak, NeighborWithDistance};
 use super::start_nodes::StartNodes;
@@ -458,20 +458,24 @@ impl<'a> Graph<'a> {
         vec: &LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
-    ) {
+    ) -> Vec<IndexPointer> {
         let start_nodes = self.meta_page.get_start_nodes();
+
         if let Some(start_nodes) = start_nodes {
-            if start_nodes.contains(vec.labels()) {
-                // TODO: maybe replace overloaded start nodes
-                return;
+            if start_nodes.contains_all(vec.labels())
+                && !start_nodes.contains_overloaded(vec.labels())
+            {
+                return vec![];
             }
         }
 
         let mut start_nodes = if let Some(start_nodes) = start_nodes {
             start_nodes.clone()
         } else {
-            //TODO probably better set off of centeroids
+            // TODO probably better set off of centroids
             let start_nodes = StartNodes::new(index_pointer);
+
+            warning!("Creating start nodes for the first time");
 
             self.neighbor_store.set_neighbors(
                 storage,
@@ -486,10 +490,21 @@ impl<'a> Graph<'a> {
             start_nodes
         };
 
-        start_nodes.add_node(vec.labels(), index_pointer);
+        let mut overloaded = vec![];
+        for label in vec.labels().iter() {
+            if start_nodes.is_overloaded(*label) {
+                // Replace the overloaded start node for the label with this one
+                let pip = start_nodes.upsert(*label, index_pointer).unwrap();
+                overloaded.push(pip);
+            } else if !start_nodes.contains(*label) {
+                start_nodes.upsert(*label, index_pointer);
+            }
+        }
 
         MetaPage::set_start_nodes(index, start_nodes, stats);
         *self.meta_page = MetaPage::fetch(index);
+
+        overloaded
     }
 
     pub fn insert<S: Storage>(
@@ -503,9 +518,7 @@ impl<'a> Graph<'a> {
         self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
         let meta_page = self.get_meta_page();
-
-        //TODO: make configurable?
-        let labels = label_vec_to_set(vec.labels());
+        let labels = vec.labels().clone();
 
         #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
@@ -563,7 +576,7 @@ impl<'a> Graph<'a> {
         let new = vec![NeighborWithDistance::new(
             to,
             distance_with_tie_break.clone(),
-            to_labels,
+            to_labels.clone(),
         )];
         let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
         n.contains(&new[0])
