@@ -48,7 +48,7 @@ impl DistanceWithTieBreak {
             .get_or_init(|| self.from.ip_distance(self.to))
     }
 
-    fn get_distance(&self) -> Distance {
+    pub fn get_distance(&self) -> Distance {
         self.distance
     }
 

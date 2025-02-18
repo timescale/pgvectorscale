@@ -99,7 +99,7 @@ impl SbqMeans {
             return quantizer;
         }
         let qip = meta_page
-            .get_quantizer_metadata_pointer()
+            .get_quantizer_metadata_ptr()
             .unwrap_or_else(|| pgrx::error!("No SBQ pointer found in meta page"));
 
         let page = ReadablePage::read(index, qip.block_number);
@@ -433,6 +433,7 @@ pub struct SbqSpeedupStorage<'a> {
     heap_attr: AttrNumber,
     _label_attr: Option<AttrNumber>,
     qv_cache: RefCell<QuantizedVectorCache>,
+    has_labels: bool,
 }
 
 impl<'a> SbqSpeedupStorage<'a> {
@@ -449,6 +450,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_attr: get_index_vector_attribute(index),
             _label_attr: get_index_label_attribute(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            has_labels: meta_page.has_labels(),
         }
     }
 
@@ -474,6 +476,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_attr: get_index_vector_attribute(index_relation),
             _label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            has_labels: meta_page.has_labels(),
         }
     }
 
@@ -492,6 +495,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_attr: get_index_vector_attribute(index_relation),
             _label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            has_labels: meta_page.has_labels(),
         }
     }
 
@@ -550,14 +554,20 @@ impl<'a> SbqSpeedupStorage<'a> {
                     );
 
                     // Skip neighbors that have no matching labels with the query
-                    if !lsr
-                        .sdm
-                        .as_ref()
-                        .unwrap()
-                        .query
-                        .labels()
-                        .matches(node_neighbor.get_labels())
+                    if self.has_labels
+                        && !lsr
+                            .sdm
+                            .as_ref()
+                            .unwrap()
+                            .query
+                            .labels()
+                            .matches(node_neighbor.get_labels())
                     {
+                        // debug2!(
+                        //     "Skipping non-matching labels: {:?} {:?}",
+                        //     lsr.sdm.as_ref().unwrap().query.labels(),
+                        //     node_neighbor.get_labels()
+                        // );
                         continue;
                     }
 
@@ -588,14 +598,20 @@ impl<'a> SbqSpeedupStorage<'a> {
                     );
 
                     // Skip neighbors that have no matching labels with the query
-                    if !lsr
-                        .sdm
-                        .as_ref()
-                        .unwrap()
-                        .query
-                        .labels()
-                        .matches(neighbor.get_labels())
+                    if self.has_labels
+                        && !lsr
+                            .sdm
+                            .as_ref()
+                            .unwrap()
+                            .query
+                            .labels()
+                            .matches(neighbor.get_labels())
                     {
+                        // debug2!(
+                        //     "Skipping non-matching labels: {:?} {:?}",
+                        //     lsr.sdm.as_ref().unwrap().query.labels(),
+                        //     neighbor.get_labels()
+                        // );
                         continue;
                     }
 
@@ -821,6 +837,35 @@ impl Storage for SbqSpeedupStorage<'_> {
     fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
     }
+
+    // fn debug_print_graph(&self, meta_page: &MetaPage) {
+    //     let mut stats = WriteStats::new();
+    //     if let Some(start_nodes) = meta_page.get_start_nodes() {
+    //         // TODO all start nodes
+    //         let start_node = start_nodes.default_node();
+    //         let mut visited = HashMap::new();
+    //         let mut to_visit = vec![start_node];
+    //         while let Some(node) = to_visit.pop() {
+    //             if visited.contains_key(&node) {
+    //                 continue;
+    //             }
+    //             visited.insert(node, true);
+
+    //             let rn = unsafe { SbqNode::read(self.index, node, &mut stats) };
+    //             let sbq_node = rn.get_archived_node();
+    //             debug1!(
+    //                 "Node {:?} with labels {:?} has {} neighbors:",
+    //                 node,
+    //                 sbq_node.get_labels(),
+    //                 sbq_node.num_neighbors()
+    //             );
+    //             for n in sbq_node.iter_neighbors() {
+    //                 debug1!("  {:?}", n);
+    //                 to_visit.push(n);
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 use pgvectorscale_derive::{Readable, Writeable};

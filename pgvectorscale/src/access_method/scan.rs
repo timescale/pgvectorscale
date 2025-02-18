@@ -61,8 +61,12 @@ impl TSVScanState {
         let store_type = match storage {
             StorageType::Plain => {
                 let stats = QuantizerStats::new();
-                let bq =
-                    PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
+                let bq = PlainStorage::load_for_search(
+                    index,
+                    heap,
+                    meta_page.get_distance_function(),
+                    meta_page.has_labels(),
+                );
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
@@ -379,8 +383,12 @@ pub extern "C" fn amgettuple(
             get_tuple(state, next, scan)
         }
         StorageState::Plain(iter) => {
-            let storage =
-                PlainStorage::load_for_search(&indexrel, &heaprel, state.distance_fn.unwrap());
+            let storage = PlainStorage::load_for_search(
+                &indexrel,
+                &heaprel,
+                state.distance_fn.unwrap(),
+                state.meta_page.has_labels(),
+            );
             let next = if state.meta_page.get_num_dimensions()
                 == state.meta_page.get_num_dimensions_to_index()
             {

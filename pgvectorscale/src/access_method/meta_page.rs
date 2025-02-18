@@ -5,7 +5,9 @@ use rkyv::{Archive, Deserialize, Serialize};
 use semver::Version;
 
 use crate::access_method::options::TSVIndexOptions;
-use crate::util::page;
+use crate::access_method::stats::WriteStats;
+use crate::util::chain::{ChainItemReader, ChainTapeWriter};
+use crate::util::page::{self, PageType};
 use crate::util::*;
 
 use super::distance::{DistanceFn, DistanceType};
@@ -19,7 +21,7 @@ use super::storage::StorageType;
 use super::storage_common::get_num_index_attributes;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
-const TSV_VERSION: u32 = 2;
+const TSV_VERSION: u32 = 3;
 const GRAPH_SLACK_FACTOR: f64 = 1.3_f64;
 
 const META_BLOCK_NUMBER: pg_sys::BlockNumber = 0;
@@ -57,30 +59,107 @@ impl MetaPageV1 {
         assert_eq!((*meta_page).version, 1);
         meta_page
     }
+}
 
-    pub fn get_new_meta(&self) -> MetaPage {
-        if self.use_pq {
+impl From<&MetaPageV1> for MetaPage {
+    fn from(meta: &MetaPageV1) -> Self {
+        if meta.use_pq {
             pgrx::error!("PQ is no longer supported. Please rebuild the TSV index.");
         }
 
+        let start_nodes = StartNodes::new(ItemPointer::new(
+            meta.init_ids_block_number,
+            meta.init_ids_offset,
+        ));
+
         MetaPage {
-            magic_number: TSV_MAGIC_NUMBER,
-            version: TSV_VERSION,
+            magic_number: meta.magic_number,
+            version: meta.version,
             extension_version_when_built: "0.0.2".to_string(),
             distance_type: DistanceType::L2 as u16,
-            num_dimensions: self.num_dimensions,
-            num_dimensions_to_index: self.num_dimensions,
+            num_dimensions: meta.num_dimensions,
+            num_dimensions_to_index: meta.num_dimensions,
             bq_num_bits_per_dimension: 1,
-            num_neighbors: self.num_neighbors,
             storage_type: StorageType::Plain as u8,
-            search_list_size: self.search_list_size,
-            max_alpha: self.max_alpha,
-            start_nodes: Some(StartNodes::new(ItemPointer::new(
-                self.init_ids_block_number,
-                self.init_ids_offset,
-            ))),
+            num_neighbors: meta.num_neighbors,
+            search_list_size: meta.search_list_size,
+            max_alpha: meta.max_alpha,
+            start_nodes: Some(start_nodes),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels: false,
+            num_nodes: 0, // TODO
+        }
+    }
+}
+
+/// This is metadata about the entire index.
+/// Stored as the first page (offset 2) in the index relation.
+#[derive(Clone, PartialEq, Archive, Deserialize, Serialize, Readable, Writeable)]
+#[archive(check_bytes)]
+pub struct MetaPageV2 {
+    /// repeat the magic number and version from MetaPageHeader for sanity checks
+    magic_number: u32,
+    version: u32,
+    extension_version_when_built: String,
+    /// The value of the DistanceType enum
+    distance_type: u16,
+    /// number of total_dimensions in the vector
+    num_dimensions: u32,
+    //number of dimensions in the vectors stored in the index
+    num_dimensions_to_index: u32,
+    bq_num_bits_per_dimension: u8,
+    /// the value of the TSVStorageLayout enum
+    storage_type: u8,
+    /// max number of outgoing edges a node in the graph can have (R in the papers)
+    num_neighbors: u32,
+    search_list_size: u32,
+    max_alpha: f64,
+    init_ids: ItemPointer,
+    quantizer_metadata: ItemPointer,
+}
+
+impl MetaPageV2 {
+    unsafe fn from_page(page: page::ReadablePage) -> Self {
+        //check the header. In the future, we can use this to check the version
+        let rb = page.get_item_unchecked(META_HEADER_OFFSET);
+        let meta = ReadableMetaPageHeader::with_readable_buffer(rb);
+        let archived = meta.get_archived_node();
+        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
+        assert!(archived.version == TSV_VERSION);
+
+        let page = meta.get_owned_page();
+
+        //retrieve the MetaPage itself and deserialize it
+        let rb = page.get_item_unchecked(META_OFFSET);
+        let meta = ReadableMetaPageV2::with_readable_buffer(rb);
+        let archived = meta.get_archived_node();
+        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
+        assert!(archived.version == TSV_VERSION);
+
+        archived.deserialize(&mut rkyv::Infallible).unwrap()
+    }
+}
+
+impl From<MetaPageV2> for MetaPage {
+    fn from(meta: MetaPageV2) -> Self {
+        let start_nodes = StartNodes::new(meta.init_ids);
+
+        MetaPage {
+            magic_number: meta.magic_number,
+            version: meta.version,
+            extension_version_when_built: meta.extension_version_when_built,
+            distance_type: meta.distance_type,
+            num_dimensions: meta.num_dimensions,
+            num_dimensions_to_index: meta.num_dimensions_to_index,
+            bq_num_bits_per_dimension: meta.bq_num_bits_per_dimension,
+            storage_type: meta.storage_type,
+            num_neighbors: meta.num_neighbors,
+            search_list_size: meta.search_list_size,
+            max_alpha: meta.max_alpha,
+            start_nodes: Some(start_nodes),
+            quantizer_metadata: meta.quantizer_metadata,
+            has_labels: false,
+            num_nodes: 0, // TODO
         }
     }
 }
@@ -125,19 +204,17 @@ pub struct MetaPage {
     search_list_size: u32,
     /// Maximal alpha value for the index
     max_alpha: f64,
-    /// Start nodes for search, one for each label.  TODO: move to own page.
+    /// Start nodes for search, one for each label.
     start_nodes: Option<StartNodes>,
     /// Sbq means metadata
     quantizer_metadata: ItemPointer,
     /// Whether the index has labels
     has_labels: bool,
+    /// TMP
+    num_nodes: usize,
 }
 
 impl MetaPage {
-    pub fn debug_dump(&self) {
-        info!("MetaPage = {:?}", self);
-    }
-
     /// Number of dimensions in the vectors being stored.
     /// Has to be the same for all vectors in the graph and cannot change.
     pub fn get_num_dimensions(&self) -> u32 {
@@ -182,15 +259,11 @@ impl MetaPage {
         ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize
     }
 
-    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
-        self.start_nodes.as_ref()
-    }
-
     pub fn has_labels(&self) -> bool {
         self.has_labels
     }
 
-    pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
+    pub fn get_quantizer_metadata_ptr(&self) -> Option<IndexPointer> {
         if !self.quantizer_metadata.is_valid() {
             return None;
         }
@@ -199,6 +272,10 @@ impl MetaPage {
             StorageType::Plain => None,
             StorageType::SbqCompression => Some(self.quantizer_metadata),
         }
+    }
+
+    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
+        self.start_nodes.as_ref()
     }
 
     fn calculate_num_neighbors(opt: &PgBox<TSVIndexOptions>) -> u32 {
@@ -270,13 +347,16 @@ impl MetaPage {
             start_nodes: None,
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels,
+            num_nodes: 0,
         };
-        let page = page::WritablePage::new(index, crate::util::page::PageType::Meta);
-        meta.write_to_page(page);
+
+        meta.store(index, true);
         meta
     }
 
-    unsafe fn write_to_page(&self, mut page: page::WritablePage) {
+    unsafe fn store(&self, index: &PgRelation, first_time: bool) {
+        debug1!("storing meta page: filename={}, line={}", file!(), line!());
+
         let header = MetaPageHeader {
             magic_number: self.magic_number,
             version: self.version,
@@ -285,36 +365,41 @@ impl MetaPage {
         assert!(header.magic_number == TSV_MAGIC_NUMBER);
         assert!(header.version == TSV_VERSION);
 
-        //serialize the header
+        let mut stats = WriteStats::new();
+        let mut tape = if first_time {
+            ChainTapeWriter::new(index, PageType::Meta, &mut stats)
+        } else {
+            ChainTapeWriter::reinit(index, PageType::Meta, &mut stats, META_BLOCK_NUMBER)
+        };
+
+        // Serialize the header
         let bytes = header.serialize_to_vec();
-        let off = page.add_item(&bytes);
-        assert!(off == META_HEADER_OFFSET);
+        let off = tape.write(&bytes);
+        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_HEADER_OFFSET));
 
-        //serialize the meta
+        // Serialize the meta
         let bytes = self.serialize_to_vec();
-        let off = page.add_item(&bytes);
-        assert!(off == META_OFFSET);
+        let off = tape.write(&bytes);
+        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET));
 
-        page.commit();
+        debug1!(
+            "done storing meta page: filename={}, line={}",
+            file!(),
+            line!()
+        );
     }
 
-    unsafe fn overwrite(index: &PgRelation, new_meta: &MetaPage) {
-        let mut page = page::WritablePage::modify(index, META_BLOCK_NUMBER);
-        page.reinit(crate::util::page::PageType::Meta);
-        new_meta.write_to_page(page);
+    unsafe fn load(index: &PgRelation) -> MetaPage {
+        debug1!("loading meta page: filename={}, line={}", file!(), line!());
 
-        let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
-        let page_type = page.get_type();
-        if page_type != crate::util::page::PageType::Meta {
-            pgrx::error!(
-                "Problem upgrading meta page: wrong page type: {:?}",
-                page_type
-            );
+        let mut stats = WriteStats::new();
+        let mut tape = ChainItemReader::new(index, PageType::Meta, &mut stats);
+
+        let mut buf: Vec<u8> = Vec::new();
+        for item in tape.read(ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET)) {
+            buf.extend_from_slice(item.get_data_slice());
         }
-        let meta = Self::get_meta_from_page(page);
-        if meta != *new_meta {
-            pgrx::error!("Problem upgrading meta page: meta mismatch");
-        }
+        rkyv::from_bytes::<MetaPage>(&buf).unwrap()
     }
 
     /// Read the meta page for an index
@@ -322,38 +407,22 @@ impl MetaPage {
         unsafe {
             let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
             let page_type = page.get_type();
-            if page_type == crate::util::page::PageType::MetaV1 {
-                let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
-                let new_meta = (*old_meta).get_new_meta();
+            match page_type {
+                PageType::MetaV1 => {
+                    let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
+                    let new_meta: MetaPage = (&*old_meta).into();
 
-                //release the page
-                std::mem::drop(page);
+                    //release the page
+                    std::mem::drop(page);
 
-                Self::overwrite(index, &new_meta);
-                return new_meta;
+                    new_meta.store(index, false);
+                    new_meta
+                }
+                PageType::MetaV2 => MetaPageV2::from_page(page).into(),
+                PageType::Meta => Self::load(index),
+                _ => pgrx::error!("Meta page is not of type Meta"),
             }
-            Self::get_meta_from_page(page)
         }
-    }
-
-    unsafe fn get_meta_from_page(page: page::ReadablePage) -> MetaPage {
-        //check the header. In the future, we can use this to check the version
-        let rb = page.get_item_unchecked(META_HEADER_OFFSET);
-        let meta = ReadableMetaPageHeader::with_readable_buffer(rb);
-        let archived = meta.get_archived_node();
-        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
-        assert!(archived.version == TSV_VERSION);
-
-        let page = meta.get_owned_page();
-
-        //retrieve the MetaPage itself and deserialize it
-        let rb = page.get_item_unchecked(META_OFFSET);
-        let meta = ReadableMetaPage::with_readable_buffer(rb);
-        let archived = meta.get_archived_node();
-        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
-        assert!(archived.version == TSV_VERSION);
-
-        archived.deserialize(&mut rkyv::Infallible).unwrap()
     }
 
     /// Change the init ids for an index.
@@ -362,12 +431,12 @@ impl MetaPage {
         start_nodes: StartNodes,
         stats: &mut S,
     ) {
-        warning!("setting start nodes to {:?}", start_nodes);
+        debug1!("setting start nodes to {:?}", start_nodes);
         let mut meta = Self::fetch(index);
         meta.start_nodes = Some(start_nodes);
 
         unsafe {
-            Self::overwrite(index, &meta);
+            meta.store(index, false);
             stats.record_modify();
         };
     }
@@ -381,8 +450,16 @@ impl MetaPage {
         meta.quantizer_metadata = quantizer_pointer;
 
         unsafe {
-            Self::overwrite(index, &meta);
+            meta.store(index, false);
             stats.record_modify();
         };
+    }
+
+    pub fn increment_num_nodes(&mut self) {
+        self.num_nodes += 1;
+    }
+
+    pub fn get_num_nodes(&self) -> usize {
+        self.num_nodes
     }
 }

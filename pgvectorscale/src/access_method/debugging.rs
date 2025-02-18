@@ -8,6 +8,16 @@ use crate::util::ItemPointer;
 
 use super::{plain_node::Node, stats::GreedySearchStats};
 
+// #[macro_export]
+// macro_rules! full_debug_only {
+//     ($($body:tt)*) => {
+//         #[cfg(full_debug)]
+//         {
+//             $($body)*
+//         }
+//     };
+// }
+
 #[allow(dead_code)]
 pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {
     let mut map = HashMap::<ItemPointer, Vec<f32>>::new();

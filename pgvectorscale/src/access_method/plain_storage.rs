@@ -28,6 +28,7 @@ pub struct PlainStorage<'a> {
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
     _label_attr: Option<AttrNumber>,
+    has_labels: bool,
 }
 
 impl<'a> PlainStorage<'a> {
@@ -35,6 +36,7 @@ impl<'a> PlainStorage<'a> {
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         distance_fn: DistanceFn,
+        has_labels: bool,
     ) -> PlainStorage<'a> {
         Self {
             index,
@@ -42,6 +44,7 @@ impl<'a> PlainStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
             _label_attr: get_index_label_attribute(index),
+            has_labels,
         }
     }
 
@@ -49,6 +52,7 @@ impl<'a> PlainStorage<'a> {
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
         distance_fn: DistanceFn,
+        has_labels: bool,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
@@ -56,6 +60,7 @@ impl<'a> PlainStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
             _label_attr: get_index_label_attribute(index_relation),
+            has_labels,
         }
     }
 
@@ -63,6 +68,7 @@ impl<'a> PlainStorage<'a> {
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
         distance_fn: DistanceFn,
+        has_labels: bool,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
@@ -70,6 +76,7 @@ impl<'a> PlainStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
             _label_attr: get_index_label_attribute(index_relation),
+            has_labels,
         }
     }
 }
@@ -338,12 +345,13 @@ impl Storage for PlainStorage<'_> {
             let node_neighbor = rn_neighbor.get_archived_node();
 
             // Skip neighbors that have no matching labels with the query
-            if !lsr
-                .sdm
-                .as_ref()
-                .unwrap()
-                .labels()
-                .matches(node_neighbor.get_labels())
+            if self.has_labels
+                && !lsr
+                    .sdm
+                    .as_ref()
+                    .unwrap()
+                    .labels()
+                    .matches(node_neighbor.get_labels())
             {
                 continue;
             }

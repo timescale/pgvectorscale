@@ -4,6 +4,7 @@ use pgrx::{
     Array, FromDatum,
 };
 use rkyv::{Archive, Deserialize, Serialize};
+use std::fmt::Debug;
 
 pub type Label = u16;
 
@@ -113,6 +114,14 @@ impl LabelSetView for LabelSet {
 impl LabelSetView for ArchivedLabelSet {
     fn labels(&self) -> &[Label] {
         &self.labels
+    }
+}
+
+impl Debug for ArchivedLabelSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("ArchivedLabelSet")
+            .field(&self.labels.to_vec())
+            .finish()
     }
 }
 

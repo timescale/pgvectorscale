@@ -193,6 +193,7 @@ unsafe fn aminsert_internal(
                 &index_relation,
                 &heap_relation,
                 meta_page.get_distance_function(),
+                meta_page.has_labels(),
             );
             insert_storage(
                 &plain,
@@ -270,6 +271,7 @@ fn do_heap_scan(
                 index_relation,
                 heap_relation,
                 meta_page.get_distance_function(),
+                meta_page.has_labels(),
             );
             plain.start_training(&meta_page);
             let page_type = PlainStorage::page_type();
@@ -381,9 +383,6 @@ fn finalize_index_build<S: Storage>(
             panic!("Should not be using the disk neighbor store during build");
         }
     }
-
-    // state.graph.debug_dump();
-    state.graph.get_meta_page().debug_dump();
 
     debug1!("write done");
     assert_eq!(write_stats.num_nodes, state.ntuples);
@@ -521,11 +520,24 @@ fn build_callback_internal<S: Storage>(
         &mut state.stats,
     );
 
-    debug1!("inserting into graph, index_pointer: {:?}", index_pointer);
+    debug1!("Inserting {:?}", index_pointer);
 
+    // let before = state.graph.debug_print_graph(storage, &mut state.stats);
     state
         .graph
         .insert(&index, index_pointer, vec, storage, &mut state.stats);
+
+    // if !state
+    //     .graph
+    //     .debug_check_consistency(storage, &mut state.stats)
+    // {
+    //     warning!("Graph is inconsistent.  Before: {}", before);
+    //     warning!(
+    //         "Graph is inconsistent.  After: {}",
+    //         state.graph.debug_print_graph(storage, &mut state.stats)
+    //     );
+    //     error!("Graph is inconsistent.  Exiting.");
+    // }
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
@@ -1042,19 +1054,9 @@ pub mod tests {
                 )],
             )?;
 
-            assert!(
-                cnt.unwrap() == expected_cnt,
-                "initial count is {} id is {}",
-                cnt.unwrap(),
-                id.unwrap()
-            );
+            assert_eq!(cnt.unwrap(), expected_cnt, "id is {}", id.unwrap());
         }
 
-        assert!(
-            cnt.unwrap() == expected_cnt,
-            "initial count is {}",
-            cnt.unwrap()
-        );
         Ok(())
     }
 

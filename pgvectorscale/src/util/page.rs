@@ -32,9 +32,9 @@ pub enum PageType {
     PqQuantizerVector = 3,
     SbqMeansV1 = 4,
     SbqNode = 5,
-    Meta = 6,
+    MetaV2 = 6,
     SbqMeans = 7,
-    StartNodes = 8,
+    Meta = 8,
 }
 
 impl PageType {
@@ -46,9 +46,9 @@ impl PageType {
             3 => PageType::PqQuantizerVector,
             4 => PageType::SbqMeansV1,
             5 => PageType::SbqNode,
-            6 => PageType::Meta,
+            6 => PageType::MetaV2,
             7 => PageType::SbqMeans,
-            8 => PageType::StartNodes,
+            8 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
@@ -57,7 +57,7 @@ impl PageType {
     /// This is not supported for all page types.  Note that `Tape` requires
     /// that the page type not be chained.
     pub fn is_chained(self) -> bool {
-        matches!(self, PageType::SbqMeans) || matches!(self, PageType::StartNodes)
+        matches!(self, PageType::SbqMeans) || matches!(self, PageType::Meta)
     }
 }
 
