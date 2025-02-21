@@ -54,6 +54,7 @@ impl TSVScanState {
         query: LabeledVector,
         search_list_size: usize,
     ) {
+        debug2!("TSVScanState::initialize fetching meta page");
         let meta_page = MetaPage::fetch(index);
         let storage = meta_page.get_storage_type();
         let distance = meta_page.get_distance_function();
@@ -61,12 +62,8 @@ impl TSVScanState {
         let store_type = match storage {
             StorageType::Plain => {
                 let stats = QuantizerStats::new();
-                let bq = PlainStorage::load_for_search(
-                    index,
-                    heap,
-                    meta_page.get_distance_function(),
-                    meta_page.has_labels(),
-                );
+                let bq =
+                    PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
@@ -179,6 +176,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
+        debug2!("TSVResponseIterator::new fetching meta page");
         let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
@@ -311,7 +309,9 @@ pub extern "C" fn ambeginscan(
         ))
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
+    debug2!("ambeginscan fetching meta page");
     let meta_page = MetaPage::fetch(&indexrel);
+    debug2!("Index scan: {:?}", meta_page);
 
     unsafe {
         pgstat_count_index_scan(index_relation, indexrel);
@@ -367,6 +367,8 @@ pub extern "C" fn amgettuple(
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
     //let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
 
+    debug2!("amgettuple: meta_page: {:?}", state.meta_page);
+
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
@@ -383,12 +385,8 @@ pub extern "C" fn amgettuple(
             get_tuple(state, next, scan)
         }
         StorageState::Plain(iter) => {
-            let storage = PlainStorage::load_for_search(
-                &indexrel,
-                &heaprel,
-                state.distance_fn.unwrap(),
-                state.meta_page.has_labels(),
-            );
+            let storage =
+                PlainStorage::load_for_search(&indexrel, &heaprel, state.distance_fn.unwrap());
             let next = if state.meta_page.get_num_dimensions()
                 == state.meta_page.get_num_dimensions_to_index()
             {
@@ -456,9 +454,6 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
 fn end_scan<S: Storage>(
     iter: &mut TSVResponseIterator<S::QueryDistanceMeasure, S::LSNPrivateData>,
 ) {
-    debug_assert!(iter.quantizer_stats.node_reads == 1);
-    debug_assert!(iter.quantizer_stats.node_writes == 0);
-
     debug1!(
         "Query stats - reads_index={} reads_heap={} d_total={} d_quantized={} d_full={} next={} resort={} visits={} candidate={}",
         iter.lsr.stats.get_node_reads(),
@@ -471,4 +466,7 @@ fn end_scan<S: Storage>(
         iter.lsr.stats.get_visited_nodes(),
         iter.lsr.stats.get_candidate_nodes(),
     );
+
+    debug_assert_eq!(iter.quantizer_stats.node_reads, 1);
+    debug_assert_eq!(iter.quantizer_stats.node_writes, 0);
 }

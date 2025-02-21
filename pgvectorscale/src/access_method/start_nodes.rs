@@ -61,14 +61,13 @@ impl StartNodes {
         self.default_node
     }
 
-    pub fn get_for_node(&self, labels: &LabelSet) -> Vec<ItemPointer> {
-        if labels.is_empty() {
-            vec![self.default_node]
-        } else {
-            labels
+    pub fn get_for_node(&self, labels: Option<&LabelSet>) -> Vec<ItemPointer> {
+        match labels {
+            Some(labels) => labels
                 .iter()
                 .filter_map(|label| self.labeled_nodes.get(label).copied())
-                .collect()
+                .collect(),
+            None => vec![self.default_node],
         }
     }
 
@@ -76,14 +75,20 @@ impl StartNodes {
         self.labeled_nodes.contains_key(&label)
     }
 
-    pub fn contains_all(&self, labels: &LabelSet) -> bool {
-        labels
-            .iter()
-            .all(|label| self.labeled_nodes.contains_key(label))
+    pub fn contains_all(&self, labels: Option<&LabelSet>) -> bool {
+        match labels {
+            Some(labels) => labels
+                .iter()
+                .all(|label| self.labeled_nodes.contains_key(label)),
+            None => true,
+        }
     }
 
-    pub fn contains_overloaded(&self, labels: &LabelSet) -> bool {
-        labels.iter().any(|label| self.is_overloaded(*label))
+    pub fn contains_overloaded(&self, labels: Option<&LabelSet>) -> bool {
+        match labels {
+            Some(labels) => labels.iter().any(|label| self.is_overloaded(*label)),
+            None => false,
+        }
     }
 
     pub fn node_for_label(&self, label: Label) -> Option<ItemPointer> {
@@ -99,5 +104,21 @@ impl StartNodes {
                 .filter_map(|label| self.labeled_nodes.get(label).copied())
                 .collect()
         }
+    }
+
+    pub fn get_all_labeled_nodes(&self) -> Vec<(Option<Label>, ItemPointer)> {
+        let mut nodes = vec![(None, self.default_node)];
+        nodes.extend(
+            self.labeled_nodes
+                .iter()
+                .map(|(label, node)| (Some(*label), *node)),
+        );
+        nodes
+    }
+
+    pub fn get_all_nodes(&self) -> Vec<ItemPointer> {
+        let mut nodes = vec![self.default_node];
+        nodes.extend(self.labeled_nodes.values().copied());
+        nodes
     }
 }

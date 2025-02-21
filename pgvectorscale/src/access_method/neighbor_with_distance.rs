@@ -98,14 +98,14 @@ impl Eq for DistanceWithTieBreak {}
 pub struct NeighborWithDistance {
     index_pointer: IndexPointer,
     distance: DistanceWithTieBreak,
-    labels: LabelSet,
+    labels: Option<LabelSet>,
 }
 
 impl NeighborWithDistance {
     pub fn new(
         neighbor_index_pointer: ItemPointer,
         distance: DistanceWithTieBreak,
-        labels: LabelSet,
+        labels: Option<LabelSet>,
     ) -> Self {
         Self {
             index_pointer: neighbor_index_pointer,
@@ -122,8 +122,8 @@ impl NeighborWithDistance {
         &self.distance
     }
 
-    pub fn get_labels(&self) -> &LabelSet {
-        &self.labels
+    pub fn get_labels(&self) -> Option<&LabelSet> {
+        self.labels.as_ref()
     }
 }
 

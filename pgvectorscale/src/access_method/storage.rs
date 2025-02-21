@@ -49,16 +49,16 @@ pub trait Storage {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: LabelSet,
+        labels: Option<LabelSet>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer;
 
-    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
+    fn start_training(&mut self, meta_page: &MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, stats: &mut WriteStats);
+    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats);
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,

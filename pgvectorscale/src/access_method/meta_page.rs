@@ -16,7 +16,6 @@ use super::options::{
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
 use super::start_nodes::StartNodes;
-use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 use super::storage_common::get_num_index_attributes;
 
@@ -278,6 +277,14 @@ impl MetaPage {
         self.start_nodes.as_ref()
     }
 
+    pub fn get_start_nodes_mut(&mut self) -> Option<&mut StartNodes> {
+        self.start_nodes.as_mut()
+    }
+
+    pub fn set_start_nodes(&mut self, start_nodes: StartNodes) {
+        self.start_nodes = Some(start_nodes);
+    }
+
     fn calculate_num_neighbors(opt: &PgBox<TSVIndexOptions>) -> u32 {
         let num_neighbors = (*opt).get_num_neighbors();
         if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
@@ -354,8 +361,8 @@ impl MetaPage {
         meta
     }
 
-    unsafe fn store(&self, index: &PgRelation, first_time: bool) {
-        debug1!("storing meta page: filename={}, line={}", file!(), line!());
+    pub unsafe fn store(&self, index: &PgRelation, first_time: bool) {
+        tsv_debug!("MetaPage::store {:?}", self);
 
         let header = MetaPageHeader {
             magic_number: self.magic_number,
@@ -381,17 +388,9 @@ impl MetaPage {
         let bytes = self.serialize_to_vec();
         let off = tape.write(&bytes);
         assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET));
-
-        debug1!(
-            "done storing meta page: filename={}, line={}",
-            file!(),
-            line!()
-        );
     }
 
     unsafe fn load(index: &PgRelation) -> MetaPage {
-        debug1!("loading meta page: filename={}, line={}", file!(), line!());
-
         let mut stats = WriteStats::new();
         let mut tape = ChainItemReader::new(index, PageType::Meta, &mut stats);
 
@@ -399,7 +398,9 @@ impl MetaPage {
         for item in tape.read(ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET)) {
             buf.extend_from_slice(item.get_data_slice());
         }
-        rkyv::from_bytes::<MetaPage>(&buf).unwrap()
+        let result = rkyv::from_bytes::<MetaPage>(&buf).unwrap();
+        tsv_debug!("MetaPage::load {:?}", result);
+        result
     }
 
     /// Read the meta page for an index
@@ -425,41 +426,19 @@ impl MetaPage {
         }
     }
 
-    /// Change the init ids for an index.
-    pub fn set_start_nodes<S: StatsNodeModify>(
-        index: &PgRelation,
-        start_nodes: StartNodes,
-        stats: &mut S,
-    ) {
-        debug1!("setting start nodes to {:?}", start_nodes);
-        let mut meta = Self::fetch(index);
-        meta.start_nodes = Some(start_nodes);
-
-        unsafe {
-            meta.store(index, false);
-            stats.record_modify();
-        };
+    pub fn set_quantizer_metadata_pointer(&mut self, quantizer_pointer: IndexPointer) {
+        self.quantizer_metadata = quantizer_pointer;
     }
 
-    pub fn update_quantizer_metadata_pointer<S: StatsNodeModify>(
-        index: &PgRelation,
-        quantizer_pointer: IndexPointer,
-        stats: &mut S,
-    ) {
-        let mut meta = Self::fetch(index);
-        meta.quantizer_metadata = quantizer_pointer;
-
-        unsafe {
-            meta.store(index, false);
-            stats.record_modify();
-        };
+    pub fn get_num_nodes(&self) -> usize {
+        self.num_nodes
     }
 
     pub fn increment_num_nodes(&mut self) {
         self.num_nodes += 1;
     }
 
-    pub fn get_num_nodes(&self) -> usize {
-        self.num_nodes
+    pub fn decrement_num_nodes(&mut self) {
+        self.num_nodes -= 1;
     }
 }

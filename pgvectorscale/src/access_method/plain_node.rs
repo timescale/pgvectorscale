@@ -20,13 +20,13 @@ pub struct Node {
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
     pub heap_item_pointer: HeapPointer,
-    labels: LabelSet,
+    labels: Option<LabelSet>,
 }
 
 impl Node {
     fn new_internal(
         vector: Vec<f32>,
-        labels: LabelSet,
+        labels: Option<LabelSet>,
         pq_vector: Vec<u8>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
@@ -47,7 +47,7 @@ impl Node {
 
     pub fn new_for_full_vector(
         vector: Vec<f32>,
-        labels: LabelSet,
+        labels: Option<LabelSet>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
     ) -> Self {
@@ -112,8 +112,8 @@ impl ArchivedNode {
         }
     }
 
-    pub fn get_labels(&self) -> &ArchivedLabelSet {
-        &self.labels
+    pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
+        self.labels.as_ref()
     }
 }
 

@@ -2,7 +2,7 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
 
-use pgrx::{debug1, debug2, PgRelation};
+use pgrx::{debug1, debug2, debug3, PgRelation};
 
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
@@ -19,7 +19,7 @@ pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,
     distance_with_tie_break: DistanceWithTieBreak,
     private_data: PD,
-    labels: LabelSet,
+    labels: Option<LabelSet>,
 }
 
 impl<PD> PartialOrd for ListSearchNeighbor<PD> {
@@ -48,7 +48,7 @@ impl<PD> ListSearchNeighbor<PD> {
         index_pointer: IndexPointer,
         distance_with_tie_break: DistanceWithTieBreak,
         private_data: PD,
-        labels: LabelSet,
+        labels: Option<LabelSet>,
     ) -> Self {
         Self {
             index_pointer,
@@ -62,8 +62,8 @@ impl<PD> ListSearchNeighbor<PD> {
         &self.private_data
     }
 
-    pub fn get_labels(&self) -> &LabelSet {
-        &self.labels
+    pub fn get_labels(&self) -> Option<&LabelSet> {
+        self.labels.as_ref()
     }
 }
 
@@ -148,7 +148,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         {
             let candidates: Vec<ItemPointer> =
                 self.candidates.iter().map(|x| x.0.index_pointer).collect();
-            debug2!("   visit_closest: self.candidates: {:?}", candidates);
+            debug3!("   visit_closest: self.candidates: {:?}", candidates);
         }
 
         if self.candidates.is_empty() {
@@ -159,7 +159,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             let node_at_pos = &self.visited[pos_limit - 1];
             let head = self.candidates.peek().unwrap();
             if head.0 >= *node_at_pos {
-                debug2!("visit_closest: returning None");
+                debug3!("visit_closest: returning None");
                 return None;
             }
         }
@@ -167,7 +167,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         let head = self.candidates.pop().unwrap();
         let idx = self.visited.partition_point(|x| *x < head.0); // TODO: O(n)
         self.visited.insert(idx, head.0); // TODO: O(n)
-        debug2!("visit_closest: returning {:?}", idx);
+        debug3!("visit_closest: returning {:?}", idx);
         Some(idx)
     }
 
@@ -208,10 +208,6 @@ impl<'a> Graph<'a> {
         &self.neighbor_store
     }
 
-    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
-        self.meta_page.get_start_nodes()
-    }
-
     fn add_neighbors<S: Storage>(
         &mut self,
         storage: &S,
@@ -224,8 +220,8 @@ impl<'a> Graph<'a> {
                 .iter()
                 .map(|n| n.get_index_pointer_to_neighbor())
                 .collect();
-            debug2!("Adding neighbors to {:?}", neighbors_of);
-            debug2!("    {:?}", additional_neighbors);
+            debug3!("Adding neighbors to {:?}", neighbors_of);
+            debug3!("    {:?}", additional_neighbors);
         }
         let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
             self.neighbor_store.max_neighbors(self.get_meta_page()) + additional_neighbors.len(),
@@ -281,6 +277,14 @@ impl<'a> Graph<'a> {
         self.meta_page
     }
 
+    pub fn get_meta_page_mut(&mut self) -> &mut MetaPage {
+        self.meta_page
+    }
+
+    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
+        self.meta_page.get_start_nodes()
+    }
+
     /// greedy search looks for the closest neighbors to a query vector
     /// You may think that this needs the "K" parameter but it does not,
     /// instead it uses a search_list_size parameter (>K).
@@ -298,18 +302,17 @@ impl<'a> Graph<'a> {
         &self,
         index_pointer: IndexPointer,
         query: LabeledVector,
-        meta_page: &MetaPage,
         storage: &S,
         stats: &mut GreedySearchStats,
     ) -> HashSet<NeighborWithDistance> {
-        let init_ids = self.get_start_nodes();
+        let init_ids = self.meta_page.get_start_nodes();
         if init_ids.is_none() {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
         let start_nodes = init_ids.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
-        let search_list_size = meta_page.get_search_list_size_for_build() as usize;
+        let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
         debug2!("search_list_size: {}", search_list_size);
 
         let mut l = ListSearchResult::new(
@@ -317,7 +320,7 @@ impl<'a> Graph<'a> {
             dm,
             Some(index_pointer),
             search_list_size,
-            meta_page,
+            self.meta_page,
             self.get_neighbor_store(),
             storage,
         );
@@ -411,7 +414,7 @@ impl<'a> Graph<'a> {
                     visited_nodes.insert(NeighborWithDistance::new(
                         list_search_entry.index_pointer,
                         list_search_entry.distance_with_tie_break.clone(),
-                        list_search_entry.get_labels().clone(),
+                        list_search_entry.get_labels().cloned(),
                     ));
                 }
             }
@@ -472,11 +475,11 @@ impl<'a> Graph<'a> {
         while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
                 if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
-                    debug2!("    Prune: reached max neighbors");
+                    debug3!("    Prune: reached max neighbors");
                     return results;
                 }
                 if max_factors[i] > alpha {
-                    debug2!("    Prune: max_factors[{i}] > {alpha} for {:?}", neighbor);
+                    debug3!("    Prune: max_factors[{i}] > {alpha} for {:?}", neighbor);
                     continue;
                 }
 
@@ -538,49 +541,50 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) -> Vec<IndexPointer> {
-        let start_nodes = self.meta_page.get_start_nodes();
-
-        if let Some(start_nodes) = start_nodes {
-            if start_nodes.contains_all(vec.labels())
-                && !start_nodes.contains_overloaded(vec.labels())
-            {
-                return vec![];
+        match self.meta_page.get_start_nodes() {
+            Some(start_nodes) => {
+                if start_nodes.contains_all(vec.labels())
+                    && !start_nodes.contains_overloaded(vec.labels())
+                {
+                    return vec![];
+                }
             }
-        }
+            None => {
+                debug1!("Creating start nodes for the first time");
+                // TODO probably better set off of centroids
+                let start_nodes = StartNodes::new(index_pointer);
+                self.neighbor_store.set_neighbors(
+                    storage,
+                    self.meta_page,
+                    index_pointer,
+                    Vec::<NeighborWithDistance>::with_capacity(
+                        self.neighbor_store.max_neighbors(self.meta_page) as _,
+                    ),
+                    stats,
+                );
 
-        let mut start_nodes = if let Some(start_nodes) = start_nodes {
-            start_nodes.clone()
-        } else {
-            debug1!("Creating start nodes for the first time");
-            // TODO probably better set off of centroids
-            let start_nodes = StartNodes::new(index_pointer);
-            self.neighbor_store.set_neighbors(
-                storage,
-                self.meta_page,
-                index_pointer,
-                Vec::<NeighborWithDistance>::with_capacity(
-                    self.neighbor_store.max_neighbors(self.meta_page) as _,
-                ),
-                stats,
-            );
-
-            start_nodes
+                self.meta_page.set_start_nodes(start_nodes);
+            }
         };
 
         let mut overloaded = vec![];
-        for label in vec.labels().iter() {
-            if start_nodes.is_overloaded(*label) {
-                // Replace the overloaded start node for the label with this one
-                debug1!("Replacing overloaded start node for label {:?}", label);
-                let pip = start_nodes.upsert(*label, index_pointer).unwrap();
-                overloaded.push(pip);
-            } else if !start_nodes.contains(*label) {
-                start_nodes.upsert(*label, index_pointer);
+        if let Some(labels) = vec.labels() {
+            let start_nodes = self.meta_page.get_start_nodes_mut().unwrap();
+            for label in labels.iter() {
+                if start_nodes.is_overloaded(*label) {
+                    // Replace the overloaded start node for the label with this one
+                    debug1!("Replacing overloaded start node for label {:?}", label);
+                    let pip = start_nodes.upsert(*label, index_pointer).unwrap();
+                    overloaded.push(pip);
+                } else if !start_nodes.contains(*label) {
+                    start_nodes.upsert(*label, index_pointer);
+                }
             }
         }
 
-        MetaPage::set_start_nodes(index, start_nodes, stats);
-        *self.meta_page = MetaPage::fetch(index);
+        unsafe {
+            self.meta_page.store(index, false);
+        }
 
         overloaded
     }
@@ -592,54 +596,9 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) -> bool {
-        let mut visited = HashSet::new();
-        let mut to_visit = vec![];
         if let Some(start_nodes) = self.meta_page.get_start_nodes() {
-            // TODO all start nodes
-            let start_node = start_nodes.default_node();
-            to_visit.push(start_node);
-        }
-        while let Some(node) = to_visit.pop() {
-            if visited.contains(&node) {
-                continue;
-            }
-            visited.insert(node);
-            let mut neighbors = vec![];
-            self.neighbor_store
-                .get_neighbors_with_full_vector_distances(
-                    node,
-                    storage,
-                    &mut neighbors,
-                    &mut stats.greedy_search_stats,
-                );
-            for neighbor in neighbors {
-                let ip = neighbor.get_index_pointer_to_neighbor();
-                to_visit.push(ip);
-            }
-        }
-        debug1!(
-            "debug_check_consistency: visited {} nodes, meta page has {} nodes",
-            visited.len(),
-            self.meta_page.get_num_nodes()
-        );
-        visited.len() == self.meta_page.get_num_nodes()
-    }
-
-    #[allow(dead_code)]
-    pub fn debug_print_graph<S: Storage>(&self, storage: &S, stats: &mut InsertStats) -> String {
-        let mut buf = String::new();
-        buf.push_str(
-            r#"
-digraph G {
-    node [shape=circle];
-
-    "#,
-        );
-        if let Some(start_nodes) = self.meta_page.get_start_nodes() {
-            // TODO all start nodes
-            let start_node = start_nodes.default_node();
             let mut visited = HashSet::new();
-            let mut to_visit = vec![start_node];
+            let mut to_visit = start_nodes.get_all_nodes();
             while let Some(node) = to_visit.pop() {
                 if visited.contains(&node) {
                     continue;
@@ -655,7 +614,65 @@ digraph G {
                     );
                 for neighbor in neighbors {
                     let ip = neighbor.get_index_pointer_to_neighbor();
+                    to_visit.push(ip);
+                }
+            }
+            debug1!(
+                "debug_check_consistency: visited {} nodes, meta page has {} nodes",
+                visited.len(),
+                self.meta_page.get_num_nodes()
+            );
+            return visited.len() == self.meta_page.get_num_nodes();
+        }
+        true
+    }
+
+    #[allow(dead_code)]
+    pub fn debug_print_graph<S: Storage>(&self, storage: &S, stats: &mut InsertStats) -> String {
+        let mut buf = String::new();
+        buf.push_str(
+            r#"
+digraph G {
+    node [shape=oval];
+
+    "#,
+        );
+        if let Some(start_nodes) = self.meta_page.get_start_nodes() {
+            let mut visited = HashSet::new();
+            let to_visit = start_nodes.get_all_labeled_nodes();
+            let mut to_visit: Vec<(Option<LabelSet>, IndexPointer)> = to_visit
+                .into_iter()
+                .map(|(label, ip)| (label.map(Into::into), ip))
+                .collect();
+            debug1!("debug_print_graph: start nodes: {:?}", to_visit);
+            while let Some((label, node)) = to_visit.pop() {
+                if visited.contains(&node) {
+                    continue;
+                }
+                let label = label
+                    .map(|l| format!(", {:?}", l.labels()))
+                    .unwrap_or_else(|| "".to_string());
+                visited.insert(node);
+                let mut neighbors = vec![];
+                self.neighbor_store
+                    .get_neighbors_with_full_vector_distances(
+                        node,
+                        storage,
+                        &mut neighbors,
+                        &mut stats.greedy_search_stats,
+                    );
+                // print node
+                buf.push_str(
+                    format!(
+                        "   \"{}, {}\" [label=\"{}, {}{}\"]\n",
+                        node.block_number, node.offset, node.block_number, node.offset, label
+                    )
+                    .as_str(),
+                );
+                for neighbor in neighbors {
+                    let ip = neighbor.get_index_pointer_to_neighbor();
                     let distance = neighbor.get_distance_with_tie_break();
+                    // print edge
                     buf.push_str(
                         format!(
                             "   \"{}, {}\" -> \"{}, {}\" [label=\"{}\"]\n",
@@ -667,7 +684,7 @@ digraph G {
                         )
                         .as_str(),
                     );
-                    to_visit.push(ip);
+                    to_visit.push((neighbor.get_labels().cloned(), ip));
                 }
             }
             debug1!(
@@ -691,18 +708,14 @@ digraph G {
     ) {
         self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
-        // full_debug_only!(
-        //     let before = self.debug_print_graph(storage, stats);
-        // );
+        // let before = self.debug_print_graph(storage, stats); // TODO TJ
 
-        let meta_page = self.get_meta_page();
-        let labels = vec.labels().clone();
+        let labels = vec.labels().cloned();
 
         #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
-            meta_page,
             storage,
             &mut stats.greedy_search_stats,
         );
@@ -721,7 +734,7 @@ digraph G {
             let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
-                &labels,
+                labels.as_ref(),
                 neighbor.get_distance_with_tie_break(),
                 storage,
                 &mut stats.prune_neighbor_stats,
@@ -753,13 +766,21 @@ digraph G {
         }
 
         self.meta_page.increment_num_nodes();
+
+        // if !self.debug_check_consistency(storage, stats) {
+        //     debug1!("Graph before insertion:");
+        //     debug1!("{}", before);
+        //     debug1!("Graph after insertion:");
+        //     debug1!("{}", self.debug_print_graph(storage, stats));
+        //     error!("Graph is inconsistent after insertion");
+        // }
     }
 
     fn update_back_pointer<S: Storage>(
         &mut self,
         from: IndexPointer,
         to: IndexPointer,
-        to_labels: &LabelSet,
+        to_labels: Option<&LabelSet>,
         distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
         prune_stats: &mut PruneNeighborStats,
@@ -767,7 +788,7 @@ digraph G {
         let new = vec![NeighborWithDistance::new(
             to,
             distance_with_tie_break.clone(),
-            to_labels.clone(),
+            to_labels.cloned(),
         )];
         let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
         n.contains(&new[0])

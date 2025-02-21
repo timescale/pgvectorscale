@@ -60,6 +60,14 @@ impl From<ArchivedLabelSet> for LabelSet {
     }
 }
 
+impl From<Label> for LabelSet {
+    fn from(label: Label) -> Self {
+        Self {
+            labels: vec![label],
+        }
+    }
+}
+
 impl FromIterator<Label> for LabelSet {
     fn from_iter<T: IntoIterator<Item = Label>>(iter: T) -> Self {
         let mut labels: Vec<Label> = iter.into_iter().collect();
@@ -125,16 +133,14 @@ impl Debug for ArchivedLabelSet {
     }
 }
 
-/// A labeled vector is a vector with a (possibly empty) set of labels.  For
-/// uniformity, we use labeled vectors even in indices that do not have
-/// labels.
+/// A labeled vector is a vector with an optional set of labels.
 pub struct LabeledVector {
     vec: PgVector,
-    labels: LabelSet,
+    labels: Option<LabelSet>,
 }
 
 impl LabeledVector {
-    pub fn new(vec: PgVector, labels: LabelSet) -> Self {
+    pub fn new(vec: PgVector, labels: Option<LabelSet>) -> Self {
         Self { vec, labels }
     }
 
@@ -145,15 +151,11 @@ impl LabeledVector {
     ) -> Option<Self> {
         let vec = PgVector::from_pg_parts(values, isnull, 0, meta_page, true, false)?;
 
-        let labels: LabelSet = if meta_page.has_labels() {
+        let labels: Option<LabelSet> = if meta_page.has_labels() {
             let arr = Array::<i32>::from_datum(*values.add(1), *isnull.add(1));
-            if let Some(arr) = arr {
-                arr.into_iter().flatten().map(|x| x as Label).collect()
-            } else {
-                LabelSet::default()
-            }
+            arr.map(|arr| arr.into_iter().flatten().map(|x| x as Label).collect())
         } else {
-            LabelSet::default()
+            None
         };
 
         Some(Self::new(vec, labels))
@@ -173,21 +175,22 @@ impl LabeledVector {
             )
         };
 
-        let labels = if keys.is_empty() {
-            vec![]
+        let labels: Option<LabelSet> = if keys.is_empty() {
+            None
         } else {
             let arr = unsafe { Array::<i32>::from_datum(keys[0].sk_argument, false).unwrap() };
-            arr.into_iter().flatten().map(|i| i as Label).collect()
+            let labels: Vec<Label> = arr.into_iter().flatten().map(|x| x as Label).collect();
+            Some(labels.into())
         };
 
-        Self::new(query, labels.into())
+        Self::new(query, labels)
     }
 
     pub fn vec(&self) -> &PgVector {
         &self.vec
     }
 
-    pub fn labels(&self) -> &LabelSet {
-        &self.labels
+    pub fn labels(&self) -> Option<&LabelSet> {
+        self.labels.as_ref()
     }
 }

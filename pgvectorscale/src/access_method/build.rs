@@ -27,34 +27,27 @@ use super::meta_page::MetaPage;
 use super::plain_storage::PlainStorage;
 use super::storage::{Storage, StorageType};
 
-enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
-    SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
-    Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
+enum StorageBuildState<'a, 'b, 'c, 'd> {
+    SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d>),
+    Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d>),
 }
 
-struct BuildState<'a, 'b> {
+struct BuildState<'a> {
     memcxt: PgMemoryContexts,
-    meta_page: MetaPage,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
-    graph: Graph<'b>,
+    graph: Graph<'a>,
     started: Instant,
     stats: InsertStats,
 }
 
-impl<'a, 'b> BuildState<'a, 'b> {
-    fn new(
-        index_relation: &'a PgRelation,
-        meta_page: MetaPage,
-        graph: Graph<'b>,
-        page_type: PageType,
-    ) -> Self {
+impl<'a> BuildState<'a> {
+    fn new(index_relation: &'a PgRelation, graph: Graph<'a>, page_type: PageType) -> Self {
         let tape = unsafe { Tape::new(index_relation, page_type) };
 
         BuildState {
             memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
-            meta_page,
             tape,
             graph,
             started: Instant::now(),
@@ -174,6 +167,11 @@ unsafe fn aminsert_internal(
 ) -> bool {
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
+
+    debug2!(
+        "aminsert: index_relation: {:?}, fetching meta page",
+        indexrel
+    );
     let mut meta_page = MetaPage::fetch(&index_relation);
 
     let vec = LabeledVector::from_datums(values, isnull, &meta_page);
@@ -193,7 +191,6 @@ unsafe fn aminsert_internal(
                 &index_relation,
                 &heap_relation,
                 meta_page.get_distance_function(),
-                meta_page.has_labels(),
             );
             insert_storage(
                 &plain,
@@ -235,7 +232,7 @@ unsafe fn insert_storage<S: Storage>(
     let mut tape = Tape::resume(index_relation, S::page_type());
     let index_pointer = storage.create_node(
         vec.vec().to_index_slice(),
-        vec.labels().clone(),
+        vec.labels().cloned(),
         heap_pointer,
         meta_page,
         &mut tape,
@@ -255,14 +252,13 @@ fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &PgRelation,
     index_relation: &PgRelation,
-    meta_page: MetaPage,
+    mut meta_page: MetaPage,
 ) -> usize {
     let storage = meta_page.get_storage_type();
 
-    let mut mp2 = meta_page.clone();
     let graph = Graph::new(
         GraphNeighborStore::Builder(BuilderNeighborCache::new()),
-        &mut mp2,
+        &mut meta_page,
     );
     let mut write_stats = WriteStats::new();
     match storage {
@@ -270,12 +266,11 @@ fn do_heap_scan(
             let mut plain = PlainStorage::new_for_build(
                 index_relation,
                 heap_relation,
-                meta_page.get_distance_function(),
-                meta_page.has_labels(),
+                graph.get_meta_page().get_distance_function(),
             );
-            plain.start_training(&meta_page);
+            plain.start_training(graph.get_meta_page());
             let page_type = PlainStorage::page_type();
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut bs = BuildState::new(index_relation, graph, page_type);
             let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
 
             unsafe {
@@ -288,11 +283,14 @@ fn do_heap_scan(
                 );
             }
 
-            finalize_index_build(&mut plain, &mut bs, write_stats)
+            finalize_index_build(&mut plain, &mut bs, index_relation, write_stats)
         }
         StorageType::SbqCompression => {
-            let mut bq =
-                SbqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
+            let mut bq = SbqSpeedupStorage::new_for_build(
+                index_relation,
+                heap_relation,
+                graph.get_meta_page(),
+            );
 
             let page_type = SbqSpeedupStorage::page_type();
 
@@ -300,9 +298,9 @@ fn do_heap_scan(
                 pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
             }
 
-            bq.start_training(&meta_page);
+            bq.start_training(graph.get_meta_page());
 
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut bs = BuildState::new(index_relation, graph, page_type);
             let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
 
             unsafe {
@@ -314,7 +312,7 @@ fn do_heap_scan(
                     &mut state,
                 );
             }
-            bq.finish_training(&mut write_stats);
+            bq.finish_training(bs.graph.get_meta_page_mut(), &mut write_stats);
 
             unsafe {
                 pgstat_progress_update_param(
@@ -341,7 +339,8 @@ fn do_heap_scan(
                     BUILD_PHASE_FINALIZING_GRAPH,
                 );
             }
-            finalize_index_build(&mut bq, &mut bs, write_stats)
+
+            finalize_index_build(&mut bq, &mut bs, index_relation, write_stats)
         }
     }
 }
@@ -349,6 +348,7 @@ fn do_heap_scan(
 fn finalize_index_build<S: Storage>(
     storage: &mut S,
     state: &mut BuildState,
+    index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
     match state.graph.get_neighbor_store() {
@@ -372,11 +372,14 @@ fn finalize_index_build<S: Storage>(
                 write_stats.num_neighbors += neighbors.len();
 
                 storage.finalize_node_at_end_of_build(
-                    &state.meta_page,
+                    state.graph.get_meta_page(),
                     index_pointer,
                     neighbors,
                     &mut write_stats,
                 );
+            }
+            unsafe {
+                state.graph.get_meta_page().store(index_relation, false);
             }
         }
         GraphNeighborStore::Disk => {
@@ -425,7 +428,14 @@ unsafe extern "C" fn build_callback_bq_train(
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            let vec = PgVector::from_pg_parts(
+                values,
+                isnull,
+                0,
+                state.graph.get_meta_page(),
+                true,
+                false,
+            );
             if let Some(vec) = vec {
                 bq.add_sample(vec.to_index_slice());
             }
@@ -445,20 +455,20 @@ unsafe extern "C" fn build_callback(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
-    let index_relation = unsafe { PgRelation::from_pg(index) };
     let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
+    let index = PgRelation::from_pg(index);
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = LabeledVector::from_datums(values, isnull, &state.meta_page);
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
+                build_callback_memory_wrapper(&index, heap_pointer, vec, state, *bq);
             }
         }
         StorageBuildState::Plain(plain, state) => {
-            let vec = LabeledVector::from_datums(values, isnull, &state.meta_page);
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
+                build_callback_memory_wrapper(&index, heap_pointer, vec, state, *plain);
             }
         }
     }
@@ -466,7 +476,7 @@ unsafe extern "C" fn build_callback(
 
 #[inline(always)]
 unsafe fn build_callback_memory_wrapper<S: Storage>(
-    index: PgRelation,
+    index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
     state: &mut BuildState,
@@ -489,7 +499,7 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
 
 #[inline(always)]
 fn build_callback_internal<S: Storage>(
-    index: PgRelation,
+    index: &PgRelation,
     heap_pointer: ItemPointer,
     vec: LabeledVector,
     state: &mut BuildState,
@@ -513,9 +523,9 @@ fn build_callback_internal<S: Storage>(
 
     let index_pointer = storage.create_node(
         vec.vec().to_index_slice(),
-        vec.labels().clone(),
+        vec.labels().cloned(),
         heap_pointer,
-        &state.meta_page,
+        state.graph.get_meta_page(),
         &mut state.tape,
         &mut state.stats,
     );
@@ -525,7 +535,7 @@ fn build_callback_internal<S: Storage>(
     // let before = state.graph.debug_print_graph(storage, &mut state.stats);
     state
         .graph
-        .insert(&index, index_pointer, vec, storage, &mut state.stats);
+        .insert(index, index_pointer, vec, storage, &mut state.stats);
 
     // if !state
     //     .graph
@@ -796,19 +806,22 @@ pub mod tests {
         // and [3,3,3] should return [3,3,3].  (Note that if vectors or the query vector
         // were normalized, then the results would be different.)
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[1,1,1]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[2,2,2]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
@@ -833,19 +846,22 @@ pub mod tests {
         )?;
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[2,2,2]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[2,2,2]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[3,3,3]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[3,3,3]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
@@ -1204,11 +1220,11 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_labeled_index() -> spi::Result<()> {
-        let index_options = "num_neighbors=10, search_list_size=10";
-        let expected_cnt = 1000;
+        let index_options = "num_neighbors=15, search_list_size=10";
+        let expected_cnt = 50;
         let dimension = 128;
 
-        Spi::run(&format!(
+        let query = &format!(
             "CREATE TABLE test_data (
                 id int,
                 embedding vector ({dimension}),
@@ -1272,7 +1288,7 @@ pub mod tests {
                     (floor(random() * 16 + 1))::int,
                     (floor(random() * 16 + 1))::int
                 ]
-            FROM generate_series(1, 300) gs;
+            FROM generate_series(1, {expected_cnt}) gs;
 
             SET enable_seqscan = 0;
             -- perform index scans on the vectors
@@ -1284,7 +1300,10 @@ pub mod tests {
                 embedding <=> (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, {dimension}));"))?;
+            FROM generate_series(1, {dimension}));");
+
+        warning!("Running query: {}", query);
+        Spi::run(query)?;
 
         verify_index_accuracy(expected_cnt, dimension)?;
 

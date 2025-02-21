@@ -10,7 +10,7 @@ use super::{
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
     storage::{ArchivedData, NodeDistanceMeasure, Storage},
-    storage_common::{get_index_label_attribute, get_index_vector_attribute},
+    storage_common::get_index_vector_attribute,
 };
 use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
 
@@ -91,7 +91,7 @@ pub struct SbqMeans {
 impl SbqMeans {
     pub unsafe fn load<S: StatsNodeRead>(
         index: &PgRelation,
-        meta_page: &super::meta_page::MetaPage,
+        meta_page: &MetaPage,
         stats: &mut S,
     ) -> SbqQuantizer {
         let mut quantizer = SbqQuantizer::new(meta_page);
@@ -150,7 +150,7 @@ pub struct SbqQuantizer {
 }
 
 impl SbqQuantizer {
-    fn new(meta_page: &super::meta_page::MetaPage) -> SbqQuantizer {
+    fn new(meta_page: &MetaPage) -> SbqQuantizer {
         Self {
             use_mean: true,
             training: false,
@@ -238,7 +238,7 @@ impl SbqQuantizer {
         }
     }
 
-    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+    fn start_training(&mut self, meta_page: &MetaPage) {
         self.training = true;
         if self.use_mean {
             self.count = 0;
@@ -290,7 +290,7 @@ impl SbqQuantizer {
 
     fn vector_for_new_node(
         &self,
-        _meta_page: &super::meta_page::MetaPage,
+        _meta_page: &MetaPage,
         full_vector: &[f32],
     ) -> Vec<SbqVectorElement> {
         self.quantize(full_vector)
@@ -349,7 +349,6 @@ impl SbqSearchDistanceMeasure {
 
 pub struct SbqNodeDistanceMeasure<'a> {
     vec: Vec<SbqVectorElement>,
-    _labels: LabelSet,
     storage: &'a SbqSpeedupStorage<'a>,
 }
 
@@ -360,10 +359,9 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         stats: &mut T,
     ) -> Self {
         let cache = &mut storage.qv_cache.borrow_mut();
-        let (vec, labels) = cache.get(index_pointer, storage, stats);
+        let (vec, _) = cache.get(index_pointer, storage, stats);
         Self {
             vec: vec.to_vec(),
-            _labels: labels.clone(),
             storage,
         }
     }
@@ -382,7 +380,7 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
 }
 
 struct QuantizedVectorCache {
-    quantized_vector_map: HashMap<ItemPointer, (Vec<SbqVectorElement>, LabelSet)>,
+    quantized_vector_map: HashMap<ItemPointer, (Vec<SbqVectorElement>, Option<LabelSet>)>,
 }
 
 /* should be a LRU cache for quantized vector. For now cheat and never evict
@@ -400,14 +398,14 @@ impl QuantizedVectorCache {
         index_pointer: IndexPointer,
         storage: &SbqSpeedupStorage,
         stats: &mut S,
-    ) -> (&[SbqVectorElement], &LabelSet) {
+    ) -> (&[SbqVectorElement], Option<&LabelSet>) {
         let (vec, labels) = self
             .quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
                 storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
             });
-        (vec.as_slice(), labels)
+        (vec.as_slice(), labels.as_ref())
     }
 
     /* Ensure that all these elements are in the cache. If the capacity isn't big enough throw an error.
@@ -431,16 +429,14 @@ pub struct SbqSpeedupStorage<'a> {
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
-    _label_attr: Option<AttrNumber>,
     qv_cache: RefCell<QuantizedVectorCache>,
-    has_labels: bool,
 }
 
 impl<'a> SbqSpeedupStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        meta_page: &super::meta_page::MetaPage,
+        meta_page: &MetaPage,
     ) -> SbqSpeedupStorage<'a> {
         Self {
             index,
@@ -448,15 +444,13 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
-            _label_attr: get_index_label_attribute(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            has_labels: meta_page.has_labels(),
         }
     }
 
     fn load_quantizer<S: StatsNodeRead>(
         index_relation: &PgRelation,
-        meta_page: &super::meta_page::MetaPage,
+        meta_page: &MetaPage,
         stats: &mut S,
     ) -> SbqQuantizer {
         unsafe { SbqMeans::load(index_relation, meta_page, stats) }
@@ -465,7 +459,7 @@ impl<'a> SbqSpeedupStorage<'a> {
     pub fn load_for_insert<S: StatsNodeRead>(
         heap_rel: &'a PgRelation,
         index_relation: &'a PgRelation,
-        meta_page: &super::meta_page::MetaPage,
+        meta_page: &MetaPage,
         stats: &mut S,
     ) -> SbqSpeedupStorage<'a> {
         Self {
@@ -474,9 +468,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            _label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            has_labels: meta_page.has_labels(),
         }
     }
 
@@ -484,7 +476,7 @@ impl<'a> SbqSpeedupStorage<'a> {
         index_relation: &'a PgRelation,
         heap_relation: &'a PgRelation,
         quantizer: &SbqQuantizer,
-        meta_page: &super::meta_page::MetaPage,
+        meta_page: &MetaPage,
     ) -> SbqSpeedupStorage<'a> {
         Self {
             index: index_relation,
@@ -493,9 +485,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
-            _label_attr: get_index_label_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            has_labels: meta_page.has_labels(),
         }
     }
 
@@ -503,20 +493,23 @@ impl<'a> SbqSpeedupStorage<'a> {
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> (Vec<SbqVectorElement>, LabelSet) {
+    ) -> (Vec<SbqVectorElement>, Option<LabelSet>) {
         let rn = unsafe { SbqNode::read(self.index, index_pointer, stats) };
         let node = rn.get_archived_node();
-        (node.bq_vector.as_slice().to_vec(), (&node.labels).into())
+        (
+            node.bq_vector.as_slice().to_vec(),
+            node.labels.as_ref().map(Into::into),
+        )
     }
 
-    fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(&self, stats: &mut S) {
+    fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(
+        &self,
+        meta_page: &mut MetaPage,
+        stats: &mut S,
+    ) {
         if self.quantizer.use_mean {
             let index_pointer = unsafe { SbqMeans::store(self.index, &self.quantizer, stats) };
-            super::meta_page::MetaPage::update_quantizer_metadata_pointer(
-                self.index,
-                index_pointer,
-                stats,
-            );
+            meta_page.set_quantizer_metadata_pointer(index_pointer);
         }
     }
 
@@ -554,28 +547,17 @@ impl<'a> SbqSpeedupStorage<'a> {
                     );
 
                     // Skip neighbors that have no matching labels with the query
-                    if self.has_labels
-                        && !lsr
-                            .sdm
-                            .as_ref()
-                            .unwrap()
-                            .query
-                            .labels()
-                            .matches(node_neighbor.get_labels())
-                    {
-                        // debug2!(
-                        //     "Skipping non-matching labels: {:?} {:?}",
-                        //     lsr.sdm.as_ref().unwrap().query.labels(),
-                        //     node_neighbor.get_labels()
-                        // );
-                        continue;
+                    if let Some(labels) = lsr.sdm.as_ref().unwrap().query.labels() {
+                        if !labels.matches(node_neighbor.get_labels().unwrap()) {
+                            continue;
+                        }
                     }
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
                         lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
-                        node_neighbor.get_labels().into(),
+                        node_neighbor.get_labels().map(Into::into),
                     );
 
                     lsr.insert_neighbor(lsn);
@@ -598,28 +580,17 @@ impl<'a> SbqSpeedupStorage<'a> {
                     );
 
                     // Skip neighbors that have no matching labels with the query
-                    if self.has_labels
-                        && !lsr
-                            .sdm
-                            .as_ref()
-                            .unwrap()
-                            .query
-                            .labels()
-                            .matches(neighbor.get_labels())
-                    {
-                        // debug2!(
-                        //     "Skipping non-matching labels: {:?} {:?}",
-                        //     lsr.sdm.as_ref().unwrap().query.labels(),
-                        //     neighbor.get_labels()
-                        // );
-                        continue;
+                    if let Some(labels) = lsr.sdm.as_ref().unwrap().query.labels() {
+                        if !labels.matches(neighbor.get_labels().unwrap()) {
+                            continue;
+                        }
                     }
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
                         lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                         PhantomData::<bool>,
-                        neighbor.get_labels().clone(),
+                        neighbor.get_labels().cloned(),
                     );
 
                     lsr.insert_neighbor(lsn);
@@ -647,7 +618,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: LabelSet,
+        labels: Option<LabelSet>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
@@ -661,7 +632,7 @@ impl Storage for SbqSpeedupStorage<'_> {
         index_pointer
     }
 
-    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage) {
+    fn start_training(&mut self, meta_page: &MetaPage) {
         self.quantizer.start_training(meta_page);
     }
 
@@ -669,9 +640,9 @@ impl Storage for SbqSpeedupStorage<'_> {
         self.quantizer.add_sample(sample);
     }
 
-    fn finish_training(&mut self, stats: &mut WriteStats) {
+    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats) {
         self.quantizer.finish_training();
-        self.write_quantizer_metadata(stats);
+        self.write_quantizer_metadata(meta_page, stats);
     }
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
@@ -754,7 +725,7 @@ impl Storage for SbqSpeedupStorage<'_> {
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist as f32, neighbors_of, n),
-                arch.get_labels().into(),
+                arch.get_labels().map(Into::into),
             ))
         }
     }
@@ -785,7 +756,7 @@ impl Storage for SbqSpeedupStorage<'_> {
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PhantomData::<bool>,
-            node.get_labels().into(),
+            node.get_labels().map(Into::into),
         ))
     }
 
@@ -877,7 +848,7 @@ pub struct SbqNode {
     pub bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
     _neighbor_vectors: Vec<Vec<u64>>, // No longer used, but kept for backwards compatibility
-    labels: LabelSet,
+    labels: Option<LabelSet>,
 }
 
 impl SbqNode {
@@ -885,7 +856,7 @@ impl SbqNode {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[SbqVectorElement],
-        labels: LabelSet,
+        labels: Option<LabelSet>,
     ) -> Self {
         Self::new(
             heap_pointer,
@@ -901,7 +872,7 @@ impl SbqNode {
         num_neighbors: usize,
         _num_dimensions: usize,
         bq_vector: &[SbqVectorElement],
-        labels: LabelSet,
+        labels: Option<LabelSet>,
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
         let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
@@ -921,7 +892,7 @@ impl SbqNode {
         let v: Vec<SbqVectorElement> =
             vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(hp, num_neighbors, num_dimensions, &v, LabelSet::default());
+        let n = Self::new(hp, num_neighbors, num_dimensions, &v, None);
         n.serialize_to_vec().len()
     }
 
@@ -998,8 +969,8 @@ impl ArchivedSbqNode {
             .map(|ip| ip.deserialize_item_pointer())
     }
 
-    pub fn get_labels(&self) -> &ArchivedLabelSet {
-        &self.labels
+    pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
+        self.labels.as_ref()
     }
 }
 

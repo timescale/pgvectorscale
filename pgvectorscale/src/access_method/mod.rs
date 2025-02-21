@@ -1,6 +1,7 @@
 use pgrx::*;
 mod build;
 mod cost_estimate;
+#[macro_use]
 mod debugging;
 mod graph;
 mod graph_neighbor_store;

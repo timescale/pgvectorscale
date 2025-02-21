@@ -15,14 +15,14 @@ pub fn get_index_vector_attribute(index: &PgRelation) -> AttrNumber {
     }
 }
 
-pub fn get_index_label_attribute(index: &PgRelation) -> Option<AttrNumber> {
-    unsafe {
-        let a = index.rd_index;
-        let natts = (*a).indnatts;
-        assert!(natts <= 2);
-        if natts == 1 {
-            return None;
-        }
-        Some((*a).indkey.values.as_slice(natts as _)[1])
-    }
-}
+// pub fn get_index_label_attribute(index: &PgRelation) -> Option<AttrNumber> {
+//     unsafe {
+//         let a = index.rd_index;
+//         let natts = (*a).indnatts;
+//         assert!(natts <= 2);
+//         if natts == 1 {
+//             return None;
+//         }
+//         Some((*a).indkey.values.as_slice(natts as _)[1])
+//     }
+// }
