@@ -299,21 +299,13 @@ impl SbqQuantizer {
 pub struct SbqSearchDistanceMeasure {
     quantized_vector: Vec<SbqVectorElement>,
     query: PgVector,
-    num_dimensions_for_neighbors: usize,
-    quantized_dimensions: usize,
 }
 
 impl SbqSearchDistanceMeasure {
-    pub fn new(
-        quantizer: &SbqQuantizer,
-        query: PgVector,
-        num_dimensions_for_neighbors: usize,
-    ) -> SbqSearchDistanceMeasure {
+    pub fn new(quantizer: &SbqQuantizer, query: PgVector) -> SbqSearchDistanceMeasure {
         SbqSearchDistanceMeasure {
             quantized_vector: quantizer.quantize(query.to_index_slice()),
             query,
-            num_dimensions_for_neighbors,
-            quantized_dimensions: quantizer.quantized_size(num_dimensions_for_neighbors),
         }
     }
 
@@ -327,22 +319,13 @@ impl SbqSearchDistanceMeasure {
         stats.record_quantized_distance_comparison();
         let (a, b) = match gns {
             GraphNeighborStore::Disk => {
-                if self.num_dimensions_for_neighbors > 0 {
-                    debug_assert!(self.quantized_vector.len() >= self.quantized_dimensions);
-                    debug_assert!(bq_vector.len() >= self.quantized_dimensions);
-                    (
-                        &self.quantized_vector.as_slice()[..self.quantized_dimensions],
-                        &bq_vector[..self.quantized_dimensions],
-                    )
-                } else {
-                    debug_assert!(
-                        self.quantized_vector.len() == bq_vector.len(),
-                        "self.quantized_vector.len()={} bq_vector.len()={}",
-                        self.quantized_vector.len(),
-                        bq_vector.len()
-                    );
-                    (self.quantized_vector.as_slice(), bq_vector)
-                }
+                debug_assert!(
+                    self.quantized_vector.len() == bq_vector.len(),
+                    "self.quantized_vector.len()={} bq_vector.len()={}",
+                    self.quantized_vector.len(),
+                    bq_vector.len()
+                );
+                (self.quantized_vector.as_slice(), bq_vector)
             }
             GraphNeighborStore::Builder(_b) => {
                 debug_assert!(
@@ -421,10 +404,6 @@ impl QuantizedVectorCache {
             })
     }
 
-    fn must_get(&self, index_pointer: IndexPointer) -> &[SbqVectorElement] {
-        self.quantized_vector_map.get(&index_pointer).unwrap()
-    }
-
     /* Ensure that all these elements are in the cache. If the capacity isn't big enough throw an error.
     must_get must succeed on all the elements after this call prior to another get or preload call */
 
@@ -447,7 +426,6 @@ pub struct SbqSpeedupStorage<'a> {
     heap_rel: &'a PgRelation,
     heap_attr: pgrx::pg_sys::AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
-    num_dimensions_for_neighbors: usize,
 }
 
 impl<'a> SbqSpeedupStorage<'a> {
@@ -463,7 +441,6 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel,
             heap_attr: get_attribute_number_from_index(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -488,7 +465,6 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -506,7 +482,6 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel: heap_relation,
             heap_attr: get_attribute_number_from_index(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
-            num_dimensions_for_neighbors: meta_page.get_num_dimensions_for_neighbors() as usize,
         }
     }
 
@@ -548,30 +523,21 @@ impl<'a> SbqSpeedupStorage<'a> {
                 //OPT: get neighbors from private data just like plain storage in the self.num_dimensions_for_neighbors == 0 case
                 let neighbors = node_visiting.get_index_pointer_to_neighbors();
 
-                for (i, &neighbor_index_pointer) in neighbors.iter().enumerate() {
+                for &neighbor_index_pointer in neighbors.iter() {
                     if !lsr.prepare_insert(neighbor_index_pointer) {
                         continue;
                     }
 
-                    let distance = if self.num_dimensions_for_neighbors > 0 {
-                        let bq_vector = node_visiting.neighbor_vectors[i].as_slice();
-                        lsr.sdm.as_ref().unwrap().calculate_bq_distance(
-                            bq_vector,
-                            gns,
-                            &mut lsr.stats,
-                        )
-                    } else {
-                        let rn_neighbor = unsafe {
-                            SbqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
-                        };
-                        let node_neighbor = rn_neighbor.get_archived_node();
-                        let bq_vector = node_neighbor.bq_vector.as_slice();
-                        lsr.sdm.as_ref().unwrap().calculate_bq_distance(
-                            bq_vector,
-                            gns,
-                            &mut lsr.stats,
-                        )
+                    let rn_neighbor = unsafe {
+                        SbqNode::read(self.index, neighbor_index_pointer, &mut lsr.stats)
                     };
+                    let node_neighbor = rn_neighbor.get_archived_node();
+                    let bq_vector = node_neighbor.bq_vector.as_slice();
+                    let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
+                        bq_vector,
+                        gns,
+                        &mut lsr.stats,
+                    );
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
@@ -634,12 +600,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
-        let node = SbqNode::with_meta(
-            &self.quantizer,
-            heap_pointer,
-            meta_page,
-            bq_vector.as_slice(),
-        );
+        let node = SbqNode::with_meta(heap_pointer, meta_page, bq_vector.as_slice());
 
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
@@ -676,7 +637,7 @@ impl Storage for SbqSpeedupStorage<'_> {
 
         let mut node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta, &cache);
+        archived.as_mut().set_neighbors(neighbors, meta);
 
         node.commit();
     }
@@ -690,7 +651,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     }
 
     fn get_query_distance_measure(&self, query: PgVector) -> SbqSearchDistanceMeasure {
-        SbqSearchDistanceMeasure::new(&self.quantizer, query, self.num_dimensions_for_neighbors)
+        SbqSearchDistanceMeasure::new(&self.quantizer, query)
     }
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
@@ -810,7 +771,7 @@ impl Storage for SbqSpeedupStorage<'_> {
 
         let mut node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta, &cache);
+        archived.as_mut().set_neighbors(neighbors, meta);
         node.commit();
     }
 
@@ -825,14 +786,13 @@ use pgvectorscale_derive::{Readable, Writeable};
 #[archive(check_bytes)]
 pub struct SbqNode {
     pub heap_item_pointer: HeapPointer,
-    pub bq_vector: Vec<u64>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
+    pub bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
-    neighbor_vectors: Vec<Vec<u64>>, //don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
+    _neighbor_vectors: Vec<Vec<u64>>, // No longer used, but kept for backwards compatibility
 }
 
 impl SbqNode {
     pub fn with_meta(
-        quantizer: &SbqQuantizer,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         bq_vector: &[SbqVectorElement],
@@ -841,8 +801,6 @@ impl SbqNode {
             heap_pointer,
             meta_page.get_num_neighbors() as usize,
             meta_page.get_num_dimensions_to_index() as usize,
-            meta_page.get_num_dimensions_for_neighbors() as usize,
-            quantizer.num_bits_per_dimension,
             bq_vector,
         )
     }
@@ -851,8 +809,6 @@ impl SbqNode {
         heap_pointer: HeapPointer,
         num_neighbors: usize,
         _num_dimensions: usize,
-        num_dimensions_for_neighbors: usize,
-        num_bits_per_dimension: u8,
         bq_vector: &[SbqVectorElement],
     ) -> Self {
         // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
@@ -860,55 +816,23 @@ impl SbqNode {
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
-        let neighbor_vectors: Vec<_> = if num_dimensions_for_neighbors > 0 {
-            (0..num_neighbors)
-                .map(|_| {
-                    vec![
-                        0;
-                        SbqQuantizer::quantized_size_internal(
-                            num_dimensions_for_neighbors as _,
-                            num_bits_per_dimension
-                        )
-                    ]
-                })
-                .collect()
-        } else {
-            vec![]
-        };
-
         Self {
             heap_item_pointer: heap_pointer,
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers,
-            neighbor_vectors,
+            _neighbor_vectors: vec![],
         }
     }
 
-    fn test_size(
-        num_neighbors: usize,
-        num_dimensions: usize,
-        num_dimensions_for_neighbors: usize,
-        num_bits_per_dimension: u8,
-    ) -> usize {
+    fn test_size(num_neighbors: usize, num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
         let v: Vec<SbqVectorElement> =
             vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
         let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(
-            hp,
-            num_neighbors,
-            num_dimensions,
-            num_dimensions_for_neighbors,
-            num_bits_per_dimension,
-            &v,
-        );
+        let n = Self::new(hp, num_neighbors, num_dimensions, &v);
         n.serialize_to_vec().len()
     }
 
-    pub fn get_default_num_neighbors(
-        num_dimensions: usize,
-        num_dimensions_for_neighbors: usize,
-        num_bits_per_dimension: u8,
-    ) -> usize {
+    pub fn get_default_num_neighbors(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
         //how many neighbors can fit on one page? That's what we choose.
 
         //we first overapproximate the number of neighbors and then double check by actually calculating the size of the SbqNode.
@@ -928,7 +852,6 @@ impl SbqNode {
             let serialized_size = SbqNode::test_size(
                 num_neighbors_overapproximate,
                 num_dimensions,
-                num_dimensions_for_neighbors,
                 num_bits_per_dimension,
             );
             if serialized_size <= page_size {
@@ -947,15 +870,10 @@ impl ArchivedSbqNode {
         unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
     }
 
-    fn neighbor_vector(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedVec<u64>>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_vectors) }
-    }
-
     fn set_neighbors(
         mut self: Pin<&mut Self>,
         neighbors: &[NeighborWithDistance],
         meta_page: &MetaPage,
-        cache: &QuantizedVectorCache,
     ) {
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
@@ -963,18 +881,6 @@ impl ArchivedSbqNode {
             //TODO hate that we have to set each field like this
             a_index_pointer.block_number = ip.block_number;
             a_index_pointer.offset = ip.offset;
-
-            if meta_page.get_num_dimensions_for_neighbors() > 0 {
-                let quantized = &cache.must_get(ip)[..SbqQuantizer::quantized_size_internal(
-                    meta_page.get_num_dimensions_for_neighbors() as _,
-                    meta_page.get_bq_num_bits_per_dimension(),
-                )];
-                let mut neighbor_vector = self.as_mut().neighbor_vector().index_pin(i);
-                for (index_in_q_vec, val) in quantized.iter().enumerate() {
-                    let mut x = neighbor_vector.as_mut().index_pin(index_in_q_vec);
-                    *x = *val;
-                }
-            }
         }
         //set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
@@ -1031,123 +937,6 @@ mod tests {
     use pgrx::*;
 
     use crate::access_method::distance::DistanceType;
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_default_neighbors() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "storage_layout = io_optimized",
-            "bq_speedup_default_neighbors",
-            1536,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_few_neighbors() -> spi::Result<()> {
-        //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "num_neighbors=10, storage_layout = io_optimized",
-            "bq_speedup_few_neighbors",
-            1536,
-        )?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_bq_speedup_storage_delete_vacuum_plain() {
-        crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 10, storage_layout = io_optimized",
-        );
-    }
-
-    #[test]
-    fn test_bq_speedup_storage_delete_vacuum_full() {
-        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
-            "num_neighbors = 38, storage_layout = io_optimized",
-        );
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_empty_table_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_empty_table_insert_scaffold(
-            "num_neighbors=38, storage_layout = io_optimized",
-        )
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_insert_empty_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
-            "num_neighbors=38, storage_layout = io_optimized",
-        )
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_cosine() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "storage_layout = io_optimized, num_dimensions=768",
-            "bq_speedup_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_l2() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::L2,
-            "storage_layout = io_optimized, num_dimensions=768",
-            "bq_speedup_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_creation_num_dimensions_ip() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::InnerProduct,
-            "storage_layout = io_optimized, num_dimensions=768",
-            "bq_speedup_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_updates_cosine() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::Cosine,
-            "storage_layout = io_optimized, num_neighbors=10",
-            300,
-            "bq_speedup",
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_updates_l2() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::L2,
-            "storage_layout = io_optimized, num_neighbors=10",
-            300,
-            "bq_speedup",
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_bq_speedup_storage_index_updates_ip() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::InnerProduct,
-            "storage_layout = io_optimized, num_neighbors=10",
-            300,
-            "bq_speedup",
-        )?;
-        Ok(())
-    }
 
     #[pg_test]
     unsafe fn test_bq_compressed_index_creation_default_neighbors() -> spi::Result<()> {

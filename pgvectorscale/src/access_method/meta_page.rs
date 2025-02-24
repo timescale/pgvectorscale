@@ -13,7 +13,6 @@ use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
-use super::sbq::SbqNode;
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
 
@@ -134,16 +133,6 @@ impl MetaPage {
         self.bq_num_bits_per_dimension
     }
 
-    pub fn get_num_dimensions_for_neighbors(&self) -> u32 {
-        match StorageType::from_u8(self.storage_type) {
-            StorageType::Plain => {
-                error!("get_num_dimensions_for_neighbors should not be called for Plain storage")
-            }
-            StorageType::SbqSpeedup => self.num_dimensions_to_index,
-            StorageType::SbqCompression => 0,
-        }
-    }
-
     /// Maximum number of neigbors per node. Given that we pre-allocate
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
@@ -189,24 +178,15 @@ impl MetaPage {
 
         match self.get_storage_type() {
             StorageType::Plain => None,
-            StorageType::SbqSpeedup | StorageType::SbqCompression => Some(self.quantizer_metadata),
+            StorageType::SbqCompression => Some(self.quantizer_metadata),
         }
     }
 
-    fn calculate_num_neighbors(
-        num_dimensions: u32,
-        num_bits_per_dimension: u8,
-        opt: &PgBox<TSVIndexOptions>,
-    ) -> u32 {
+    fn calculate_num_neighbors(opt: &PgBox<TSVIndexOptions>) -> u32 {
         let num_neighbors = (*opt).get_num_neighbors();
         if num_neighbors == NUM_NEIGHBORS_DEFAULT_SENTINEL {
             match (*opt).get_storage_type() {
                 StorageType::Plain => 50,
-                StorageType::SbqSpeedup => SbqNode::get_default_num_neighbors(
-                    num_dimensions as usize,
-                    num_dimensions as usize,
-                    num_bits_per_dimension,
-                ) as u32,
                 StorageType::SbqCompression => 50,
             }
         } else {
@@ -262,11 +242,7 @@ impl MetaPage {
             num_dimensions,
             num_dimensions_to_index,
             storage_type: (*opt).get_storage_type() as u8,
-            num_neighbors: Self::calculate_num_neighbors(
-                num_dimensions,
-                bq_num_bits_per_dimension,
-                &opt,
-            ),
+            num_neighbors: Self::calculate_num_neighbors(&opt),
             bq_num_bits_per_dimension,
             search_list_size: opt.search_list_size,
             max_alpha: opt.max_alpha,

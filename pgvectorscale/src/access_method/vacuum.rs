@@ -40,7 +40,7 @@ pub extern "C" fn ambulkdelete(
     let meta_page = MetaPage::fetch(&index_relation);
     let storage = meta_page.get_storage_type();
     match storage {
-        StorageType::SbqSpeedup | StorageType::SbqCompression => {
+        StorageType::SbqCompression => {
             bulk_delete_for_storage::<SbqSpeedupStorage>(
                 &index_relation,
                 nblocks,
