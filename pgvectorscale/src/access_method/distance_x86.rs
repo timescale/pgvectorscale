@@ -1,10 +1,9 @@
 //! Calculate the distance by vector arithmetic optimized for x86
 
+use simdeez::avx2::*;
 use simdeez::scalar::*;
 use simdeez::sse2::*;
 use simdeez::sse41::*;
-//use simdeez::avx::*;
-use simdeez::avx2::*;
 
 #[cfg(not(target_feature = "avx2"))]
 #[cfg(not(doc))]

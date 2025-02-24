@@ -27,6 +27,7 @@ mod distance_aarch64;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
 mod sbq;
+mod sbq_node;
 
 /// Access method support function numbers
 pub const DISKANN_DISTANCE_TYPE_PROC: u16 = 1;

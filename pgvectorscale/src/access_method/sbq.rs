@@ -2,36 +2,34 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{ArchivedLabelSet, LabelSet, LabelSetView, LabeledVector},
+    labels::{LabelSet, LabelSetView, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
+    sbq_node::{SbqNode, SbqNodeBase},
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
-    storage::{ArchivedData, NodeDistanceMeasure, Storage},
+    storage::{NodeDistanceMeasure, Storage},
     storage_common::get_index_vector_attribute,
 };
-use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData, pin::Pin};
+use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData};
 
-use pgrx::{
-    pg_sys::{AttrNumber, InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ},
-    PgBox, PgRelation,
-};
-use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
+use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
+use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::util::{
     chain::{ChainItemReader, ChainTapeWriter},
     page::{PageType, ReadablePage},
     table_slot::TableSlot,
     tape::Tape,
-    ArchivedItemPointer, HeapPointer, IndexPointer, ItemPointer, ReadableBuffer,
+    HeapPointer, IndexPointer, ItemPointer, ReadableBuffer,
 };
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::util::WritableBuffer;
 
-type SbqVectorElement = u64;
+pub type SbqVectorElement = u64;
 const BITS_STORE_TYPE_SIZE: usize = 64;
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -167,11 +165,11 @@ impl SbqQuantizer {
         self.m2 = m2
     }
 
-    fn quantized_size(&self, full_vector_size: usize) -> usize {
+    pub fn quantized_size(&self, full_vector_size: usize) -> usize {
         Self::quantized_size_internal(full_vector_size, self.num_bits_per_dimension)
     }
 
-    fn quantized_size_internal(full_vector_size: usize, num_bits_per_dimension: u8) -> usize {
+    pub fn quantized_size_internal(full_vector_size: usize, num_bits_per_dimension: u8) -> usize {
         let num_bits = full_vector_size * num_bits_per_dimension as usize;
 
         if num_bits % BITS_STORE_TYPE_SIZE == 0 {
@@ -181,7 +179,7 @@ impl SbqQuantizer {
         }
     }
 
-    fn quantized_size_bytes(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
+    pub fn quantized_size_bytes(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
         Self::quantized_size_internal(num_dimensions, num_bits_per_dimension)
             * std::mem::size_of::<SbqVectorElement>()
     }
@@ -423,21 +421,22 @@ impl QuantizedVectorCache {
     }
 }
 
-pub struct SbqSpeedupStorage<'a> {
+pub struct SbqSpeedupStorage<'a, N: SbqNodeBase> {
     pub index: &'a PgRelation,
     pub distance_fn: DistanceFn,
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
     qv_cache: RefCell<QuantizedVectorCache>,
+    _phantom: PhantomData<N>,
 }
 
-impl<'a> SbqSpeedupStorage<'a> {
+impl<'a, N: SbqNodeBase> SbqSpeedupStorage<'a, N> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         meta_page: &MetaPage,
-    ) -> SbqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a, N> {
         Self {
             index,
             distance_fn: meta_page.get_distance_function(),
@@ -445,6 +444,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            _phantom: PhantomData,
         }
     }
 
@@ -461,7 +461,7 @@ impl<'a> SbqSpeedupStorage<'a> {
         index_relation: &'a PgRelation,
         meta_page: &MetaPage,
         stats: &mut S,
-    ) -> SbqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a, N> {
         Self {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
@@ -469,6 +469,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            _phantom: PhantomData,
         }
     }
 
@@ -477,7 +478,7 @@ impl<'a> SbqSpeedupStorage<'a> {
         heap_relation: &'a PgRelation,
         quantizer: &SbqQuantizer,
         meta_page: &MetaPage,
-    ) -> SbqSpeedupStorage<'a> {
+    ) -> SbqSpeedupStorage<'a, N> {
         Self {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
@@ -486,20 +487,8 @@ impl<'a> SbqSpeedupStorage<'a> {
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
             qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            _phantom: PhantomData,
         }
-    }
-
-    fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut S,
-    ) -> (Vec<SbqVectorElement>, Option<LabelSet>) {
-        let rn = unsafe { SbqNode::read(self.index, index_pointer, stats) };
-        let node = rn.get_archived_node();
-        (
-            node.bq_vector.as_slice().to_vec(),
-            node.labels.as_ref().map(Into::into),
-        )
     }
 
     fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(
@@ -511,6 +500,19 @@ impl<'a> SbqSpeedupStorage<'a> {
             let index_pointer = unsafe { SbqMeans::store(self.index, &self.quantizer, stats) };
             meta_page.set_quantizer_metadata_pointer(index_pointer);
         }
+    }
+
+    fn get_quantized_vector_from_index_pointer<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> (Vec<SbqVectorElement>, Option<LabelSet>) {
+        let rn = unsafe { N::read(self.index, index_pointer, stats) };
+        let node = rn.get_archived_node();
+        (
+            node.bq_vector.as_slice().to_vec(),
+            node.labels.as_ref().map(Into::into),
+        )
     }
 
     fn visit_lsn_internal(
@@ -840,164 +842,6 @@ impl Storage for SbqSpeedupStorage<'_> {
 }
 
 use pgvectorscale_derive::{Readable, Writeable};
-
-#[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
-#[archive(check_bytes)]
-pub struct SbqNode {
-    pub heap_item_pointer: HeapPointer,
-    pub bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
-    neighbor_index_pointers: Vec<ItemPointer>,
-    _neighbor_vectors: Vec<Vec<u64>>, // No longer used, but kept for backwards compatibility
-    labels: Option<LabelSet>,
-}
-
-impl SbqNode {
-    pub fn with_meta(
-        heap_pointer: HeapPointer,
-        meta_page: &MetaPage,
-        bq_vector: &[SbqVectorElement],
-        labels: Option<LabelSet>,
-    ) -> Self {
-        Self::new(
-            heap_pointer,
-            meta_page.get_num_neighbors() as usize,
-            meta_page.get_num_dimensions_to_index() as usize,
-            bq_vector,
-            labels,
-        )
-    }
-
-    fn new(
-        heap_pointer: HeapPointer,
-        num_neighbors: usize,
-        _num_dimensions: usize,
-        bq_vector: &[SbqVectorElement],
-        labels: Option<LabelSet>,
-    ) -> Self {
-        // always use vectors of num_neighbors in length because we never want the serialized size of a Node to change
-        let neighbor_index_pointers: Vec<_> = (0..num_neighbors)
-            .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
-            .collect();
-
-        Self {
-            heap_item_pointer: heap_pointer,
-            bq_vector: bq_vector.to_vec(),
-            neighbor_index_pointers,
-            _neighbor_vectors: vec![],
-            labels,
-        }
-    }
-
-    fn test_size(num_neighbors: usize, num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
-        let v: Vec<SbqVectorElement> =
-            vec![0; SbqQuantizer::quantized_size_internal(num_dimensions, num_bits_per_dimension)];
-        let hp = HeapPointer::new(InvalidBlockNumber, InvalidOffsetNumber);
-        let n = Self::new(hp, num_neighbors, num_dimensions, &v, None);
-        n.serialize_to_vec().len()
-    }
-
-    pub fn get_default_num_neighbors(num_dimensions: usize, num_bits_per_dimension: u8) -> usize {
-        //how many neighbors can fit on one page? That's what we choose.
-
-        //we first overapproximate the number of neighbors and then double check by actually calculating the size of the SbqNode.
-
-        //blocksize - 100 bytes for the padding/header/etc.
-        let page_size = BLCKSZ as usize - 50;
-        //one quantized_vector takes this many bytes
-        let vec_size =
-            SbqQuantizer::quantized_size_bytes(num_dimensions, num_bits_per_dimension) + 1;
-        //start from the page size then subtract the heap_item_pointer and bq_vector elements of SbqNode.
-        let starting = BLCKSZ as usize - std::mem::size_of::<HeapPointer>() - vec_size;
-        //one neigbors contribution to neighbor_index_pointers + neighbor_vectors in SbqNode.
-        let one_neighbor = vec_size + std::mem::size_of::<ItemPointer>();
-
-        let mut num_neighbors_overapproximate: usize = starting / one_neighbor;
-        while num_neighbors_overapproximate > 0 {
-            let serialized_size = SbqNode::test_size(
-                num_neighbors_overapproximate,
-                num_dimensions,
-                num_bits_per_dimension,
-            );
-            if serialized_size <= page_size {
-                return num_neighbors_overapproximate;
-            }
-            num_neighbors_overapproximate -= 1;
-        }
-        pgrx::error!(
-            "Could not find a valid number of neighbors for the default value. Please specify one."
-        );
-    }
-}
-
-impl ArchivedSbqNode {
-    fn neighbor_index_pointer(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
-    }
-
-    fn set_neighbors(
-        mut self: Pin<&mut Self>,
-        neighbors: &[NeighborWithDistance],
-        meta_page: &MetaPage,
-    ) {
-        for (i, new_neighbor) in neighbors.iter().enumerate() {
-            let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
-            let ip = new_neighbor.get_index_pointer_to_neighbor();
-            //TODO hate that we have to set each field like this
-            a_index_pointer.block_number = ip.block_number;
-            a_index_pointer.offset = ip.offset;
-        }
-        //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            let mut past_last_index_pointers =
-                self.neighbor_index_pointer().index_pin(neighbors.len());
-            past_last_index_pointers.block_number = InvalidBlockNumber;
-            past_last_index_pointers.offset = InvalidOffsetNumber;
-        }
-    }
-
-    pub fn num_neighbors(&self) -> usize {
-        self.neighbor_index_pointers
-            .iter()
-            .position(|f| f.block_number == InvalidBlockNumber)
-            .unwrap_or(self.neighbor_index_pointers.len())
-    }
-
-    pub fn iter_neighbors(&self) -> impl Iterator<Item = ItemPointer> + '_ {
-        self.neighbor_index_pointers
-            .iter()
-            .take(self.num_neighbors())
-            .map(|ip| ip.deserialize_item_pointer())
-    }
-
-    pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
-        self.labels.as_ref()
-    }
-}
-
-impl ArchivedData for ArchivedSbqNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedSbqNode> {
-        ArchivedSbqNode::with_data(data)
-    }
-
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
-        self.iter_neighbors().collect()
-    }
-
-    fn is_deleted(&self) -> bool {
-        self.heap_item_pointer.offset == InvalidOffsetNumber
-    }
-
-    fn delete(self: Pin<&mut Self>) {
-        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
-        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
-        heap_pointer.offset = InvalidOffsetNumber;
-        heap_pointer.block_number = InvalidBlockNumber;
-    }
-
-    fn get_heap_item_pointer(&self) -> HeapPointer {
-        self.heap_item_pointer.deserialize_item_pointer()
-    }
-}
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]
