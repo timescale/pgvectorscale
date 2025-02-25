@@ -17,6 +17,8 @@ use std::{cell::RefCell, collections::HashMap, iter::once, marker::PhantomData};
 use pgrx::{PgBox, PgRelation};
 use rkyv::{Archive, Deserialize, Serialize};
 
+use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
+use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{
     chain::{ChainItemReader, ChainTapeWriter},
     page::{PageType, ReadablePage},
@@ -24,8 +26,6 @@ use crate::util::{
     tape::Tape,
     HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
-
-use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use pgvectorscale_derive::{Readable, Writeable};
 
 pub type SbqVectorElement = u64;

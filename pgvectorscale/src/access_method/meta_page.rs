@@ -4,10 +4,6 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::{Archive, Deserialize, Serialize};
 use semver::Version;
 
-use crate::access_method::options::TSVIndexOptions;
-use crate::util::page;
-use crate::util::*;
-
 use super::distance::{DistanceFn, DistanceType};
 use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
@@ -15,6 +11,10 @@ use super::options::{
 };
 use super::stats::StatsNodeModify;
 use super::storage::StorageType;
+use crate::access_method::node::{ReadableNode, WriteableNode};
+use crate::access_method::options::TSVIndexOptions;
+use crate::util::page;
+use crate::util::*;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
 const TSV_VERSION: u32 = 2;

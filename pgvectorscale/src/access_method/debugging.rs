@@ -4,9 +4,10 @@ use std::collections::HashMap;
 
 use pgrx::PgRelation;
 
+use crate::access_method::node::ReadableNode;
 use crate::util::ItemPointer;
 
-use super::{plain_node::Node, stats::GreedySearchStats};
+use super::{plain_node::PlainNode, stats::GreedySearchStats};
 
 #[allow(dead_code)]
 pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {
@@ -25,7 +26,7 @@ unsafe fn print_graph_from_disk_visitor(
     sb: &mut String,
 ) {
     let mut stats = GreedySearchStats::new();
-    let data_node = Node::read(index, index_pointer, &mut stats);
+    let data_node = PlainNode::read(index, index_pointer, &mut stats);
     let node = data_node.get_archived_node();
     let v = node.vector.as_slice();
     let copy: Vec<f32> = v.to_vec();

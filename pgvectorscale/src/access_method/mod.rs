@@ -7,6 +7,7 @@ mod graph_neighbor_store;
 pub mod guc;
 mod meta_page;
 mod neighbor_with_distance;
+mod node;
 pub mod options;
 pub mod pg_vector;
 mod plain_node;
