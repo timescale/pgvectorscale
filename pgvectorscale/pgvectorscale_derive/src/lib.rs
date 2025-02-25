@@ -43,8 +43,9 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
             }
         }
 
-        impl #name {
-            pub unsafe fn read<'a, 'b, S: crate::access_method::stats::StatsNodeRead>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #readable_name<'a> {
+        impl ReadableNode for #name {
+            type Node<'a> = #readable_name<'a>;
+            unsafe fn read<'a, 'b, S: crate::access_method::stats::StatsNodeRead>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> Self::Node<'a> {
                 let rb = index_pointer.read_bytes(index);
                 stats.record_read();
                 #readable_name::with_readable_buffer(rb)
@@ -81,21 +82,22 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
             }
         }
 
-        impl #name {
-            pub unsafe fn modify<'a, 'b, S: crate::access_method::stats::StatsNodeModify>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> #writeable_name<'a> {
+        impl WriteableNode for #name {
+            type Node<'a> = #writeable_name<'a>;
+            unsafe fn modify<'a, 'b, S: crate::access_method::stats::StatsNodeModify>(index: &'a PgRelation, index_pointer: ItemPointer, stats: &'b mut S) -> Self::Node<'a> {
                 let wb = index_pointer.modify_bytes(index);
                 stats.record_modify();
                 #writeable_name { wb: wb }
             }
 
-            pub fn write<S: crate::access_method::stats::StatsNodeWrite>(&self, tape: &mut crate::util::tape::Tape, stats: &mut S) -> ItemPointer {
+            fn write<S: crate::access_method::stats::StatsNodeWrite>(&self, tape: &mut crate::util::tape::Tape, stats: &mut S) -> ItemPointer {
                 //TODO 256 probably too small
                 let bytes = self.serialize_to_vec();
                 stats.record_write();
                 unsafe { tape.write(&bytes) }
             }
 
-            pub fn serialize_to_vec(&self) -> rkyv::util::AlignedVec {
+            fn serialize_to_vec(&self) -> rkyv::util::AlignedVec {
                 //TODO 256 probably too small
                 rkyv::to_bytes::<_, 256>(self).unwrap()
             }

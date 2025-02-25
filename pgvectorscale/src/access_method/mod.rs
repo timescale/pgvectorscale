@@ -7,10 +7,13 @@ mod graph_neighbor_store;
 pub mod guc;
 mod meta_page;
 mod neighbor_with_distance;
+mod node;
 pub mod options;
 pub mod pg_vector;
 mod plain_node;
 mod plain_storage;
+mod sbq;
+mod sbq_node;
 mod scan;
 pub mod stats;
 mod storage;
@@ -23,7 +26,6 @@ pub mod distance;
 mod distance_aarch64;
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 mod distance_x86;
-mod sbq;
 
 /// Access method support function numbers
 pub const DISKANN_DISTANCE_TYPE_PROC: u16 = 1;
