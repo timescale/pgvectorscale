@@ -248,6 +248,68 @@ impl<'a> Graph<'a> {
         (pruned, new_neighbors)
     }
 
+    fn add_neighbors_with_logging<S: Storage>(
+        &mut self,
+        storage: &S,
+        neighbors_of: ItemPointer,
+        additional_neighbors: Vec<NeighborWithDistance>,
+        stats: &mut PruneNeighborStats,
+    ) -> (bool, Vec<NeighborWithDistance>) {
+        pgrx::warning!(
+            "Adding {} neighbors to {:?}",
+            additional_neighbors.len(),
+            neighbors_of,
+        );
+        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
+            self.neighbor_store.max_neighbors(self.get_meta_page()) + additional_neighbors.len(),
+        );
+        self.neighbor_store
+            .get_neighbors_with_full_vector_distances(
+                neighbors_of,
+                storage,
+                &mut candidates,
+                stats,
+            );
+
+        let mut hash: HashSet<ItemPointer> = candidates
+            .iter()
+            .map(|c| c.get_index_pointer_to_neighbor())
+            .collect();
+        for n in additional_neighbors {
+            if hash.insert(n.get_index_pointer_to_neighbor()) {
+                candidates.push(n);
+            }
+        }
+        //remove myself
+        if !hash.insert(neighbors_of) {
+            //prevent self-loops
+            let index = candidates
+                .iter()
+                .position(|x| x.get_index_pointer_to_neighbor() == neighbors_of)
+                .unwrap();
+            candidates.remove(index);
+        }
+
+        let (pruned, new_neighbors) =
+            if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
+                let new_list =
+                    self.prune_neighbors_with_logging(neighbors_of, candidates, storage, stats);
+                (true, new_list)
+            } else {
+                (false, candidates)
+            };
+
+        //OPT: remove clone
+        self.neighbor_store.set_neighbors(
+            storage,
+            self.meta_page,
+            neighbors_of,
+            new_neighbors.clone(),
+            stats,
+        );
+        (pruned, new_neighbors)
+    }
+
     pub fn get_meta_page(&self) -> &MetaPage {
         self.meta_page
     }
@@ -437,6 +499,93 @@ impl<'a> Graph<'a> {
         results
     }
 
+    pub fn prune_neighbors_with_logging<S: Storage>(
+        &self,
+        _neighbors_of: ItemPointer,
+        mut candidates: Vec<NeighborWithDistance>,
+        storage: &S,
+        stats: &mut PruneNeighborStats,
+    ) -> Vec<NeighborWithDistance> {
+        stats.calls += 1;
+        //TODO make configurable?
+        let max_alpha = self.get_meta_page().get_max_alpha();
+
+        stats.num_neighbors_before_prune += candidates.len();
+        //TODO remove deleted nodes
+
+        //TODO diskann has something called max_occlusion_size/max_candidate_size(default:750). Do we need to implement?
+
+        //sort by distance
+        candidates.sort();
+        let mut results = Vec::<NeighborWithDistance>::with_capacity(
+            self.get_meta_page().get_num_neighbors() as _,
+        );
+
+        let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
+
+        let mut alpha = 1.0;
+        //first we add nodes that "pass" a small alpha. Then, if there
+        //is still room we loop again with a larger alpha.
+        while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
+            for (i, neighbor) in candidates.iter().enumerate() {
+                if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
+                    pgrx::warning!("   Early return after neighbor {}", i);
+                    return results;
+                }
+                if max_factors[i] > alpha {
+                    continue;
+                }
+
+                //don't consider again
+                max_factors[i] = f64::MAX;
+                results.push(neighbor.clone());
+
+                //we've now added this to the results so it's going to be a neighbor
+                //rename for clarity.
+                let existing_neighbor = neighbor;
+
+                let dist_state = unsafe {
+                    storage.get_node_distance_measure(
+                        existing_neighbor.get_index_pointer_to_neighbor(),
+                        stats,
+                    )
+                };
+
+                //go thru the other candidates (tail of the list)
+                for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
+                    //has it been completely excluded?
+                    if max_factors[j] > max_alpha {
+                        continue;
+                    }
+
+                    let raw_distance_between_candidate_and_existing_neighbor = unsafe {
+                        dist_state
+                            .get_distance(candidate_neighbor.get_index_pointer_to_neighbor(), stats)
+                    };
+
+                    let distance_between_candidate_and_existing_neighbor =
+                        DistanceWithTieBreak::new(
+                            raw_distance_between_candidate_and_existing_neighbor,
+                            candidate_neighbor.get_index_pointer_to_neighbor(),
+                            existing_neighbor.get_index_pointer_to_neighbor(),
+                        );
+
+                    let distance_between_candidate_and_point =
+                        candidate_neighbor.get_distance_with_tie_break();
+
+                    //factor is high if the candidate is closer to an existing neighbor than the point it's being considered for
+                    let factor = distance_between_candidate_and_point
+                        .get_factor(&distance_between_candidate_and_existing_neighbor);
+
+                    max_factors[j] = max_factors[j].max(factor)
+                }
+            }
+            alpha *= 1.2
+        }
+        stats.num_neighbors_after_prune += results.len();
+        results
+    }
+
     pub fn insert<S: Storage>(
         &mut self,
         index: &PgRelation,
@@ -445,6 +594,8 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) {
+        stats.num_insertions += 1;
+
         if self.meta_page.get_init_ids().is_none() {
             //TODO probably better set off of centeroids
             MetaPage::update_init_ids(index, vec![index_pointer], stats);
@@ -483,7 +634,7 @@ impl<'a> Graph<'a> {
         //update back pointers
         let mut cnt_contains = 0;
         let neighbor_list_len = neighbor_list.len();
-        for neighbor in neighbor_list {
+        for neighbor in neighbor_list.iter() {
             let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
@@ -495,16 +646,56 @@ impl<'a> Graph<'a> {
                 cnt_contains += 1;
             }
         }
+
         if neighbor_list_len > 0 && cnt_contains == 0 {
             // in tests this should be a hard error
             debug_assert!(
                 false,
-                "Inserted {:?} but it became an orphan",
-                index_pointer
+                "Inserted {:?} but it became an orphan (num_insertions={})",
+                index_pointer, stats.num_insertions,
             );
             // in production this is a warning
-            pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
+            pgrx::warning!(
+                "Inserted {:?} but it became an orphan (num_insertions={})",
+                index_pointer,
+                stats.num_insertions,
+            );
+
+            // Re-run the update of back pointers with verbose logging
+            pgrx::warning!("{} neighbors:", neighbor_list_len);
+            for neighbor in neighbor_list.iter() {
+                pgrx::warning!(
+                    "  {:?} at distance {}",
+                    neighbor.get_index_pointer_to_neighbor(),
+                    neighbor.get_distance_with_tie_break().get_distance(),
+                );
+            }
+            for neighbor in neighbor_list {
+                self.update_back_pointer_with_logging(
+                    neighbor.get_index_pointer_to_neighbor(),
+                    index_pointer,
+                    neighbor.get_distance_with_tie_break(),
+                    storage,
+                    &mut stats.prune_neighbor_stats,
+                );
+            }
         }
+    }
+
+    fn update_back_pointer_with_logging<S: Storage>(
+        &mut self,
+        from: IndexPointer,
+        to: IndexPointer,
+        distance_with_tie_break: &DistanceWithTieBreak,
+        storage: &S,
+        prune_stats: &mut PruneNeighborStats,
+    ) -> bool {
+        let new = vec![NeighborWithDistance::new(
+            to,
+            distance_with_tie_break.clone(),
+        )];
+        let (_pruned, n) = self.add_neighbors_with_logging(storage, from, new.clone(), prune_stats);
+        n.contains(&new[0])
     }
 
     fn update_back_pointer<S: Storage>(

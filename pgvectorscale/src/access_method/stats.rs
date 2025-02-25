@@ -224,6 +224,7 @@ pub struct InsertStats {
     pub node_reads: usize,
     pub node_modify: usize,
     pub node_writes: usize,
+    pub num_insertions: usize,
 }
 
 impl Default for InsertStats {
@@ -241,6 +242,7 @@ impl InsertStats {
             node_reads: 0,
             node_modify: 0,
             node_writes: 0,
+            num_insertions: 0,
         }
     }
 }
