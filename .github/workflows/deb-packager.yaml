@@ -103,4 +103,4 @@ jobs:
         PACKAGECLOUD_TOKEN: ${{ secrets.IO_PACKAGECLOUD_TOKEN }}
       run: |
         source /etc/os-release
-        package_cloud push timescale/timescaledb/$VERSION_ID/$VERSION_CODENAME pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
+        package_cloud push timescale/timescaledb/$ID/$VERSION_CODENAME pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
