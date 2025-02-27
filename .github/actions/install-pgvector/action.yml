@@ -18,7 +18,7 @@ runs:
       shell: bash
       env:
         pg_build_args: --enable-debug --enable-cassert
-        llvm_config: llvm-config-14
+        llvm_config: llvm-config-18
         CC: gcc
         CXX: g++
       run: |
