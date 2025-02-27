@@ -12,7 +12,7 @@ use crate::{
     },
 };
 
-use crate::access_method::storage::ArchivedData;
+use crate::access_method::storage::{ArchivedData, ArchivedDataFun};
 
 use super::storage::{Storage, StorageType};
 
@@ -99,7 +99,7 @@ fn bulk_delete_for_storage<S: Storage>(
 
                 let deleted = callback.unwrap()(&mut ctid, callback_state);
                 if deleted {
-                    node.delete();
+                    S::ArchivedType::delete(node);
                     modified = true;
                     (*results).tuples_removed += 1.0;
                 } else {

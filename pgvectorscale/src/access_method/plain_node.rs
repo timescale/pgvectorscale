@@ -8,7 +8,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 
 use super::meta_page::MetaPage;
 use super::neighbor_with_distance::NeighborWithDistance;
-use super::storage::ArchivedData;
+use super::storage::{ArchivedData, ArchivedDataFun};
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
@@ -106,11 +106,25 @@ impl ArchivedPlainNode {
     }
 }
 
-impl ArchivedData for ArchivedPlainNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedPlainNode> {
-        ArchivedPlainNode::with_data(data)
+impl ArchivedDataFun for ArchivedPlainNode {
+    type Pinned<'a> = PinnedArchivedData<'a>;
+
+    fn with_data<'a>(data: &'a mut [u8]) -> Self::Pinned<'a> {
+        PinnedArchivedData {
+            data: ArchivedPlainNode::with_data(data),
+        }
     }
 
+    fn delete(myself: Self::Pinned<'_>) {
+        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
+        let mut heap_pointer =
+            unsafe { myself.data.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        heap_pointer.offset = InvalidOffsetNumber;
+        heap_pointer.block_number = InvalidBlockNumber;
+    }
+}
+
+impl ArchivedData for ArchivedPlainNode {
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
@@ -119,14 +133,25 @@ impl ArchivedData for ArchivedPlainNode {
         self.heap_item_pointer.offset == InvalidOffsetNumber
     }
 
-    fn delete(self: Pin<&mut Self>) {
-        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
-        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
-        heap_pointer.offset = InvalidOffsetNumber;
-        heap_pointer.block_number = InvalidBlockNumber;
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        self.heap_item_pointer.deserialize_item_pointer()
+    }
+}
+
+pub struct PinnedArchivedData<'a> {
+    data: Pin<&'a mut ArchivedPlainNode>,
+}
+
+impl ArchivedData for PinnedArchivedData<'_> {
+    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+        self.data.get_index_pointer_to_neighbors()
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.data.is_deleted()
     }
 
     fn get_heap_item_pointer(&self) -> HeapPointer {
-        self.heap_item_pointer.deserialize_item_pointer()
+        self.data.get_heap_item_pointer()
     }
 }
