@@ -362,8 +362,6 @@ impl MetaPage {
     }
 
     pub unsafe fn store(&self, index: &PgRelation, first_time: bool) {
-        tsv_debug!("MetaPage::store {:?}", self);
-
         let header = MetaPageHeader {
             magic_number: self.magic_number,
             version: self.version,
@@ -399,7 +397,6 @@ impl MetaPage {
             buf.extend_from_slice(item.get_data_slice());
         }
         let result = rkyv::from_bytes::<MetaPage>(&buf).unwrap();
-        tsv_debug!("MetaPage::load {:?}", result);
         result
     }
 

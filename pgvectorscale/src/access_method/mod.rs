@@ -6,6 +6,7 @@ mod debugging;
 mod graph;
 mod graph_neighbor_store;
 pub mod guc;
+mod label_filtering_tests;
 mod labels;
 mod meta_page;
 mod neighbor_with_distance;

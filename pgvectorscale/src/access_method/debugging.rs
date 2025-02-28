@@ -8,21 +8,6 @@ use crate::util::ItemPointer;
 
 use super::{plain_node::PlainNode, stats::GreedySearchStats};
 
-#[cfg(feature = "enable_tsv_debug")]
-use pgrx::pg_sys::warning;
-
-#[cfg(feature = "enable_tsv_debug")]
-macro_rules! tsv_debug {
-    ($($arg:tt)*) => {
-        warning!($($arg)*);
-    };
-}
-
-#[cfg(not(feature = "enable_tsv_debug"))]
-macro_rules! tsv_debug {
-    ($($arg:tt)*) => {};
-}
-
 #[allow(dead_code)]
 pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {
     let mut map = HashMap::<ItemPointer, Vec<f32>>::new();

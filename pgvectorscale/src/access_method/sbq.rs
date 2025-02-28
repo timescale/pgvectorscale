@@ -825,35 +825,6 @@ impl Storage for SbqSpeedupStorage<'_> {
     fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
     }
-
-    // fn debug_print_graph(&self, meta_page: &MetaPage) {
-    //     let mut stats = WriteStats::new();
-    //     if let Some(start_nodes) = meta_page.get_start_nodes() {
-    //         // TODO all start nodes
-    //         let start_node = start_nodes.default_node();
-    //         let mut visited = HashMap::new();
-    //         let mut to_visit = vec![start_node];
-    //         while let Some(node) = to_visit.pop() {
-    //             if visited.contains_key(&node) {
-    //                 continue;
-    //             }
-    //             visited.insert(node, true);
-
-    //             let rn = unsafe { SbqNode::read(self.index, node, &mut stats) };
-    //             let sbq_node = rn.get_archived_node();
-    //             debug1!(
-    //                 "Node {:?} with labels {:?} has {} neighbors:",
-    //                 node,
-    //                 sbq_node.get_labels(),
-    //                 sbq_node.num_neighbors()
-    //             );
-    //             for n in sbq_node.iter_neighbors() {
-    //                 debug1!("  {:?}", n);
-    //                 to_visit.push(n);
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored

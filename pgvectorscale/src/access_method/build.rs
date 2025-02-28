@@ -532,22 +532,9 @@ fn build_callback_internal<S: Storage>(
 
     debug1!("Inserting {:?}", index_pointer);
 
-    // let before = state.graph.debug_print_graph(storage, &mut state.stats);
     state
         .graph
         .insert(index, index_pointer, vec, storage, &mut state.stats);
-
-    // if !state
-    //     .graph
-    //     .debug_check_consistency(storage, &mut state.stats)
-    // {
-    //     warning!("Graph is inconsistent.  Before: {}", before);
-    //     warning!(
-    //         "Graph is inconsistent.  After: {}",
-    //         state.graph.debug_print_graph(storage, &mut state.stats)
-    //     );
-    //     error!("Graph is inconsistent.  Exiting.");
-    // }
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
