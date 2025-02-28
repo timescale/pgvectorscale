@@ -7,15 +7,15 @@ use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
 use super::labels::{ArchivedLabelSet, LabelSet};
+use super::meta_page::MetaPage;
 use super::neighbor_with_distance::NeighborWithDistance;
 use super::storage::ArchivedData;
+use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
-
-use super::meta_page::MetaPage;
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-pub struct Node {
+pub struct PlainNode {
     pub vector: Vec<f32>,
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
@@ -23,7 +23,7 @@ pub struct Node {
     labels: Option<LabelSet>,
 }
 
-impl Node {
+impl PlainNode {
     fn new_internal(
         vector: Vec<f32>,
         labels: Option<LabelSet>,
@@ -57,7 +57,7 @@ impl Node {
 }
 
 /// contains helpers for mutate-in-place. See struct_mutable_refs in test_alloc.rs in rkyv
-impl ArchivedNode {
+impl ArchivedPlainNode {
     pub fn is_deleted(&self) -> bool {
         self.heap_item_pointer.offset == InvalidOffsetNumber
     }
@@ -117,10 +117,10 @@ impl ArchivedNode {
     }
 }
 
-impl ArchivedData for ArchivedNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedNode> {
-        ArchivedNode::with_data(data)
-    }
+impl ArchivedData for ArchivedPlainNode {
+    // fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedPlainNode> {
+    //     ArchivedPlainNode::with_data(data)
+    // }
 
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()

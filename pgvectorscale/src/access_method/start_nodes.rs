@@ -2,6 +2,7 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::access_method::labels::{Label, LabelSet};
+use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{ItemPointer, ReadableBuffer, WritableBuffer};
 use pgrx::PgRelation;
 use std::collections::BTreeMap;

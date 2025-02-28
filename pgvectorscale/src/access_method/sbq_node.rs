@@ -1,20 +1,19 @@
+use crate::access_method::node::{ReadableNode, WriteableNode};
+use crate::access_method::PgRelation;
+use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
+use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ};
+use pgvectorscale_derive::{Readable, Writeable};
+use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 use std::pin::Pin;
 
-use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber, BLCKSZ};
-use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
-
+use super::labels::{ArchivedLabelSet, LabelSet};
+use super::stats::{StatsNodeModify, StatsNodeRead};
 use super::{
-    labels::{ArchivedLabelSet, LabelSet},
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
     sbq::{SbqQuantizer, SbqVectorElement},
     storage::ArchivedData,
 };
-use crate::access_method::PgRelation;
-use crate::util::ReadableBuffer;
-use crate::util::WritableBuffer;
-use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer};
-use pgvectorscale_derive::{Readable, Writeable};
 
 pub trait SbqNodeBase {
     type Node;
@@ -38,7 +37,7 @@ pub trait SbqNodeBase {
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-pub struct UnlabeledSbqNode {
+pub struct PlainSbqNode {
     heap_item_pointer: HeapPointer,
     bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
@@ -55,13 +54,13 @@ pub struct LabeledSbqNode {
 }
 
 pub enum SbqNode {
-    Unlabeled(UnlabeledSbqNode),
+    Plain(PlainSbqNode),
     Labeled(LabeledSbqNode),
 }
 
-impl From<UnlabeledSbqNode> for SbqNode {
-    fn from(n: UnlabeledSbqNode) -> Self {
-        SbqNode::Unlabeled(n)
+impl From<PlainSbqNode> for SbqNode {
+    fn from(n: PlainSbqNode) -> Self {
+        SbqNode::Plain(n)
     }
 }
 
@@ -72,30 +71,42 @@ impl From<LabeledSbqNode> for SbqNode {
 }
 
 impl SbqNode {
+    pub unsafe fn read<'a, S: StatsNodeRead>(
+        index: &'a PgRelation,
+        ip: ItemPointer,
+        has_labels: bool,
+        stats: &mut S,
+    ) -> ReadableSbqNode<'a> {
+        match has_labels {
+            true => ReadableSbqNode::Labeled(LabeledSbqNode::read(index, ip, stats)),
+            false => ReadableSbqNode::Plain(PlainSbqNode::read(index, ip, stats)),
+        }
+    }
+
     pub fn get_heap_item_pointer(&self) -> HeapPointer {
         match self {
-            SbqNode::Unlabeled(n) => n.heap_item_pointer,
+            SbqNode::Plain(n) => n.heap_item_pointer,
             SbqNode::Labeled(n) => n.heap_item_pointer,
         }
     }
 
     pub fn get_bq_vector(&self) -> &[u64] {
         match self {
-            SbqNode::Unlabeled(n) => &n.bq_vector,
+            SbqNode::Plain(n) => &n.bq_vector,
             SbqNode::Labeled(n) => &n.bq_vector,
         }
     }
 
     pub fn get_neighbor_index_pointers(&self) -> &[ItemPointer] {
         match self {
-            SbqNode::Unlabeled(n) => &n.neighbor_index_pointers,
+            SbqNode::Plain(n) => &n.neighbor_index_pointers,
             SbqNode::Labeled(n) => &n.neighbor_index_pointers,
         }
     }
 
     pub fn get_neighbor_index_pointers_mut(&mut self) -> &mut [ItemPointer] {
         match self {
-            SbqNode::Unlabeled(n) => &mut n.neighbor_index_pointers,
+            SbqNode::Plain(n) => &mut n.neighbor_index_pointers,
             SbqNode::Labeled(n) => &mut n.neighbor_index_pointers,
         }
     }
@@ -140,6 +151,58 @@ impl SbqNode {
         pgrx::error!(
             "Could not find a valid number of neighbors for the default value. Please specify one."
         );
+    }
+
+    pub unsafe fn modify<'a, 'b, S: StatsNodeModify>(
+        index: &'a PgRelation,
+        index_pointer: ItemPointer,
+        has_labels: bool,
+        stats: &'b mut S,
+    ) -> WriteableSbqNode<'a> {
+        match has_labels {
+            true => WriteableSbqNode::Labeled(LabeledSbqNode::modify(index, index_pointer, stats)),
+            false => WriteableSbqNode::Plain(PlainSbqNode::modify(index, index_pointer, stats)),
+        }
+    }
+}
+
+pub enum ArchivedSbqNode<'a> {
+    Plain(Pin<&'a mut ArchivedPlainSbqNode>),
+    Labeled(Pin<&'a mut ArchivedLabeledSbqNode>),
+}
+
+enum ReadableSbqNode<'a> {
+    Plain(ReadablePlainSbqNode<'a>),
+    Labeled(ReadableLabeledSbqNode<'a>),
+}
+
+impl ReadableSbqNode<'_> {
+    pub fn get_archived_node(&self) -> ArchivedSbqNode {
+        match self {
+            ReadableSbqNode::Plain(node) => ArchivedSbqNode::Plain(node.get_archived_node()),
+            ReadableSbqNode::Labeled(node) => ArchivedSbqNode::Labeled(node.get_archived_node()),
+        }
+    }
+}
+
+enum WriteableSbqNode<'a> {
+    Plain(WritablePlainSbqNode<'a>),
+    Labeled(WritableLabeledSbqNode<'a>),
+}
+
+impl WriteableSbqNode<'_> {
+    pub fn get_archived_node(&mut self) -> ArchivedSbqNode<'_> {
+        match self {
+            WriteableSbqNode::Plain(node) => ArchivedSbqNode::Plain(node.get_archived_node()),
+            WriteableSbqNode::Labeled(node) => ArchivedSbqNode::Labeled(node.get_archived_node()),
+        }
+    }
+
+    pub fn commit(self) {
+        match self {
+            WriteableSbqNode::Plain(node) => node.commit(),
+            WriteableSbqNode::Labeled(node) => node.commit(),
+        }
     }
 }
 
@@ -188,8 +251,8 @@ impl SbqNodeBase for LabeledSbqNode {
     }
 }
 
-impl SbqNodeBase for UnlabeledSbqNode {
-    type Node = UnlabeledSbqNode;
+impl SbqNodeBase for PlainSbqNode {
+    type Node = PlainSbqNode;
 
     fn with_meta(
         heap_pointer: HeapPointer,
@@ -234,18 +297,24 @@ impl SbqNodeBase for UnlabeledSbqNode {
     }
 }
 
-impl ArchivedUnlabeledSbqNode {
-    fn neighbor_index_pointer(self: Pin<&mut Self>) -> Pin<&mut ArchivedVec<ArchivedItemPointer>> {
-        unsafe { self.map_unchecked_mut(|s| &mut s.neighbor_index_pointers) }
+impl<'a> ArchivedSbqNode<'a> {
+    fn neighbor_index_pointer(&'a mut self) -> Pin<&'a mut ArchivedVec<ArchivedItemPointer>> {
+        match self {
+            ArchivedSbqNode::Plain(n) => unsafe {
+                n.as_mut()
+                    .map_unchecked_mut(|n| &mut n.neighbor_index_pointers)
+            },
+            ArchivedSbqNode::Labeled(n) => unsafe {
+                n.as_mut()
+                    .map_unchecked_mut(|n| &mut n.neighbor_index_pointers)
+            },
+        }
     }
 
-    fn set_neighbors(
-        mut self: Pin<&mut Self>,
-        neighbors: &[NeighborWithDistance],
-        meta_page: &MetaPage,
-    ) {
+    fn set_neighbors(&'a mut self, neighbors: &[NeighborWithDistance], meta_page: &MetaPage) {
+        let mut neighbor_index_pointer = self.neighbor_index_pointer();
         for (i, new_neighbor) in neighbors.iter().enumerate() {
-            let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
+            let mut a_index_pointer = neighbor_index_pointer.as_mut().index_pin(i);
             let ip = new_neighbor.get_index_pointer_to_neighbor();
             //TODO hate that we have to set each field like this
             a_index_pointer.block_number = ip.block_number;
@@ -253,53 +322,72 @@ impl ArchivedUnlabeledSbqNode {
         }
         //set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            let mut past_last_index_pointers =
-                self.neighbor_index_pointer().index_pin(neighbors.len());
+            let mut past_last_index_pointers = neighbor_index_pointer.index_pin(neighbors.len());
             past_last_index_pointers.block_number = InvalidBlockNumber;
             past_last_index_pointers.offset = InvalidOffsetNumber;
         }
     }
+}
 
+impl ArchivedSbqNode<'_> {
     pub fn num_neighbors(&self) -> usize {
-        self.neighbor_index_pointers
+        let neighbor_index_pointers = match self {
+            ArchivedSbqNode::Plain(n) => &n.neighbor_index_pointers,
+            ArchivedSbqNode::Labeled(n) => &n.neighbor_index_pointers,
+        };
+        neighbor_index_pointers
             .iter()
             .position(|f| f.block_number == InvalidBlockNumber)
-            .unwrap_or(self.neighbor_index_pointers.len())
+            .unwrap_or(neighbor_index_pointers.len())
     }
 
     pub fn iter_neighbors(&self) -> impl Iterator<Item = ItemPointer> + '_ {
-        self.neighbor_index_pointers
+        let neighbor_index_pointers = match self {
+            ArchivedSbqNode::Plain(n) => &n.neighbor_index_pointers,
+            ArchivedSbqNode::Labeled(n) => &n.neighbor_index_pointers,
+        };
+        neighbor_index_pointers
             .iter()
             .take(self.num_neighbors())
             .map(|ip| ip.deserialize_item_pointer())
     }
 
     pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
-        None
+        match self {
+            ArchivedSbqNode::Plain(_) => None,
+            ArchivedSbqNode::Labeled(n) => n.labels.as_ref(),
+        }
     }
 }
 
-impl ArchivedData for ArchivedUnlabeledSbqNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedUnlabeledSbqNode> {
-        ArchivedUnlabeledSbqNode::with_data(data)
-    }
-
+impl<'a> ArchivedData for ArchivedSbqNode<'a> {
+    type MutableSelf = &'a mut Self;
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
 
     fn is_deleted(&self) -> bool {
-        self.heap_item_pointer.offset == InvalidOffsetNumber
+        self.get_heap_item_pointer().offset == InvalidOffsetNumber
     }
 
-    fn delete(self: Pin<&mut Self>) {
+    fn delete(self: MutableSelf) {
         //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
-        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        // let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        let mut heap_pointer = unsafe {
+            self.map_unchecked_mut(|s| match s {
+                ArchivedSbqNode::Plain(n) => &mut n.heap_item_pointer,
+                ArchivedSbqNode::Labeled(n) => &mut n.heap_item_pointer,
+            })
+        };
         heap_pointer.offset = InvalidOffsetNumber;
         heap_pointer.block_number = InvalidBlockNumber;
     }
 
     fn get_heap_item_pointer(&self) -> HeapPointer {
-        self.heap_item_pointer.deserialize_item_pointer()
+        let hip = match self {
+            ArchivedSbqNode::Plain(n) => &n.heap_item_pointer,
+            ArchivedSbqNode::Labeled(n) => &n.heap_item_pointer,
+        };
+        hip.deserialize_item_pointer()
     }
 }

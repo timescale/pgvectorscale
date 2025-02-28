@@ -5,7 +5,7 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 use crate::{
     access_method::{
         graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
-        sbq::SbqSpeedupStorage,
+        sbq::SbqSpeedupStorage, sbq_node::UnlabeledSbqNode,
     },
     util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},
 };
@@ -15,6 +15,7 @@ use super::{
     graph::{Graph, ListSearchResult},
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
+    sbq_node::LabeledSbqNode,
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -59,8 +60,8 @@ impl TSVScanState {
         let storage = meta_page.get_storage_type();
         let distance = meta_page.get_distance_function();
 
-        let store_type = match storage {
-            StorageType::Plain => {
+        let store_type = match (storage, meta_page.has_labels()) {
+            (StorageType::Plain, _) => {
                 let stats = QuantizerStats::new();
                 let bq =
                     PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
@@ -68,10 +69,22 @@ impl TSVScanState {
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
-            StorageType::SbqCompression => {
+            (StorageType::SbqCompression, true) => {
                 let mut stats = QuantizerStats::new();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
-                let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
+                let bq = SbqSpeedupStorage::<LabeledSbqNode>::load_for_search(
+                    index, heap, &quantizer, &meta_page,
+                );
+                let it =
+                    TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
+                StorageState::SbqSpeedup(quantizer, it)
+            }
+            (StorageType::SbqCompression, false) => {
+                let mut stats = QuantizerStats::new();
+                let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
+                let bq = SbqSpeedupStorage::<UnlabeledSbqNode>::load_for_search(
+                    index, heap, &quantizer, &meta_page,
+                );
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::SbqSpeedup(quantizer, it)
@@ -373,9 +386,9 @@ pub extern "C" fn amgettuple(
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
     let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
-    match &mut storage {
-        StorageState::SbqSpeedup(quantizer, iter) => {
-            let bq = SbqSpeedupStorage::load_for_search(
+    match (&mut storage, state.meta_page.has_labels()) {
+        (StorageState::SbqSpeedup(quantizer, iter), true) => {
+            let bq = SbqSpeedupStorage::<LabeledSbqNode>::load_for_search(
                 &indexrel,
                 &heaprel,
                 quantizer,
@@ -384,7 +397,17 @@ pub extern "C" fn amgettuple(
             let next = iter.next_with_resort(&scan, &indexrel, &bq);
             get_tuple(state, next, scan)
         }
-        StorageState::Plain(iter) => {
+        (StorageState::SbqSpeedup(quantizer, iter), false) => {
+            let bq = SbqSpeedupStorage::<UnlabeledSbqNode>::load_for_search(
+                &indexrel,
+                &heaprel,
+                quantizer,
+                &state.meta_page,
+            );
+            let next = iter.next_with_resort(&scan, &indexrel, &bq);
+            get_tuple(state, next, scan)
+        }
+        (StorageState::Plain(iter), _) => {
             let storage =
                 PlainStorage::load_for_search(&indexrel, &heaprel, state.distance_fn.unwrap());
             let next = if state.meta_page.get_num_dimensions()
@@ -444,9 +467,14 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
             unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
 
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
-        match &mut storage {
-            StorageState::SbqSpeedup(_bq, iter) => end_scan::<SbqSpeedupStorage>(iter),
-            StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
+        match (&mut storage, state.meta_page.has_labels()) {
+            (StorageState::SbqSpeedup(_bq, iter), true) => {
+                end_scan::<SbqSpeedupStorage<LabeledSbqNode>>(iter)
+            }
+            (StorageState::SbqSpeedup(_bq, iter), false) => {
+                end_scan::<SbqSpeedupStorage<UnlabeledSbqNode>>(iter)
+            }
+            (StorageState::Plain(iter), _) => end_scan::<PlainStorage>(iter),
         }
     }
 }
