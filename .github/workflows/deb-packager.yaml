@@ -45,6 +45,14 @@ jobs:
       TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
 
     steps:
+    - name: Install package_cloud
+      run: |
+        sudo apt-get -qq update
+        sudo apt-get -qq install gcc g++ make ruby-all-dev
+        sudo gem install rake --no-doc
+        sudo gem install rainbow -v 2.2.2 --no-doc
+        sudo gem install package_cloud --no-doc
+
     - name: Checkout pgvectorscale
       uses: actions/checkout@v4
 
@@ -82,10 +90,17 @@ jobs:
         (cd ${{ env.TAG_DIR }} && make package)
         bash scripts/package-deb.sh "${{ env.TAG }}" "${PWD}/${{ env.TAG_DIR }}" "$RUNNER_OS" "${{ matrix.pg.major }}"
 
-  # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
-  # The artifact will have a TTL of 90 days
+    # Use a GH artifact, then we can make use of the (quite limited) GH API https://docs.github.com/en/rest/actions/artifacts
+    # The artifact will have a TTL of 90 days
     - name: Upload deb as Artifact
       uses: actions/upload-artifact@v4
       with:
         name: pgvectorscale-${{ env.TAG }}-pg${{ matrix.pg.major }}-${{ matrix.platform.type }}
         path: pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
+
+    - name: Upload to packagecloud
+      env:
+        PACKAGECLOUD_TOKEN: ${{ secrets.IO_PACKAGECLOUD_TOKEN }}
+      run: |
+        source /etc/os-release
+        package_cloud push timescale/timescaledb/$ID/$VERSION_CODENAME pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
