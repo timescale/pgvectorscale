@@ -8,21 +8,20 @@ use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 use std::pin::Pin;
 
 use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
-use super::storage::ArchivedDataFun;
+use super::storage::NodeVacuum;
 use super::{
     meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance, sbq::SbqVectorElement,
     storage::ArchivedData,
 };
 
-/// A node in the SBQ index.  Currently just original variety nodes, soon to feature labeled ones.
-#[allow(private_interfaces)]
+/// A node in the SBQ index.  Currently just plain nodes, soon to feature labeled ones.
 pub enum SbqNode {
     Plain(PlainSbqNode),
 }
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-struct PlainSbqNode {
+pub struct PlainSbqNode {
     pub heap_item_pointer: HeapPointer,
     pub bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
@@ -70,10 +69,10 @@ impl SbqNode {
         ReadableSbqNode::Plain(PlainSbqNode::read(index, index_pointer, stats))
     }
 
-    pub unsafe fn modify<'a, 'b, S: StatsNodeModify>(
+    pub unsafe fn modify<'a, S: StatsNodeModify>(
         index: &'a PgRelation,
         index_pointer: ItemPointer,
-        stats: &'b mut S,
+        stats: &mut S,
     ) -> WritableSbqNode<'a> {
         WritableSbqNode::Plain(PlainSbqNode::modify(index, index_pointer, stats))
     }
@@ -82,6 +81,36 @@ impl SbqNode {
         match self {
             SbqNode::Plain(node) => node.write(tape, stats),
         }
+    }
+}
+
+impl NodeVacuum for ArchivedPlainSbqNode {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self> {
+        ArchivedPlainSbqNode::with_data(data)
+    }
+
+    fn delete(self: Pin<&mut Self>) {
+        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
+        let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
+        heap_pointer.offset = InvalidOffsetNumber;
+        heap_pointer.block_number = InvalidBlockNumber;
+    }
+}
+
+impl ArchivedData for ArchivedPlainSbqNode {
+    fn is_deleted(&self) -> bool {
+        self.heap_item_pointer.offset == InvalidOffsetNumber
+    }
+
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        self.heap_item_pointer.deserialize_item_pointer()
+    }
+
+    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+        self.neighbor_index_pointers
+            .iter()
+            .map(|p| p.deserialize_item_pointer())
+            .collect()
     }
 }
 
@@ -115,17 +144,15 @@ impl<'a> WritableSbqNode<'a> {
     }
 }
 
-#[allow(private_interfaces)]
 pub enum ArchivedMutSbqNode<'a> {
     Plain(Pin<&'a mut ArchivedPlainSbqNode>),
 }
 
-#[allow(private_interfaces)]
 pub enum ArchivedSbqNode<'a> {
     Plain(&'a ArchivedPlainSbqNode),
 }
 
-impl<'a> ArchivedSbqNode<'a> {
+impl ArchivedSbqNode<'_> {
     pub fn num_neighbors(&self) -> usize {
         match self {
             ArchivedSbqNode::Plain(node) => node
@@ -211,7 +238,7 @@ impl<'a> ArchivedMutSbqNode<'a> {
     }
 }
 
-impl<'a> ArchivedData for ArchivedMutSbqNode<'a> {
+impl ArchivedData for ArchivedMutSbqNode<'_> {
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
@@ -225,25 +252,5 @@ impl<'a> ArchivedData for ArchivedMutSbqNode<'a> {
             ArchivedMutSbqNode::Plain(node) => &node.heap_item_pointer,
         };
         hip.deserialize_item_pointer()
-    }
-}
-
-impl ArchivedDataFun for ArchivedMutSbqNode<'_> {
-    type Pinned<'a> = ArchivedMutSbqNode<'a>;
-
-    fn with_data(data: &mut [u8]) -> Self::Pinned<'_> {
-        let node = ArchivedPlainSbqNode::with_data(data);
-        ArchivedMutSbqNode::Plain(node)
-    }
-
-    fn delete(myself: Self::Pinned<'_>) {
-        //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
-        let mut heap_pointer = match myself {
-            ArchivedMutSbqNode::Plain(node) => unsafe {
-                node.map_unchecked_mut(|s| &mut s.heap_item_pointer)
-            },
-        };
-        heap_pointer.offset = InvalidOffsetNumber;
-        heap_pointer.block_number = InvalidBlockNumber;
     }
 }

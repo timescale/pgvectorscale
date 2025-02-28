@@ -4,7 +4,7 @@ use super::{
     graph_neighbor_store::GraphNeighborStore,
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
-    sbq_node::{ArchivedMutSbqNode, SbqNode},
+    sbq_node::SbqNode,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
@@ -575,13 +575,12 @@ impl<'a> SbqSpeedupStorage<'a> {
 
 pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
-impl<'a> Storage for SbqSpeedupStorage<'a> {
+impl Storage for SbqSpeedupStorage<'_> {
     type QueryDistanceMeasure = SbqSearchDistanceMeasure;
     type NodeDistanceMeasure<'b>
         = SbqNodeDistanceMeasure<'b>
     where
         Self: 'b;
-    type ArchivedType = ArchivedMutSbqNode<'a>;
     type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
     fn page_type() -> PageType {

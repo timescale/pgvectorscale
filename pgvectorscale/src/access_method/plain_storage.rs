@@ -165,7 +165,6 @@ impl Storage for PlainStorage<'_> {
         = IndexFullDistanceMeasure<'b>
     where
         Self: 'b;
-    type ArchivedType = ArchivedPlainNode;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 
     fn page_type() -> PageType {

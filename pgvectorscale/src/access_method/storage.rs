@@ -1,3 +1,5 @@
+use std::pin::Pin;
+
 use pgrx::{pg_sys, PgBox};
 
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
@@ -23,17 +25,15 @@ pub trait NodeDistanceMeasure {
         stats: &mut S,
     ) -> f32;
 }
-
-pub trait ArchivedDataFun {
-    type Pinned<'a>: ArchivedData;
-    fn with_data(data: &mut [u8]) -> Self::Pinned<'_>;
-    fn delete(myself: Self::Pinned<'_>);
-}
-
 pub trait ArchivedData {
     fn is_deleted(&self) -> bool;
     fn get_heap_item_pointer(&self) -> HeapPointer;
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer>;
+}
+
+pub trait NodeVacuum: ArchivedData {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self>;
+    fn delete(self: Pin<&mut Self>);
 }
 
 pub trait Storage {
@@ -43,7 +43,6 @@ pub trait Storage {
     type NodeDistanceMeasure<'a>: NodeDistanceMeasure
     where
         Self: 'a;
-    type ArchivedType: ArchivedData + ArchivedDataFun;
     type LSNPrivateData;
 
     fn page_type() -> PageType;
