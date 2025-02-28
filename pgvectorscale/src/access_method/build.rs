@@ -1219,6 +1219,61 @@ pub mod tests {
     }
 
     #[pg_test]
+    pub unsafe fn test_tiny_labeled_index() -> spi::Result<()> {
+        Spi::run(
+            "CREATE TABLE test(embedding vector(3), labels integer[]);
+
+            CREATE INDEX idxtest
+                  ON test
+               USING diskann(embedding)
+                WITH (num_neighbors=15, search_list_size=10);
+
+            INSERT INTO test(embedding, labels) VALUES ('[1,2,3]', '{1,2}'), ('[4,5,6]', '{1,3}'), ('[7,8,10]', '{2,3}');
+            ",
+        )?;
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(3, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test where labels && '{1}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(2, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test where labels && '{2}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(2, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+                WITH cte as (select * from test where labels && '{3}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(2, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+        WITH cte as (select * from test where labels && '{1,3}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(3, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+        WITH cte as (select * from test where labels && '{1,2,3}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(3, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+        WITH cte as (select * from test where labels && '{4}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(0, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+        WITH cte as (select * from test where labels && '{1,4}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(2, res.unwrap());
+
+        let res: Option<i64> = Spi::get_one("   set enable_seqscan = 0;
+        WITH cte as (select * from test where labels && '{4,1}' order by embedding <=> '[0,0,0]') SELECT count(*) from cte;")?;
+        assert_eq!(2, res.unwrap());
+
+        Spi::run("DROP TABLE test;")?;
+
+        Ok(())
+    }
+
+    #[pg_test]
     pub unsafe fn test_labeled_index() -> spi::Result<()> {
         let index_options = "num_neighbors=15, search_list_size=10";
         let expected_cnt = 50;
