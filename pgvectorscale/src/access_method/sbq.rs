@@ -2,10 +2,10 @@ use super::{
     distance::{distance_xor_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{LabelSet, LabeledVector},
+    labels::{LabelSet, LabelSetView, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
-    sbq_node::{ArchivedSbqNode, SbqNode, SbqNodeBase},
+    sbq_node::{ArchivedSbqNode, SbqNode},
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
@@ -365,7 +365,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
     }
 }
 
-impl<'a> NodeDistanceMeasure for SbqNodeDistanceMeasure<'a> {
+impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
     unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
         &self,
         index_pointer: IndexPointer,
@@ -409,11 +409,7 @@ impl QuantizedVectorCache {
     /* Ensure that all these elements are in the cache. If the capacity isn't big enough throw an error.
     must_get must succeed on all the elements after this call prior to another get or preload call */
 
-    fn preload<
-        I: Iterator<Item = IndexPointer>,
-        S: StatsNodeRead,
-        N: SbqNodeBase + ReadableNode + WriteableNode,
-    >(
+    fn preload<I: Iterator<Item = IndexPointer>, S: StatsNodeRead>(
         &mut self,
         index_pointers: I,
         storage: &SbqSpeedupStorage,
@@ -511,11 +507,11 @@ impl<'a> SbqSpeedupStorage<'a> {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> (Vec<SbqVectorElement>, Option<LabelSet>) {
-        let rn = unsafe { N::read(self.index, index_pointer, stats) };
+        let rn = unsafe { SbqNode::read(self.index, index_pointer, self.has_labels, stats) };
         let node = rn.get_archived_node();
         (
-            node.bq_vector.as_slice().to_vec(),
-            node.labels.as_ref().map(Into::into),
+            node.get_bq_vector().to_vec(),
+            node.get_labels().map(Into::into),
         )
     }
 
@@ -556,7 +552,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                         )
                     };
                     let node_neighbor = rn_neighbor.get_archived_node();
-                    let bq_vector = node_neighbor.bq_vector.as_slice();
+                    let bq_vector = node_neighbor.get_bq_vector();
                     let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
                         bq_vector,
                         gns,
@@ -617,15 +613,16 @@ impl<'a> SbqSpeedupStorage<'a> {
     }
 }
 
-pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
-
 impl Storage for SbqSpeedupStorage<'_> {
     type QueryDistanceMeasure = SbqSearchDistanceMeasure;
-    type NodeDistanceMeasure<'b>
-        = SbqNodeDistanceMeasure<'b>
+    type NodeDistanceMeasure<'a>
+        = SbqNodeDistanceMeasure<'a>
+    where
+        Self: 'a;
+    type ArchivedType<'b>
+        = ArchivedSbqNode<'b>
     where
         Self: 'b;
-    type ArchivedType = ArchivedSbqNode;
     type LSNPrivateData = SbqSpeedupStorageLsnPrivateData; //no data stored
 
     fn page_type() -> PageType {
@@ -643,7 +640,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
 
-        let node = N::with_meta(heap_pointer, meta_page, bq_vector.as_slice(), labels);
+        let node = SbqNode::with_meta(heap_pointer, meta_page, bq_vector.as_slice(), labels);
 
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
@@ -681,7 +678,7 @@ impl Storage for SbqSpeedupStorage<'_> {
         let mut node =
             unsafe { SbqNode::modify(self.index, index_pointer, self.has_labels, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta);
+        archived.set_neighbors(neighbors, meta);
 
         node.commit();
     }
@@ -732,14 +729,14 @@ impl Storage for SbqSpeedupStorage<'_> {
     ) {
         let rn = unsafe { SbqNode::read(self.index, neighbors_of, self.has_labels, stats) };
         let archived = rn.get_archived_node();
-        let q = archived.bq_vector.as_slice();
+        let q = archived.get_bq_vector();
 
         for n in rn.get_archived_node().iter_neighbors() {
             //OPT: we can optimize this if num_dimensions_for_neighbors == num_dimensions_to_index
             let rn1 = unsafe { SbqNode::read(self.index, n, self.has_labels, stats) };
             let arch = rn1.get_archived_node();
-            self.stats.record_quantized_distance_comparison();
-            let dist = distance_xor_optimized(q, arch.bq_vector.as_slice());
+            stats.record_quantized_distance_comparison();
+            let dist = distance_xor_optimized(q, arch.get_bq_vector());
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist as f32, neighbors_of, n),
@@ -761,11 +758,12 @@ impl Storage for SbqSpeedupStorage<'_> {
             return None;
         }
 
-        let rn = unsafe { SbqNode::read(self.index, index_pointer, &mut lsr.stats) };
+        let rn =
+            unsafe { SbqNode::read(self.index, index_pointer, self.has_labels, &mut lsr.stats) };
         let node = rn.get_archived_node();
 
         let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
-            node.bq_vector.as_slice(),
+            node.get_bq_vector(),
             gns,
             &mut lsr.stats,
         );
@@ -794,10 +792,10 @@ impl Storage for SbqSpeedupStorage<'_> {
         stats: &mut GreedySearchStats,
     ) -> HeapPointer {
         let lsn_index_pointer = lsn.index_pointer;
-        let rn = unsafe { SbqNode::read(self.index, lsn_index_pointer, stats) };
+        let rn = unsafe { SbqNode::read(self.index, lsn_index_pointer, self.has_labels, stats) };
         let node = rn.get_archived_node();
 
-        node.heap_item_pointer.deserialize_item_pointer()
+        node.get_heap_item_pointer()
     }
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
@@ -817,9 +815,10 @@ impl Storage for SbqSpeedupStorage<'_> {
             .chain(once(index_pointer));
         cache.preload(iter, self, stats);
 
-        let mut node = unsafe { SbqNode::modify(self.index, index_pointer, stats) };
+        let mut node =
+            unsafe { SbqNode::modify(self.index, index_pointer, self.has_labels, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta);
+        archived.set_neighbors(neighbors, meta);
         node.commit();
     }
 
@@ -856,6 +855,8 @@ impl Storage for SbqSpeedupStorage<'_> {
     //     }
     // }
 }
+
+pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored
 
 #[cfg(any(test, feature = "pg_test"))]
 #[pgrx::pg_schema]

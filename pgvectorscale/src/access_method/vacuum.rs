@@ -5,8 +5,10 @@ use pgrx::{
 
 use crate::{
     access_method::{
-        meta_page::MetaPage, plain_storage::PlainStorage, sbq::SbqSpeedupStorage,
-        sbq_node::UnlabeledSbqNode,
+        meta_page::MetaPage,
+        plain_storage::PlainStorage,
+        sbq::SbqSpeedupStorage,
+        sbq_node::{ArchivedLabeledSbqNode, ArchivedPlainSbqNode},
     },
     util::{
         page::WritablePage,
@@ -15,12 +17,7 @@ use crate::{
     },
 };
 
-use crate::access_method::storage::ArchivedData;
-
-use super::{
-    sbq_node::LabeledSbqNode,
-    storage::{Storage, StorageType},
-};
+use super::storage::{NodeVacuum, Storage, StorageType};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
@@ -45,27 +42,29 @@ pub extern "C" fn ambulkdelete(
 
     let meta_page = MetaPage::fetch(&index_relation);
     let storage = meta_page.get_storage_type();
-    match (storage, meta_page.has_labels()) {
-        (StorageType::SbqCompression, true) => {
-            bulk_delete_for_storage::<SbqSpeedupStorage<LabeledSbqNode>>(
-                &index_relation,
-                nblocks,
-                results,
-                callback,
-                callback_state,
-            );
-        }
-        (StorageType::SbqCompression, false) => {
-            bulk_delete_for_storage::<SbqSpeedupStorage<UnlabeledSbqNode>>(
-                &index_relation,
-                nblocks,
-                results,
-                callback,
-                callback_state,
-            );
-        }
-        (StorageType::Plain, _) => {
-            bulk_delete_for_storage::<PlainStorage>(
+    match storage {
+        StorageType::SbqCompression => match meta_page.has_labels() {
+            true => {
+                bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedLabeledSbqNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+            false => {
+                bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedPlainSbqNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+        },
+        StorageType::Plain => {
+            bulk_delete_for_storage::<PlainStorage, ArchivedPlainSbqNode>(
                 &index_relation,
                 nblocks,
                 results,
@@ -77,7 +76,7 @@ pub extern "C" fn ambulkdelete(
     results
 }
 
-fn bulk_delete_for_storage<S: Storage>(
+fn bulk_delete_for_storage<S: Storage, N: NodeVacuum>(
     index: &PgRelation,
     nblocks: u32,
     results: *mut IndexBulkDeleteResult,
@@ -100,7 +99,7 @@ fn bulk_delete_for_storage<S: Storage>(
                 let item = PageGetItem(*page, item_id) as *mut u8;
                 let len = (*item_id).lp_len();
                 let data = std::slice::from_raw_parts_mut(item, len as _);
-                let node = S::ArchivedType::with_data(data);
+                let node = N::with_data(data);
 
                 if node.is_deleted() {
                     continue;
@@ -114,7 +113,7 @@ fn bulk_delete_for_storage<S: Storage>(
 
                 let deleted = callback.unwrap()(&mut ctid, callback_state);
                 if deleted {
-                    node.delete();
+                    N::delete(node);
                     modified = true;
                     (*results).tuples_removed += 1.0;
                 } else {

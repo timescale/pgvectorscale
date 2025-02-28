@@ -6,10 +6,9 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
-use super::labels::{ArchivedLabelSet, LabelSet};
 use super::meta_page::MetaPage;
 use super::neighbor_with_distance::NeighborWithDistance;
-use super::storage::ArchivedData;
+use super::storage::{ArchivedData, NodeVacuum};
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
@@ -20,13 +19,11 @@ pub struct PlainNode {
     pub pq_vector: Vec<u8>,
     neighbor_index_pointers: Vec<ItemPointer>,
     pub heap_item_pointer: HeapPointer,
-    labels: Option<LabelSet>,
 }
 
 impl PlainNode {
     fn new_internal(
         vector: Vec<f32>,
-        labels: Option<LabelSet>,
         pq_vector: Vec<u8>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
@@ -41,18 +38,16 @@ impl PlainNode {
                 .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
                 .collect(),
             heap_item_pointer,
-            labels,
         }
     }
 
     pub fn new_for_full_vector(
         vector: Vec<f32>,
-        labels: Option<LabelSet>,
         heap_item_pointer: ItemPointer,
         meta_page: &MetaPage,
     ) -> Self {
         let pq_vector = Vec::with_capacity(0);
-        Self::new_internal(vector, labels, pq_vector, heap_item_pointer, meta_page)
+        Self::new_internal(vector, pq_vector, heap_item_pointer, meta_page)
     }
 }
 
@@ -96,32 +91,22 @@ impl ArchivedPlainNode {
     ) {
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
-            // TODO hate that we have to set each field like this
+            //TODO hate that we have to set each field like this
             a_index_pointer.block_number =
                 new_neighbor.get_index_pointer_to_neighbor().block_number;
             a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
         }
-        // Set the marker that the list ended
+        //set the marker that the list ended
         if neighbors.len() < meta_page.get_num_neighbors() as _ {
-            let mut past_last_index_pointers = self
-                .as_mut()
-                .neighbor_index_pointer()
-                .index_pin(neighbors.len());
+            let mut past_last_index_pointers =
+                self.neighbor_index_pointer().index_pin(neighbors.len());
             past_last_index_pointers.block_number = InvalidBlockNumber;
             past_last_index_pointers.offset = InvalidOffsetNumber;
         }
     }
-
-    pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
-        self.labels.as_ref()
-    }
 }
 
 impl ArchivedData for ArchivedPlainNode {
-    // fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedPlainNode> {
-    //     ArchivedPlainNode::with_data(data)
-    // }
-
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
@@ -130,14 +115,20 @@ impl ArchivedData for ArchivedPlainNode {
         self.heap_item_pointer.offset == InvalidOffsetNumber
     }
 
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        self.heap_item_pointer.deserialize_item_pointer()
+    }
+}
+
+impl NodeVacuum for ArchivedPlainNode {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self> {
+        ArchivedPlainNode::with_data(data)
+    }
+
     fn delete(self: Pin<&mut Self>) {
         //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
         let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
         heap_pointer.offset = InvalidOffsetNumber;
         heap_pointer.block_number = InvalidBlockNumber;
-    }
-
-    fn get_heap_item_pointer(&self) -> HeapPointer {
-        self.heap_item_pointer.deserialize_item_pointer()
     }
 }

@@ -27,12 +27,14 @@ pub trait NodeDistanceMeasure {
 }
 
 pub trait ArchivedData {
-    type MutableSelf;
-    // fn with_data(data: &mut [u8]) -> Pin<&mut Self>;
     fn is_deleted(&self) -> bool;
-    fn delete(me: Self::MutableSelf);
     fn get_heap_item_pointer(&self) -> HeapPointer;
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer>;
+}
+
+pub trait NodeVacuum: ArchivedData {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self>;
+    fn delete(self: Pin<&mut Self>);
 }
 
 pub trait Storage {
@@ -42,7 +44,9 @@ pub trait Storage {
     type NodeDistanceMeasure<'a>: NodeDistanceMeasure
     where
         Self: 'a;
-    type ArchivedType: ArchivedData;
+    type ArchivedType<'b>: ArchivedData
+    where
+        Self: 'b;
     type LSNPrivateData;
 
     fn page_type() -> PageType;

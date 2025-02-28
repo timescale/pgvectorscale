@@ -2,7 +2,7 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
-    labels::{LabelSet, LabelSetView, LabeledVector},
+    labels::{LabelSet, LabeledVector},
     neighbor_with_distance::DistanceWithTieBreak,
     pg_vector::PgVector,
     plain_node::{ArchivedPlainNode, PlainNode, ReadablePlainNode},
@@ -14,7 +14,7 @@ use super::{
     storage_common::get_index_vector_attribute,
 };
 
-use pgrx::{debug1, info, pg_sys::AttrNumber, PgBox, PgRelation};
+use pgrx::{info, pg_sys::AttrNumber, PgBox, PgRelation};
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::access_method::node::{ReadableNode, WriteableNode};
@@ -85,12 +85,6 @@ impl PlainDistanceMeasure {
         assert!(vector.len() == query.len());
         stats.record_full_distance_comparison();
         (distance_fn)(query, vector)
-    }
-
-    pub fn labels(&self) -> Option<&LabelSet> {
-        match self {
-            PlainDistanceMeasure::Full(query) => query.labels(),
-        }
     }
 }
 
@@ -172,7 +166,10 @@ impl Storage for PlainStorage<'_> {
         = IndexFullDistanceMeasure<'b>
     where
         Self: 'b;
-    type ArchivedType = ArchivedPlainNode;
+    type ArchivedType<'b>
+        = ArchivedPlainNode
+    where
+        Self: 'b;
     type LSNPrivateData = PlainStorageLsnPrivateData;
 
     fn page_type() -> PageType {
@@ -182,16 +179,14 @@ impl Storage for PlainStorage<'_> {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
-        labels: Option<LabelSet>,
+        _labels: Option<LabelSet>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer {
         //OPT: avoid the clone?
-        debug1!("Creating plain node with labels {:?}", labels);
-        let node =
-            PlainNode::new_for_full_vector(full_vector.to_vec(), labels, heap_pointer, meta_page);
+        let node = PlainNode::new_for_full_vector(full_vector.to_vec(), heap_pointer, meta_page);
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
@@ -269,15 +264,11 @@ impl Storage for PlainStorage<'_> {
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
         for n in neighbors.into_iter() {
             // TODO: we are reading node twice
-            let labels = unsafe { PlainNode::read(self.index, n, stats) }
-                .get_archived_node()
-                .get_labels()
-                .map(Into::into);
             let dist = unsafe { dist_state.get_distance(n, stats) };
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist, neighbors_of, n),
-                labels,
+                None,
             ))
         }
     }
@@ -311,7 +302,7 @@ impl Storage for PlainStorage<'_> {
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
             PlainStorageLsnPrivateData::new(index_pointer, node, gns),
-            node.get_labels().map(Into::into),
+            None,
         ))
     }
 
@@ -334,13 +325,6 @@ impl Storage for PlainStorage<'_> {
                 unsafe { PlainNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
             let node_neighbor = rn_neighbor.get_archived_node();
 
-            // Skip neighbors that have no matching labels with the query
-            if let Some(labels) = lsr.sdm.as_ref().unwrap().labels() {
-                if !labels.matches(node_neighbor.get_labels().unwrap()) {
-                    continue;
-                }
-            }
-
             let distance = match lsr.sdm.as_ref().unwrap() {
                 PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
                     self.distance_fn,
@@ -353,7 +337,7 @@ impl Storage for PlainStorage<'_> {
                 neighbor_index_pointer,
                 lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                 PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
-                node_neighbor.get_labels().map(Into::into),
+                None,
             );
 
             lsr.insert_neighbor(lsn);
