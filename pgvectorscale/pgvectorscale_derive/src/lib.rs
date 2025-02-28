@@ -31,7 +31,7 @@ fn impl_readable_macro(ast: &syn::DeriveInput) -> TokenStream {
                 Self { _rb: rb }
             }
 
-            pub fn get_archived_node(&self) -> & #archived_name {
+            pub fn get_archived_node(&self) -> &'a #archived_name {
                 // checking the code here is expensive during build, so skip it.
                 // TODO: should we check the data during queries?
                 //rkyv::check_archived_root::<Node>(self._rb.get_data_slice()).unwrap()
@@ -73,7 +73,7 @@ fn impl_writeable_macro(ast: &syn::DeriveInput) -> TokenStream {
         }
 
         impl<'a> #writeable_name<'a> {
-            pub fn get_archived_node(&mut self) -> std::pin::Pin<&mut #archived_name> {
+            pub fn get_archived_node(&mut self) -> std::pin::Pin<&'a mut #archived_name> {
                 #archived_name::with_data(self.wb.get_data_slice())
             }
 
