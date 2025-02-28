@@ -18,14 +18,14 @@ runs:
       uses: actions/cache@v4
       with:
        path: ${{ inputs.pg-src-dir }}
-       key: ${{ runner.arch }}-${{ runner.os }}-postgresql-${{ inputs.pg-version }}
+       key: ${{ runner.arch }}-${{ runner.os }}-postgresql-${{ inputs.pg-version }}-v2
 
     - name: Build PostgreSQL
       if: steps.cache-postgresql.outputs.cache-hit != 'true'
       shell: bash
       env:
         pg_build_args: --enable-debug --enable-cassert
-        llvm_config: llvm-config-14
+        llvm_config: llvm-config-18
         CC: gcc
         CXX: g++
       run: |
