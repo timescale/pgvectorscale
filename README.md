@@ -200,6 +200,8 @@ For optimal performance with label filtering, you must specify the label column 
     CREATE INDEX ON documents USING diskann (embedding vector_cosine_ops, labels);
     ```
 
+> **Note**: Label values must be non-negative integers between 0 and 65535 (inclusive). This is because labels are stored internally as 16-bit unsigned integers (`u16`). Attempting to use label values outside this range will result in an error.
+
 3. Perform label-filtered vector searches using the `&&` operator (array overlap):
 
     ```postgresql

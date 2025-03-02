@@ -255,4 +255,98 @@ pub mod tests {
 
         Ok(())
     }
+
+    #[pg_test]
+    pub unsafe fn test_label_size_bounds() -> spi::Result<()> {
+        // Create a test table with vector and labels columns
+        Spi::run(
+            "CREATE TABLE test_label_bounds(embedding vector(3), labels integer[]);
+
+            CREATE INDEX idx_label_bounds
+                  ON test_label_bounds
+               USING diskann(embedding, labels);
+
+            -- These inserts should succeed (labels within u16 bounds)
+            INSERT INTO test_label_bounds(embedding, labels) VALUES ('[1,2,3]', '{0,65535}');
+            ",
+        )?;
+
+        // Verify the valid labels were inserted correctly
+        let res: Option<i64> = Spi::get_one("SET enable_seqscan = 0;
+                WITH cte as (select * from test_label_bounds where labels && '{65535}' order by embedding <=> '[0,0,0]') 
+                SELECT count(*) from cte;")?;
+        assert_eq!(
+            1,
+            res.unwrap(),
+            "Should find 1 document with label 65535 (max u16 value)"
+        );
+
+        // Test inserting a label that exceeds u16 bounds - this should fail
+        // Use PL/pgSQL's exception handling to catch the error
+        let error_captured: Option<bool> = Spi::get_one(
+            "DO $$
+            BEGIN
+                -- This should fail because 65536 is outside u16 bounds
+                INSERT INTO test_label_bounds(embedding, labels) VALUES ('[4,5,6]', '{65536}');
+                -- If we get here, no error occurred
+                RAISE NOTICE 'Test failed: expected error for out-of-bounds label but none occurred';
+                PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
+            EXCEPTION WHEN OTHERS THEN
+                -- We expect an error, so this is good
+                RAISE NOTICE 'Got expected error: %', SQLERRM;
+                -- Check if the error message contains what we expect
+                IF SQLERRM LIKE '%out of bounds%' OR SQLERRM LIKE '%65536%' THEN
+                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'false', false);
+                ELSE
+                    RAISE NOTICE 'Error message did not contain expected text: %', SQLERRM;
+                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
+                END IF;
+            END;
+            $$ LANGUAGE plpgsql;
+            
+            -- Return whether the test failed
+            SELECT current_setting('pgrx.tests.failed', true) = 'true';"
+        )?;
+
+        assert!(
+            !error_captured.unwrap_or(true),
+            "Test for out-of-bounds label (65536) failed"
+        );
+
+        // Test with negative label - this should also fail
+        let error_captured: Option<bool> = Spi::get_one(
+            "DO $$
+            BEGIN
+                -- This should fail because -1 is outside u16 bounds
+                INSERT INTO test_label_bounds(embedding, labels) VALUES ('[7,8,9]', '{-1}');
+                -- If we get here, no error occurred
+                RAISE NOTICE 'Test failed: expected error for negative label but none occurred';
+                PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
+            EXCEPTION WHEN OTHERS THEN
+                -- We expect an error, so this is good
+                RAISE NOTICE 'Got expected error: %', SQLERRM;
+                -- Check if the error message contains what we expect
+                IF SQLERRM LIKE '%out of bounds%' OR SQLERRM LIKE '%-1%' THEN
+                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'false', false);
+                ELSE
+                    RAISE NOTICE 'Error message did not contain expected text: %', SQLERRM;
+                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
+                END IF;
+            END;
+            $$ LANGUAGE plpgsql;
+            
+            -- Return whether the test failed
+            SELECT current_setting('pgrx.tests.failed', true) = 'true';",
+        )?;
+
+        assert!(
+            !error_captured.unwrap_or(true),
+            "Test for negative label (-1) failed"
+        );
+
+        // Clean up
+        Spi::run("DROP TABLE test_label_bounds;")?;
+
+        Ok(())
+    }
 }
