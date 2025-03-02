@@ -1,10 +1,13 @@
 use pgrx::*;
 mod build;
 mod cost_estimate;
+#[macro_use]
 mod debugging;
 mod graph;
 mod graph_neighbor_store;
 pub mod guc;
+mod label_filtering_tests;
+mod labels;
 mod meta_page;
 mod neighbor_with_distance;
 mod node;
@@ -15,6 +18,7 @@ mod plain_storage;
 mod sbq;
 mod sbq_node;
 mod scan;
+mod start_nodes;
 pub mod stats;
 mod storage;
 mod storage_common;
@@ -59,7 +63,7 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
     amroutine.amcanorderbyop = true;
     amroutine.amcanbackward = false; /* can change direction mid-scan */
     amroutine.amcanunique = false;
-    amroutine.amcanmulticol = false;
+    amroutine.amcanmulticol = true;
     amroutine.amoptionalkey = true;
     amroutine.amsearcharray = false;
     amroutine.amsearchnulls = false;
@@ -171,6 +175,7 @@ DECLARE
   have_cos_ops int;
   have_l2_ops int;
   have_ip_ops int;
+  have_label_ops int;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -193,6 +198,14 @@ BEGIN
     INTO have_ip_ops
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_ip_ops'
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
+
+    -- Has label-filtering support been installed previously?
+    SELECT count(*)
+    INTO have_label_ops
+    FROM pg_catalog.pg_opclass c
+    WHERE c.opcname = 'vector_label_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
@@ -222,6 +235,12 @@ BEGIN
         FOR TYPE vector USING diskann AS
             OPERATOR 1 <#> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_inner_product();
+    END IF;
+
+    IF have_label_ops = 0 THEN
+        CREATE OPERATOR CLASS vector_label_ops
+        DEFAULT FOR TYPE int[] USING diskann AS
+            OPERATOR 1 &&;
     END IF;
 END;
 $$;

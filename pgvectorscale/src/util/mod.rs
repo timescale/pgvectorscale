@@ -41,6 +41,28 @@ impl ArchivedItemPointer {
     }
 }
 
+impl PartialEq for ArchivedItemPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.block_number == other.block_number && self.offset == other.offset
+    }
+}
+
+impl Eq for ArchivedItemPointer {}
+
+impl PartialOrd for ArchivedItemPointer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ArchivedItemPointer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.block_number
+            .cmp(&other.block_number)
+            .then_with(|| self.offset.cmp(&other.offset))
+    }
+}
+
 pub struct ReadableBuffer<'a> {
     _page: ReadablePage<'a>,
     len: usize,

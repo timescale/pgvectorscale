@@ -216,6 +216,7 @@ impl StatsNodeWrite for QuantizerStats {
         self.node_writes += 1;
     }
 }
+
 #[derive(Debug)]
 pub struct InsertStats {
     pub prune_neighbor_stats: PruneNeighborStats,

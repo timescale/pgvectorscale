@@ -57,6 +57,25 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         }
     }
 
+    pub fn reinit(
+        index: &'a PgRelation,
+        page_type: PageType,
+        stats: &'a mut S,
+        block_number: BlockNumber,
+    ) -> Self {
+        assert!(page_type.is_chained());
+        let mut page = WritablePage::modify(index, block_number);
+        page.reinit(page_type);
+        page.commit();
+
+        Self {
+            page_type,
+            index,
+            current: block_number,
+            stats,
+        }
+    }
+
     /// Write chained data to the tape, returning an `ItemPointer` to the start of the data.
     pub fn write(&mut self, mut data: &[u8]) -> super::ItemPointer {
         let mut current_page = WritablePage::modify(self.index, self.current);

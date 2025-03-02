@@ -8,7 +8,7 @@ use rkyv::{Archive, Deserialize, Serialize};
 
 use super::meta_page::MetaPage;
 use super::neighbor_with_distance::NeighborWithDistance;
-use super::storage::ArchivedData;
+use super::storage::{ArchivedData, NodeVacuum};
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
@@ -107,10 +107,6 @@ impl ArchivedPlainNode {
 }
 
 impl ArchivedData for ArchivedPlainNode {
-    fn with_data(data: &mut [u8]) -> Pin<&mut ArchivedPlainNode> {
-        ArchivedPlainNode::with_data(data)
-    }
-
     fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
@@ -119,14 +115,20 @@ impl ArchivedData for ArchivedPlainNode {
         self.heap_item_pointer.offset == InvalidOffsetNumber
     }
 
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        self.heap_item_pointer.deserialize_item_pointer()
+    }
+}
+
+impl NodeVacuum for ArchivedPlainNode {
+    fn with_data(data: &mut [u8]) -> Pin<&mut Self> {
+        ArchivedPlainNode::with_data(data)
+    }
+
     fn delete(self: Pin<&mut Self>) {
         //TODO: actually optimize the deletes by removing index tuples. For now just mark it.
         let mut heap_pointer = unsafe { self.map_unchecked_mut(|s| &mut s.heap_item_pointer) };
         heap_pointer.offset = InvalidOffsetNumber;
         heap_pointer.block_number = InvalidBlockNumber;
-    }
-
-    fn get_heap_item_pointer(&self) -> HeapPointer {
-        self.heap_item_pointer.deserialize_item_pointer()
     }
 }
