@@ -42,7 +42,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/.cargo/bin/cargo-pgrx
-        key: ${{ runner.arch }}-${{runner.os}}-cargo-pgrx-${{ inputs.pgrx-version }}-pg${{ steps.pg-config.outputs.version }}-${{ steps.rustc.outputs.version }}
+        key: ${{ runner.arch }}-${{runner.os}}-cargo-pgrx-${{ inputs.pgrx-version }}-pg${{ steps.pg-config.outputs.version }}-${{ steps.rustc.outputs.version }}-v2
 
     - name: Install cargo-pgrx ${{ inputs.pgrx-version }}
       if: steps.cache-cargo-pgrx.outputs.cache-hit != 'true'
