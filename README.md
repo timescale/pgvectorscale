@@ -188,7 +188,7 @@ For optimal performance with label filtering, you must specify the label column 
     CREATE TABLE documents (
         id SERIAL PRIMARY KEY,
         embedding VECTOR(1536),
-        labels INTEGER[],  -- Array of category labels
+        labels SMALLINT[],  -- Array of category labels
         status TEXT,
         created_at TIMESTAMPTZ
     );
@@ -200,7 +200,9 @@ For optimal performance with label filtering, you must specify the label column 
     CREATE INDEX ON documents USING diskann (embedding vector_cosine_ops, labels);
     ```
 
-> **Note**: Label values must be non-negative integers between 0 and 65535 (inclusive). This is because labels are stored internally as 16-bit unsigned integers (`u16`). Attempting to use label values outside this range will result in an error.
+> **Note**: Label values must be within the PostgreSQL `smallint` range (-32768 to 32767). Using `smallint[]` for labels ensures that PostgreSQL's type system will automatically enforce these bounds.
+> 
+> pgvectorscale includes an implementation of the `&&` overlap operator for `smallint[]` arrays, which is used for efficient label-based filtering.
 
 3. Perform label-filtered vector searches using the `&&` operator (array overlap):
 

@@ -1,14 +1,12 @@
 use super::{meta_page::MetaPage, pg_vector::PgVector};
 use pgrx::{
-    error,
     pg_sys::{Datum, ScanKeyData},
     Array, FromDatum,
 };
 use rkyv::{Archive, Deserialize, Serialize};
 use std::fmt::Debug;
 
-pub type Label = u16;
-pub const MAX_LABEL_VALUE: Label = u16::MAX;
+pub type Label = i16;
 
 /// LabelSet is a set of labels.  It is stored as a sorted array of labels.
 /// LabelSets can be of varying lengths, but once constructed, they are immutable.
@@ -154,19 +152,11 @@ impl LabeledVector {
         let vec = PgVector::from_pg_parts(values, isnull, 0, meta_page, true, false)?;
 
         let labels: Option<LabelSet> = if meta_page.has_labels() {
-            let arr = Array::<i32>::from_datum(*values.add(1), *isnull.add(1));
+            let arr = Array::<i16>::from_datum(*values.add(1), *isnull.add(1));
             arr.map(|arr| {
                 let labels_iter = arr.into_iter().flatten();
-                // Check for out-of-bounds labels
-                labels_iter.map(|x| {
-                    if x < 0 || x > MAX_LABEL_VALUE as i32 {
-                        error!(
-                            "Label value {} is out of bounds for diskann (must be between 0 and {})", 
-                            x, MAX_LABEL_VALUE
-                        );
-                    }
-                    x as Label
-                }).collect()
+                // smallint already enforces the bounds, so we can just collect
+                labels_iter.collect()
             })
         } else {
             None
@@ -192,20 +182,9 @@ impl LabeledVector {
         let labels: Option<LabelSet> = if keys.is_empty() {
             None
         } else {
-            let arr = unsafe { Array::<i32>::from_datum(keys[0].sk_argument, false).unwrap() };
-            // Check for out-of-bounds labels
-            let labels_iter = arr.into_iter().flatten();
-            let labels: Vec<Label> = labels_iter
-                .map(|x| {
-                    if x < 0 || x > MAX_LABEL_VALUE as i32 {
-                        error!(
-                        "Label value {} is out of bounds for diskann (must be between 0 and {})", 
-                        x, MAX_LABEL_VALUE
-                    );
-                    }
-                    x as Label
-                })
-                .collect();
+            let arr = unsafe { Array::<i16>::from_datum(keys[0].sk_argument, false).unwrap() };
+            // smallint already enforces the bounds, so we can just collect
+            let labels: Vec<Label> = arr.into_iter().flatten().collect();
 
             Some(labels.into())
         };

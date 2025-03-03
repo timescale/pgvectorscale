@@ -10,7 +10,7 @@ pub mod tests {
             "CREATE TABLE test_labeled (
             id SERIAL PRIMARY KEY,
             embedding vector(3),
-            labels INTEGER[],
+            labels SMALLINT[],
             category TEXT
         );
         
@@ -60,7 +60,7 @@ pub mod tests {
             "CREATE TABLE test_labeled (
             id SERIAL PRIMARY KEY,
             embedding vector(3),
-            labels INTEGER[],
+            labels SMALLINT[],
             content TEXT
         );
         
@@ -136,7 +136,7 @@ pub mod tests {
             "CREATE TABLE test_labeled (
             id SERIAL PRIMARY KEY,
             embedding vector(3),
-            labels INTEGER[],
+            labels SMALLINT[],
             category TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -204,7 +204,7 @@ pub mod tests {
     #[pg_test]
     pub unsafe fn test_tiny_labeled_index() -> spi::Result<()> {
         Spi::run(
-            "CREATE TABLE test(embedding vector(3), labels integer[]);
+            "CREATE TABLE test(embedding vector(3), labels smallint[]);
 
             CREATE INDEX idxtest
                   ON test
@@ -260,25 +260,26 @@ pub mod tests {
     pub unsafe fn test_label_size_bounds() -> spi::Result<()> {
         // Create a test table with vector and labels columns
         Spi::run(
-            "CREATE TABLE test_label_bounds(embedding vector(3), labels integer[]);
+            "CREATE TABLE test_label_bounds(embedding vector(3), labels smallint[]);
 
             CREATE INDEX idx_label_bounds
                   ON test_label_bounds
                USING diskann(embedding, labels);
 
-            -- These inserts should succeed (labels within u16 bounds)
-            INSERT INTO test_label_bounds(embedding, labels) VALUES ('[1,2,3]', '{0,65535}');
+            -- These inserts should succeed (labels within smallint bounds)
+            INSERT INTO test_label_bounds(embedding, labels) VALUES ('[1,2,3]', '{0,32767}');
             ",
         )?;
 
-        // Verify the valid labels were inserted correctly
-        let res: Option<i64> = Spi::get_one("SET enable_seqscan = 0;
-                WITH cte as (select * from test_label_bounds where labels && '{65535}' order by embedding <=> '[0,0,0]') 
-                SELECT count(*) from cte;")?;
+        // Verify the valid labels were inserted correctly using the && operator
+        let res: Option<i64> = Spi::get_one(
+            "SELECT COUNT(*) FROM test_label_bounds 
+             WHERE labels && ARRAY[32767]::smallint[];",
+        )?;
         assert_eq!(
             1,
             res.unwrap(),
-            "Should find 1 document with label 65535 (max u16 value)"
+            "Should find 1 document with label 32767 (max smallint value)"
         );
 
         // Test inserting a label that exceeds u16 bounds - this should fail
@@ -286,8 +287,8 @@ pub mod tests {
         let error_captured: Option<bool> = Spi::get_one(
             "DO $$
             BEGIN
-                -- This should fail because 65536 is outside u16 bounds
-                INSERT INTO test_label_bounds(embedding, labels) VALUES ('[4,5,6]', '{65536}');
+                -- This should fail because 32768 is outside smallint bounds
+                INSERT INTO test_label_bounds(embedding, labels) VALUES ('[4,5,6]', '{32768}');
                 -- If we get here, no error occurred
                 RAISE NOTICE 'Test failed: expected error for out-of-bounds label but none occurred';
                 PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
@@ -295,7 +296,7 @@ pub mod tests {
                 -- We expect an error, so this is good
                 RAISE NOTICE 'Got expected error: %', SQLERRM;
                 -- Check if the error message contains what we expect
-                IF SQLERRM LIKE '%out of bounds%' OR SQLERRM LIKE '%65536%' THEN
+                IF SQLERRM LIKE '%out of range%' OR SQLERRM LIKE '%32768%' THEN
                     PERFORM pg_catalog.set_config('pgrx.tests.failed', 'false', false);
                 ELSE
                     RAISE NOTICE 'Error message did not contain expected text: %', SQLERRM;
@@ -310,42 +311,108 @@ pub mod tests {
 
         assert!(
             !error_captured.unwrap_or(true),
-            "Test for out-of-bounds label (65536) failed"
+            "Test for out-of-bounds label (32768) failed"
         );
 
-        // Test with negative label - this should also fail
-        let error_captured: Option<bool> = Spi::get_one(
-            "DO $$
-            BEGIN
-                -- This should fail because -1 is outside u16 bounds
-                INSERT INTO test_label_bounds(embedding, labels) VALUES ('[7,8,9]', '{-1}');
-                -- If we get here, no error occurred
-                RAISE NOTICE 'Test failed: expected error for negative label but none occurred';
-                PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
-            EXCEPTION WHEN OTHERS THEN
-                -- We expect an error, so this is good
-                RAISE NOTICE 'Got expected error: %', SQLERRM;
-                -- Check if the error message contains what we expect
-                IF SQLERRM LIKE '%out of bounds%' OR SQLERRM LIKE '%-1%' THEN
-                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'false', false);
-                ELSE
-                    RAISE NOTICE 'Error message did not contain expected text: %', SQLERRM;
-                    PERFORM pg_catalog.set_config('pgrx.tests.failed', 'true', false);
-                END IF;
-            END;
-            $$ LANGUAGE plpgsql;
-            
-            -- Return whether the test failed
-            SELECT current_setting('pgrx.tests.failed', true) = 'true';",
-        )?;
+        // Test with negative label - this should now succeed since smallint allows negative values
+        Spi::run("INSERT INTO test_label_bounds(embedding, labels) VALUES ('[7,8,9]', '{-1}');")?;
 
-        assert!(
-            !error_captured.unwrap_or(true),
-            "Test for negative label (-1) failed"
+        // Verify the negative label was inserted correctly using the && operator
+        let res: Option<i64> = Spi::get_one(
+            "SELECT COUNT(*) FROM test_label_bounds 
+             WHERE labels && ARRAY[-1]::smallint[];",
+        )?;
+        assert_eq!(
+            1,
+            res.unwrap(),
+            "Should find 1 document with negative label (-1)"
         );
 
         // Clean up
         Spi::run("DROP TABLE test_label_bounds;")?;
+
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_smallint_array_overlap() -> spi::Result<()> {
+        // Test the smallint_array_overlap function directly
+        Spi::run(
+            "CREATE TABLE test_overlap (
+                id SERIAL PRIMARY KEY,
+                array1 SMALLINT[],
+                array2 SMALLINT[]
+            );
+            
+            INSERT INTO test_overlap (array1, array2) VALUES
+            ('{1,2,3}', '{3,4,5}'),       -- Overlap: 3 (sorted)
+            ('{-10,20,30}', '{40,50}'),   -- No overlap (sorted)
+            ('{-3,-2,-1}', '{-5,-4,-3}'), -- Overlap: -3 (sorted)
+            ('{0}', '{0}'),               -- Overlap: 0 (sorted)
+            ('{32767}', '{32767}'),       -- Overlap: max smallint (sorted)
+            ('{-32768}', '{-32768}'),     -- Overlap: min smallint (sorted)
+            ('{}', '{1,2,3}'),            -- Empty array test
+            ('{1,2,3}', '{}');            -- Empty array test
+            ",
+        )?;
+
+        // Test cases where overlap exists using the && operator
+        let res: Option<i64> =
+            Spi::get_one("SELECT COUNT(*) FROM test_overlap WHERE array1 && array2;")?;
+        assert_eq!(
+            5,
+            res.unwrap(),
+            "Should find 5 rows with overlapping arrays"
+        );
+
+        // Test specific overlap cases using the && operator
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[1,2,3]::smallint[] && ARRAY[3,4,5]::smallint[];")?;
+        assert!(
+            res.unwrap(),
+            "Arrays {{1,2,3}} and {{3,4,5}} should overlap"
+        );
+
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[-10,20,30]::smallint[] && ARRAY[40,50]::smallint[];")?;
+        assert!(
+            !res.unwrap(),
+            "Arrays {{-10,20,30}} and {{40,50}} should not overlap"
+        );
+
+        // Test with unsorted arrays
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[3,1,2]::smallint[] && ARRAY[5,3,4]::smallint[];")?;
+        assert!(
+            res.unwrap(),
+            "Arrays {{3,1,2}} and {{5,3,4}} should overlap"
+        );
+
+        // Test with empty arrays using the && operator
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[]::smallint[] && ARRAY[1,2,3]::smallint[];")?;
+        assert!(
+            !res.unwrap(),
+            "Empty array should not overlap with any array"
+        );
+
+        // Test with boundary values using the && operator
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[32767]::smallint[] && ARRAY[32767]::smallint[];")?;
+        assert!(
+            res.unwrap(),
+            "Arrays with max smallint value should overlap"
+        );
+
+        let res: Option<bool> =
+            Spi::get_one("SELECT ARRAY[-32768]::smallint[] && ARRAY[-32768]::smallint[];")?;
+        assert!(
+            res.unwrap(),
+            "Arrays with min smallint value should overlap"
+        );
+
+        // Clean up
+        Spi::run("DROP TABLE test_overlap;")?;
 
         Ok(())
     }
