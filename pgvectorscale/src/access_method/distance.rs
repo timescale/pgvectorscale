@@ -1,12 +1,50 @@
 use pgrx::pg_extern;
+use std::fmt;
+
+#[cfg(feature = "cli")]
+use clap::ValueEnum;
 
 pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DistanceType {
     Cosine = 0,
     L2 = 1,
     InnerProduct = 2,
+}
+
+#[cfg(feature = "cli")]
+impl ValueEnum for DistanceType {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            DistanceType::Cosine,
+            DistanceType::L2,
+            DistanceType::InnerProduct,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(match self {
+            DistanceType::Cosine => {
+                clap::builder::PossibleValue::new("cosine").help("Cosine distance (1 - cos(θ))")
+            }
+            DistanceType::L2 => {
+                clap::builder::PossibleValue::new("l2").help("Euclidean distance (L2 norm)")
+            }
+            DistanceType::InnerProduct => clap::builder::PossibleValue::new("inner_product")
+                .help("Inner product (-dot product)"),
+        })
+    }
+}
+
+impl fmt::Display for DistanceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DistanceType::Cosine => write!(f, "cosine"),
+            DistanceType::L2 => write!(f, "l2"),
+            DistanceType::InnerProduct => write!(f, "inner_product"),
+        }
+    }
 }
 
 impl DistanceType {
