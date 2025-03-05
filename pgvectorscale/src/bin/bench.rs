@@ -7,16 +7,15 @@ use std::time::{Duration, Instant};
 // Import the DistanceType from the vectorscale crate
 use vectorscale::access_method::distance::DistanceType;
 
+use bytes::Bytes;
 use clap::{Parser, Subcommand, ValueEnum};
-use futures::{future::join_all, StreamExt};
+use futures::{future::join_all, SinkExt, StreamExt};
 use hdf5_metno::File;
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray::{s, Array, Array2, ArrayView1};
-use reqwest;
+use ndarray::{s, Array, Array2};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 use tokio_postgres::{Client, Error as PgError, NoTls};
-use uuid::Uuid;
 
 // Dataset information struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -718,93 +717,103 @@ async fn load_vectors(
     end_idx: usize,
     progress_bar: Option<Arc<Mutex<ProgressBar>>>,
 ) -> Result<(), PgError> {
-    use std::io::{Cursor, Write};
-    use byteorder::{BigEndian, WriteBytesExt};
-    
+    // No need for byteorder imports with text format
+    use std::io::Write;
+
     // Start a transaction
     let transaction = client.transaction().await?;
-    
+
     // Prepare the COPY command for binary format
-    let copy_cmd = format!("COPY {} (id, embedding) FROM STDIN BINARY", table_name);
-    
+    // Let's use TEXT format instead of BINARY for better compatibility with pgvector
+    let copy_cmd = format!("COPY {} (id, embedding) FROM STDIN", table_name);
+
     // Start the COPY operation
     let sink = transaction.copy_in(&copy_cmd).await?;
-    let mut writer = sink.writer();
-    
-    // Write the PostgreSQL binary format header
-    // PGCOPY\n\377\r\n\0 - 11 bytes
-    writer.write_all(b"PGCOPY\n\xff\r\n\0").await?;
-    
-    // Write the flags field (0 for no OIDs) - 4 bytes
-    writer.write_u32::<BigEndian>(0).await?;
-    
-    // Write the header extension area length (0) - 4 bytes
-    writer.write_u32::<BigEndian>(0).await?;
-    
+
+    // Create a buffer to hold the binary data
+    let mut buffer = Vec::new();
+
+    // Helper function to convert io::Error to PgError
+    let to_pg_error = |_e: std::io::Error| -> PgError {
+        // let err_msg = format!("IO Error: {}", e);
+        PgError::__private_api_timeout() // Using a placeholder error since we can't create PgError directly
+    };
+
+    // For text format COPY, we don't need the binary header
+
     // Process each vector
     for i in start_idx..end_idx {
-        // Write tuple field count (2 fields: id and embedding) - 2 bytes
-        writer.write_u16::<BigEndian>(2).await?;
-        
-        // Write id field
-        // Field length - 4 bytes
-        writer.write_u32::<BigEndian>(4).await?;
-        // Field value - 4 bytes (i32)
-        writer.write_i32::<BigEndian>(i as i32).await?;
-        
-        // Write embedding field
         let vector = vectors.row(i);
         let vector_data = vector.as_slice().unwrap();
-        
+
         // Format the vector as a PostgreSQL array string
         let vector_str = format_vector_for_postgres(vector_data);
-        let vector_bytes = vector_str.as_bytes();
-        
-        // Field length - 4 bytes
-        writer.write_u32::<BigEndian>(vector_bytes.len() as u32).await?;
-        // Field value - variable length
-        writer.write_all(vector_bytes).await?;
-        
+
+        // Format the line for text COPY: id<tab>vector_str\n
+        // Write the id
+        buffer
+            .write_all(i.to_string().as_bytes())
+            .map_err(to_pg_error)?;
+
+        // Write tab separator
+        buffer.write_all(b"\t").map_err(to_pg_error)?;
+
+        // Write the vector string
+        buffer
+            .write_all(vector_str.as_bytes())
+            .map_err(to_pg_error)?;
+
+        // Write newline
+        buffer.write_all(b"\n").map_err(to_pg_error)?;
+
         if let Some(pb) = &progress_bar {
             pb.lock().unwrap().inc(1);
         }
     }
-    
-    // Write file trailer - 2 bytes (indicates end of copy data)
-    writer.write_i16::<BigEndian>(-1).await?;
-    
+
+    // For text format COPY, we need to write the end-of-copy marker
+    buffer.write_all(b"\\.").map_err(to_pg_error)?;
+    buffer.write_all(b"\n").map_err(to_pg_error)?;
+
+    // Use Box::pin to pin the sink properly
+    let mut sink = Box::pin(sink);
+
+    // Send the buffer to the sink
+    sink.as_mut().feed(Bytes::from(buffer)).await?;
+
     // Finish the COPY operation
-    writer.flush().await?;
-    sink.finish().await?;
-    
+    sink.as_mut().close().await?;
+
     // Commit the transaction
     transaction.commit().await?;
-    
+
     Ok(())
 }
 
-// Format vector specifically for CSV output
-fn format_vector_for_csv(vector: &ArrayView1<f32>) -> String {
-    let mut vector_str = String::from("\"[");
+// // Format vector specifically for CSV output
+// fn format_vector_for_csv(vector: &ArrayView1<f32>) -> String {
+//     let mut vector_str = String::from("\"[");
 
-    for (i, &val) in vector.as_slice().unwrap().iter().enumerate() {
-        if i > 0 {
-            vector_str.push_str(", ");
-        }
-        vector_str.push_str(&val.to_string());
-    }
+//     for (i, &val) in vector.as_slice().unwrap().iter().enumerate() {
+//         if i > 0 {
+//             vector_str.push_str(", ");
+//         }
+//         vector_str.push_str(&val.to_string());
+//     }
 
-    vector_str.push_str("]\"");
-    vector_str
-}
+//     vector_str.push_str("]\"");
+//     vector_str
+// }
 
 // Format vector specifically for PostgreSQL vector type
 fn format_vector_for_postgres(vector: &[f32]) -> String {
+    // The pgvector format is simply [val1,val2,val3,...]
+    // No spaces after commas to avoid dimension parsing issues
     let mut vector_str = String::from("[");
 
     for (i, &val) in vector.iter().enumerate() {
         if i > 0 {
-            vector_str.push_str(", ");
+            vector_str.push(','); // No space after comma
         }
         vector_str.push_str(&val.to_string());
     }
@@ -1033,7 +1042,7 @@ async fn list_ann_benchmark_datasets() -> Result<(), Box<dyn std::error::Error>>
         "{:<30} {:<10} {:<12} {:<10} {:<10} {:<10}",
         "Name", "Dimensions", "Train Size", "Test Size", "Neighbors", "Distance"
     );
-    println!("{:-<80}", "");
+    println!("{:-<86}", "");
 
     for dataset in datasets {
         println!(
@@ -1737,6 +1746,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                     println!("...");
                     // Get the last 5 queries
+                    #[allow(clippy::needless_range_loop)]
                     for i in (queries_to_run - 5)..queries_to_run {
                         println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall_values[i]);
                     }
