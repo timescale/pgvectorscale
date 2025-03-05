@@ -5,8 +5,8 @@ use pgrx::{
 
 use crate::{
     access_method::{
-        meta_page::MetaPage, plain_storage::PlainStorage, sbq::SbqSpeedupStorage,
-        sbq_node::ArchivedPlainSbqNode,
+        meta_page::MetaPage, plain_node::ArchivedPlainNode, plain_storage::PlainStorage,
+        sbq::SbqSpeedupStorage, sbq_node::ArchivedClassicSbqNode,
     },
     util::{
         page::WritablePage,
@@ -42,7 +42,7 @@ pub extern "C" fn ambulkdelete(
     let storage = meta_page.get_storage_type();
     match storage {
         StorageType::SbqCompression => {
-            bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedPlainSbqNode>(
+            bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedClassicSbqNode>(
                 &index_relation,
                 nblocks,
                 results,
@@ -51,7 +51,7 @@ pub extern "C" fn ambulkdelete(
             );
         }
         StorageType::Plain => {
-            bulk_delete_for_storage::<PlainStorage, ArchivedPlainSbqNode>(
+            bulk_delete_for_storage::<PlainStorage, ArchivedPlainNode>(
                 &index_relation,
                 nblocks,
                 results,

@@ -16,12 +16,12 @@ use super::{
 
 /// A node in the SBQ index.  Currently just plain nodes, soon to feature labeled ones.
 pub enum SbqNode {
-    Plain(PlainSbqNode),
+    Plain(ClassicSbqNode),
 }
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
 #[archive(check_bytes)]
-pub struct PlainSbqNode {
+pub struct ClassicSbqNode {
     pub heap_item_pointer: HeapPointer,
     pub bq_vector: Vec<u64>, // Don't use SbqVectorElement because we don't want to change the size in on-disk format by accident
     neighbor_index_pointers: Vec<ItemPointer>,
@@ -53,7 +53,7 @@ impl SbqNode {
             .map(|_| ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber))
             .collect();
 
-        SbqNode::Plain(PlainSbqNode {
+        SbqNode::Plain(ClassicSbqNode {
             heap_item_pointer: heap_pointer,
             bq_vector: bq_vector.to_vec(),
             neighbor_index_pointers,
@@ -66,7 +66,7 @@ impl SbqNode {
         index_pointer: ItemPointer,
         stats: &mut S,
     ) -> ReadableSbqNode<'a> {
-        ReadableSbqNode::Plain(PlainSbqNode::read(index, index_pointer, stats))
+        ReadableSbqNode::Plain(ClassicSbqNode::read(index, index_pointer, stats))
     }
 
     pub unsafe fn modify<'a, S: StatsNodeModify>(
@@ -74,7 +74,7 @@ impl SbqNode {
         index_pointer: ItemPointer,
         stats: &mut S,
     ) -> WritableSbqNode<'a> {
-        WritableSbqNode::Plain(PlainSbqNode::modify(index, index_pointer, stats))
+        WritableSbqNode::Plain(ClassicSbqNode::modify(index, index_pointer, stats))
     }
 
     pub fn write<S: StatsNodeWrite>(&self, tape: &mut Tape, stats: &mut S) -> ItemPointer {
@@ -84,9 +84,9 @@ impl SbqNode {
     }
 }
 
-impl NodeVacuum for ArchivedPlainSbqNode {
+impl NodeVacuum for ArchivedClassicSbqNode {
     fn with_data(data: &mut [u8]) -> Pin<&mut Self> {
-        ArchivedPlainSbqNode::with_data(data)
+        ArchivedClassicSbqNode::with_data(data)
     }
 
     fn delete(self: Pin<&mut Self>) {
@@ -97,7 +97,7 @@ impl NodeVacuum for ArchivedPlainSbqNode {
     }
 }
 
-impl ArchivedData for ArchivedPlainSbqNode {
+impl ArchivedData for ArchivedClassicSbqNode {
     fn is_deleted(&self) -> bool {
         self.heap_item_pointer.offset == InvalidOffsetNumber
     }
@@ -115,7 +115,7 @@ impl ArchivedData for ArchivedPlainSbqNode {
 }
 
 pub enum ReadableSbqNode<'a> {
-    Plain(ReadablePlainSbqNode<'a>),
+    Plain(ReadableClassicSbqNode<'a>),
 }
 
 impl<'a> ReadableSbqNode<'a> {
@@ -127,7 +127,7 @@ impl<'a> ReadableSbqNode<'a> {
 }
 
 pub enum WritableSbqNode<'a> {
-    Plain(WritablePlainSbqNode<'a>),
+    Plain(WritableClassicSbqNode<'a>),
 }
 
 impl<'a> WritableSbqNode<'a> {
@@ -145,11 +145,11 @@ impl<'a> WritableSbqNode<'a> {
 }
 
 pub enum ArchivedMutSbqNode<'a> {
-    Plain(Pin<&'a mut ArchivedPlainSbqNode>),
+    Plain(Pin<&'a mut ArchivedClassicSbqNode>),
 }
 
 pub enum ArchivedSbqNode<'a> {
-    Plain(&'a ArchivedPlainSbqNode),
+    Plain(&'a ArchivedClassicSbqNode),
 }
 
 impl ArchivedSbqNode<'_> {
