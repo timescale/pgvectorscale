@@ -4,11 +4,14 @@ This command-line tool is designed to work with ANN benchmark datasets from [ann
 
 ## Features
 
+- List available datasets from the ann-benchmarks repository
+- Download datasets directly from the ann-benchmarks repository
 - Load training vectors from HDF5 files into PostgreSQL
 - Run test queries against the database and calculate recall using ground truth
 - Support for splitting data loading into multiple transactions
 - Parallel loading of data using multiple PostgreSQL connections
 - Performance timing statistics for all operations
+- Automatic inference of dimensions and distance metrics from dataset metadata
 
 ## Prerequisites
 
@@ -27,9 +30,41 @@ The binary will be available at `target/release/bench`.
 
 ## Usage
 
-### Loading Data
+### Listing Available Datasets
 
-To load training vectors from an HDF5 file into PostgreSQL:
+To list all available datasets from the ann-benchmarks repository:
+
+```bash
+bench list-datasets
+```
+
+This will display a table of available datasets with their dimensions, sizes, and distance metrics.
+
+### Downloading and Loading Data
+
+To download a dataset directly from ann-benchmarks and load it into PostgreSQL:
+
+```bash
+bench download-and-load \
+    --dataset glove-25-angular \
+    --table my_vectors \
+    --create-table \
+    --create-index \
+    --index-type diskann
+```
+
+Options:
+- `--dataset`: Name of the dataset to download (use `list-datasets` to see available options)
+- `-t, --table`: Table name to load vectors into
+- `-c, --create-table`: Whether to create a new table
+- `-i, --create-index`: Create an index after loading data
+- `--index-type`: Type of index to create (diskann, hnsw, ivfflat) (default: diskann)
+
+All other options from the `load` command are also available.
+
+### Loading Data from Local File
+
+To load training vectors from a local HDF5 file into PostgreSQL:
 
 ```bash
 bench -c "host=localhost user=postgres" load \
@@ -104,7 +139,28 @@ HNSW Query Parameters:
 IVFFlat Query Parameters:
 - `--ivfflat-probes`: Number of lists to probe (default: 1)
 
-## Example Workflow
+## Example Workflows
+
+### Using the Automated Download and Load
+
+1. List available datasets:
+   ```bash
+   bench list-datasets
+   ```
+
+2. Download and load a dataset with automatic dimension and distance metric inference:
+   ```bash
+   bench download-and-load \
+       --dataset glove-100-angular \
+       --table glove_vectors \
+       --create-table \
+       --create-index \
+       --index-type diskann \
+       --diskann-num-neighbors 64 \
+       --diskann-search-list-size 128
+   ```
+
+### Using a Local HDF5 File
 
 1. Download a dataset from ann-benchmarks:
    ```bash

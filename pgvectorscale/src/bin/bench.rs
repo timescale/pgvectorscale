@@ -1,4 +1,5 @@
 use std::fmt;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -7,13 +8,27 @@ use std::time::{Duration, Instant};
 use vectorscale::access_method::distance::DistanceType;
 
 use clap::{Parser, Subcommand, ValueEnum};
-use futures::future::join_all;
+use futures::{future::join_all, StreamExt};
 use hdf5_metno::File;
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray::{s, Array, Array2, ArrayView1};
+use reqwest;
+use serde::{Deserialize, Serialize};
 use tokio::task;
 use tokio_postgres::{Client, Error as PgError, NoTls};
 use uuid::Uuid;
+
+// Dataset information struct
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DatasetInfo {
+    name: String,
+    dimensions: usize,
+    train_size: usize,
+    test_size: usize,
+    neighbors: usize,
+    distance: String,
+    url: String,
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -69,6 +84,90 @@ impl fmt::Display for IndexType {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// List available datasets from ann-benchmarks
+    ListDatasets,
+
+    /// List locally cached datasets
+    ListCachedDatasets,
+
+    /// Download and load a dataset from ann-benchmarks
+    DownloadAndLoad {
+        /// Dataset name to download and load
+        #[arg(short, long)]
+        dataset: String,
+
+        /// Table name to load vectors into
+        #[arg(short, long)]
+        table: String,
+
+        /// Whether to create a new table
+        #[arg(short, long)]
+        create_table: bool,
+
+        /// Number of vectors to load (0 = all)
+        #[arg(short, long, default_value_t = 0)]
+        num_vectors: usize,
+
+        /// Number of transactions to split the load into
+        #[arg(long, default_value_t = 1)]
+        transactions: usize,
+
+        /// Number of parallel connections to use
+        #[arg(short, long, default_value_t = 1)]
+        parallel: usize,
+
+        /// Create an index after loading data
+        #[arg(short = 'i', long)]
+        create_index: bool,
+
+        /// Type of index to create
+        #[arg(long, default_value_t = IndexType::DiskANN, requires = "create_index")]
+        index_type: IndexType,
+
+        /// Distance metric to use for the index (will be inferred if not provided)
+        #[arg(long, requires = "create_index")]
+        distance_metric: Option<DistanceType>,
+
+        // DiskANN index hyperparameters
+        /// DiskANN: Storage layout (memory_optimized or plain)
+        #[arg(long, default_value = "memory_optimized", requires = "create_index")]
+        diskann_storage_layout: Option<String>,
+
+        /// DiskANN: Number of neighbors per node (default: 50)
+        #[arg(long, requires = "create_index")]
+        diskann_num_neighbors: Option<usize>,
+
+        /// DiskANN: Search list size for construction (default: 100)
+        #[arg(long, requires = "create_index")]
+        diskann_search_list_size: Option<usize>,
+
+        /// DiskANN: Alpha parameter (default: 1.2)
+        #[arg(long, requires = "create_index")]
+        diskann_max_alpha: Option<f32>,
+
+        /// DiskANN: Number of dimensions to index (0 = all)
+        #[arg(long, requires = "create_index")]
+        diskann_num_dimensions: Option<usize>,
+
+        /// DiskANN: Number of bits per dimension for SBQ
+        #[arg(long, requires = "create_index")]
+        diskann_num_bits_per_dimension: Option<usize>,
+
+        // HNSW index hyperparameters
+        /// HNSW: Max number of connections per layer (default: 16)
+        #[arg(long, requires = "create_index")]
+        hnsw_m: Option<usize>,
+
+        /// HNSW: Size of dynamic candidate list for construction (default: 64)
+        #[arg(long, requires = "create_index")]
+        hnsw_ef_construction: Option<usize>,
+
+        // IVFFlat index hyperparameters
+        /// IVFFlat: Number of lists (default depends on data size)
+        #[arg(long, requires = "create_index")]
+        ivfflat_lists: Option<usize>,
+    },
+
     /// Load training vectors from HDF5 file into PostgreSQL
     Load {
         /// Path to HDF5 file
@@ -344,7 +443,7 @@ impl QueryStats {
         let max_count = *bins.iter().max().unwrap_or(&0);
         let scale = 40.0 / max_count as f64;
 
-        println!("\nQuery Time Histogram (ms):");
+        println!("\nQuery Time Histogram (ms)");
         println!("-------------------------");
 
         for (i, &count) in bins.iter().enumerate() {
@@ -357,41 +456,42 @@ impl QueryStats {
     }
 
     fn print(&self) {
-        println!("\n=== Query Time Statistics (ms) ===");
-        println!("Min:       {:8.2}", self.min().as_secs_f64() * 1000.0);
+        println!("\nQuery Time Statistics (ms)");
+        println!("--------------------------");
+        println!("Min:          {:8.2}", self.min().as_secs_f64() * 1000.0);
         println!(
-            "p25:       {:8.2}",
+            "p25:          {:8.2}",
             self.percentile(0.25).as_secs_f64() * 1000.0
         );
         println!(
-            "p50/Median:{:8.2}",
+            "p50/Median:   {:8.2}",
             self.percentile(0.5).as_secs_f64() * 1000.0
         );
         println!(
-            "p75:       {:8.2}",
+            "p75:          {:8.2}",
             self.percentile(0.75).as_secs_f64() * 1000.0
         );
         println!(
-            "p90:       {:8.2}",
+            "p90:          {:8.2}",
             self.percentile(0.9).as_secs_f64() * 1000.0
         );
         println!(
-            "p95:       {:8.2}",
+            "p95:          {:8.2}",
             self.percentile(0.95).as_secs_f64() * 1000.0
         );
         println!(
-            "p99:       {:8.2}",
+            "p99:          {:8.2}",
             self.percentile(0.99).as_secs_f64() * 1000.0
         );
-        println!("Max:       {:8.2}", self.max().as_secs_f64() * 1000.0);
-        println!("Mean:      {:8.2}", self.mean().as_secs_f64() * 1000.0);
+        println!("Max:          {:8.2}", self.max().as_secs_f64() * 1000.0);
+        println!("Mean:         {:8.2}", self.mean().as_secs_f64() * 1000.0);
         println!(
-            "Total:     {:8.2}",
+            "Total:        {:8.2}",
             self.total_duration.as_secs_f64() * 1000.0
         );
-        println!("Queries:   {}", self.num_queries);
+        println!("Queries:      {}", self.num_queries);
         println!(
-            "QPS:       {:8.2}",
+            "QPS:          {:8.2}",
             self.num_queries as f64 / self.total_duration.as_secs_f64()
         );
 
@@ -424,12 +524,12 @@ impl PerformanceStats {
     }
 
     fn print(&self) {
-        println!("\n=== Performance Statistics ===");
+        println!("\nPerformance Statistics");
+        println!("----------------------");
         println!("Operation: {}", self.operation);
         println!("Duration: {:.2} seconds", self.duration.as_secs_f64());
         println!("Items processed: {}", self.items_processed);
         println!("Items per second: {:.2}", self.items_per_second);
-        println!("============================");
     }
 }
 
@@ -618,51 +718,68 @@ async fn load_vectors(
     end_idx: usize,
     progress_bar: Option<Arc<Mutex<ProgressBar>>>,
 ) -> Result<(), PgError> {
-    use std::fs::File;
-    use std::io::{BufWriter, Write};
-    use tokio::fs;
-
-    // Generate a unique temporary file name
-    let temp_file_name = format!("/tmp/pgvectorscale_copy_{}.csv", Uuid::new_v4());
-
-    // Create and write to the temporary CSV file
-    {
-        let file = File::create(&temp_file_name).unwrap();
-        let mut writer = BufWriter::new(file);
-
-        for i in start_idx..end_idx {
-            let vector = vectors.row(i);
-            // Format vector for CSV - no need for quotes as COPY will handle it
-            let vector_str = format_vector_for_csv(&vector);
-            // Include the index as the ID
-            writeln!(writer, "{},{}", i, vector_str).unwrap();
-
-            if let Some(pb) = &progress_bar {
-                pb.lock().unwrap().inc(1);
-            }
-        }
-        writer.flush().unwrap();
-    }
-
+    use std::io::{Cursor, Write};
+    use byteorder::{BigEndian, WriteBytesExt};
+    
     // Start a transaction
     let transaction = client.transaction().await?;
-
-    // Use COPY command to bulk load the data
-    let copy_cmd = format!(
-        "COPY {} (id, embedding) FROM '{}' CSV",
-        table_name, temp_file_name
-    );
-
-    transaction.execute(&copy_cmd, &[]).await?;
-
+    
+    // Prepare the COPY command for binary format
+    let copy_cmd = format!("COPY {} (id, embedding) FROM STDIN BINARY", table_name);
+    
+    // Start the COPY operation
+    let sink = transaction.copy_in(&copy_cmd).await?;
+    let mut writer = sink.writer();
+    
+    // Write the PostgreSQL binary format header
+    // PGCOPY\n\377\r\n\0 - 11 bytes
+    writer.write_all(b"PGCOPY\n\xff\r\n\0").await?;
+    
+    // Write the flags field (0 for no OIDs) - 4 bytes
+    writer.write_u32::<BigEndian>(0).await?;
+    
+    // Write the header extension area length (0) - 4 bytes
+    writer.write_u32::<BigEndian>(0).await?;
+    
+    // Process each vector
+    for i in start_idx..end_idx {
+        // Write tuple field count (2 fields: id and embedding) - 2 bytes
+        writer.write_u16::<BigEndian>(2).await?;
+        
+        // Write id field
+        // Field length - 4 bytes
+        writer.write_u32::<BigEndian>(4).await?;
+        // Field value - 4 bytes (i32)
+        writer.write_i32::<BigEndian>(i as i32).await?;
+        
+        // Write embedding field
+        let vector = vectors.row(i);
+        let vector_data = vector.as_slice().unwrap();
+        
+        // Format the vector as a PostgreSQL array string
+        let vector_str = format_vector_for_postgres(vector_data);
+        let vector_bytes = vector_str.as_bytes();
+        
+        // Field length - 4 bytes
+        writer.write_u32::<BigEndian>(vector_bytes.len() as u32).await?;
+        // Field value - variable length
+        writer.write_all(vector_bytes).await?;
+        
+        if let Some(pb) = &progress_bar {
+            pb.lock().unwrap().inc(1);
+        }
+    }
+    
+    // Write file trailer - 2 bytes (indicates end of copy data)
+    writer.write_i16::<BigEndian>(-1).await?;
+    
+    // Finish the COPY operation
+    writer.flush().await?;
+    sink.finish().await?;
+    
     // Commit the transaction
     transaction.commit().await?;
-
-    // Clean up the temporary file
-    tokio::spawn(async move {
-        let _ = fs::remove_file(temp_file_name).await;
-    });
-
+    
     Ok(())
 }
 
@@ -759,12 +876,281 @@ async fn run_query(client: &Client, params: &QueryParams) -> Result<Vec<i32>, Pg
     Ok(result)
 }
 
-fn calculate_recall(actual: &[i32], expected: &[i32], k: usize) -> f64 {
+fn calculate_recall(actual: &[i32], expected: &[i32], k: usize, verbose: bool) -> f64 {
+    // Ensure we're not trying to take more items than available
+    let effective_k = std::cmp::min(k, expected.len());
+
+    if effective_k == 0 {
+        // No ground truth data available
+        return 0.0;
+    }
+
     let actual_set: std::collections::HashSet<_> = actual.iter().cloned().collect();
-    let expected_set: std::collections::HashSet<_> = expected.iter().take(k).cloned().collect();
+    let expected_set: std::collections::HashSet<_> =
+        expected.iter().take(effective_k).cloned().collect();
+
+    // Debug output for first few queries if verbose is enabled
+    if verbose {
+        static DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let debug_idx = DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if debug_idx < 3 {
+            println!("Debug for query #{}", debug_idx + 1);
+            println!(
+                "  Actual results (first 5): {:?}",
+                actual.iter().take(5).collect::<Vec<_>>()
+            );
+            println!(
+                "  Expected results (first 5): {:?}",
+                expected.iter().take(5).collect::<Vec<_>>()
+            );
+            println!(
+                "  Intersection count: {}",
+                expected_set.intersection(&actual_set).count()
+            );
+            println!("  Effective k: {}", effective_k);
+        }
+    }
 
     let intersection_count = expected_set.intersection(&actual_set).count();
-    intersection_count as f64 / k as f64
+    intersection_count as f64 / effective_k as f64
+}
+
+/// Get the list of available datasets from ann-benchmarks
+async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::error::Error>> {
+    // This is a hardcoded list based on the README.md from ann-benchmarks
+    // In a real implementation, you might want to scrape this from the website or use an API
+    let datasets = vec![
+        DatasetInfo {
+            name: "deep-image-96-angular".to_string(),
+            dimensions: 96,
+            train_size: 9990000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/deep-image-96-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "fashion-mnist-784-euclidean".to_string(),
+            dimensions: 784,
+            train_size: 60000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "euclidean".to_string(),
+            url: "http://ann-benchmarks.com/fashion-mnist-784-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "gist-960-euclidean".to_string(),
+            dimensions: 960,
+            train_size: 1000000,
+            test_size: 1000,
+            neighbors: 100,
+            distance: "euclidean".to_string(),
+            url: "http://ann-benchmarks.com/gist-960-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "glove-25-angular".to_string(),
+            dimensions: 25,
+            train_size: 1183514,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/glove-25-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "glove-50-angular".to_string(),
+            dimensions: 50,
+            train_size: 1183514,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/glove-50-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "glove-100-angular".to_string(),
+            dimensions: 100,
+            train_size: 1183514,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/glove-100-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "glove-200-angular".to_string(),
+            dimensions: 200,
+            train_size: 1183514,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/glove-200-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "mnist-784-euclidean".to_string(),
+            dimensions: 784,
+            train_size: 60000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "euclidean".to_string(),
+            url: "http://ann-benchmarks.com/mnist-784-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "sift-128-euclidean".to_string(),
+            dimensions: 128,
+            train_size: 1000000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "euclidean".to_string(),
+            url: "http://ann-benchmarks.com/sift-128-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "nytimes-256-angular".to_string(),
+            dimensions: 256,
+            train_size: 290000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/nytimes-256-angular.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "lastfm-64-dot".to_string(),
+            dimensions: 65,
+            train_size: 292385,
+            test_size: 50000,
+            neighbors: 100,
+            distance: "angular".to_string(),
+            url: "http://ann-benchmarks.com/lastfm-64-dot.hdf5".to_string(),
+        },
+    ];
+
+    Ok(datasets)
+}
+
+/// List available datasets from ann-benchmarks
+async fn list_ann_benchmark_datasets() -> Result<(), Box<dyn std::error::Error>> {
+    let datasets = get_ann_benchmark_datasets().await?;
+
+    println!("Available datasets from ann-benchmarks:");
+    println!(
+        "{:<30} {:<10} {:<12} {:<10} {:<10} {:<10}",
+        "Name", "Dimensions", "Train Size", "Test Size", "Neighbors", "Distance"
+    );
+    println!("{:-<80}", "");
+
+    for dataset in datasets {
+        println!(
+            "{:<30} {:<10} {:<12} {:<10} {:<10} {:<10}",
+            dataset.name,
+            dataset.dimensions,
+            dataset.train_size,
+            dataset.test_size,
+            dataset.neighbors,
+            dataset.distance
+        );
+    }
+
+    println!(
+        "\nTo download and load a dataset, use the 'download-and-load' command with --dataset <name>"
+    );
+
+    Ok(())
+}
+
+/// Get the dataset cache directory
+fn get_dataset_cache_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Get the user's home directory
+    let home_dir = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
+
+    // Create the cache directory path
+    let cache_dir = home_dir.join(".pgvectorscale").join("datasets");
+
+    // Create the directory if it doesn't exist
+    if !cache_dir.exists() {
+        std::fs::create_dir_all(&cache_dir)?;
+    }
+
+    Ok(cache_dir)
+}
+
+/// List locally cached datasets
+async fn list_cached_datasets() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Listing locally cached datasets:");
+
+    // Get the cache directory where datasets are stored
+    let cache_dir = get_dataset_cache_dir()?;
+
+    // List all HDF5 files in the cache directory
+    let mut found_datasets = false;
+
+    if cache_dir.exists() {
+        for entry in std::fs::read_dir(cache_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+
+            // Check if the file has the .hdf5 extension
+            if let Some(extension) = path.extension() {
+                if extension == "hdf5" {
+                    if let Some(filename) = path.file_stem() {
+                        if let Some(name) = filename.to_str() {
+                            println!("  - {}", name);
+                            found_datasets = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_datasets {
+        println!("  No cached datasets found in ~/.pgvectorscale/datasets");
+        println!("  Use the DownloadAndLoad command to download and cache datasets");
+    }
+
+    Ok(())
+}
+
+/// Download a dataset from ann-benchmarks
+async fn download_dataset(dataset: &DatasetInfo) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Get the cache directory
+    let cache_dir = get_dataset_cache_dir()?;
+    let file_path = cache_dir.join(format!("{}.hdf5", dataset.name));
+
+    // Check if the file already exists
+    if file_path.exists() {
+        println!("Dataset already exists at: {}", file_path.display());
+        return Ok(file_path);
+    }
+
+    println!("Downloading dataset from: {}", dataset.url);
+
+    // Create a progress bar for the download
+    let progress_bar = ProgressBar::new(0);
+    progress_bar.set_style(
+        ProgressStyle::default_bar()
+            .template("[{elapsed_precise}] {bar:40.cyan/blue} {bytes}/{total_bytes} ({eta})")
+            .unwrap()
+            .progress_chars("##-"),
+    );
+
+    // Download the file
+    let client = reqwest::Client::new();
+    let response = client.get(&dataset.url).send().await?;
+    let total_size = response.content_length().unwrap_or(0);
+    progress_bar.set_length(total_size);
+
+    let mut file = std::fs::File::create(&file_path)?;
+    let mut downloaded: u64 = 0;
+    let mut stream = response.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk?;
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        progress_bar.set_position(downloaded);
+    }
+
+    progress_bar.finish_with_message("Download complete");
+
+    // Return the path to the downloaded file
+    Ok(file_path)
 }
 
 #[tokio::main]
@@ -772,6 +1158,238 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
     match &cli.command {
+        Commands::ListDatasets => list_ann_benchmark_datasets().await?,
+
+        Commands::ListCachedDatasets => list_cached_datasets().await?,
+
+        Commands::DownloadAndLoad {
+            dataset,
+            table,
+            create_table,
+            num_vectors,
+            transactions,
+            parallel,
+            create_index,
+            index_type,
+            distance_metric,
+            diskann_storage_layout,
+            diskann_num_neighbors,
+            diskann_search_list_size,
+            diskann_max_alpha,
+            diskann_num_dimensions,
+            diskann_num_bits_per_dimension,
+            hnsw_m,
+            hnsw_ef_construction,
+            ivfflat_lists,
+        } => {
+            // Get dataset information
+            let datasets = get_ann_benchmark_datasets().await?;
+            let dataset_info = datasets.iter().find(|d| d.name == *dataset);
+
+            if let Some(dataset_info) = dataset_info {
+                println!(
+                    "Found dataset: {} ({}D, {} distance)",
+                    dataset_info.name, dataset_info.dimensions, dataset_info.distance
+                );
+
+                // Download the dataset
+                let file_path = download_dataset(dataset_info).await?;
+
+                // Infer the distance metric
+                let inferred_distance_metric = match dataset_info.distance.as_str() {
+                    "angular" => DistanceType::Cosine,
+                    "euclidean" => DistanceType::L2,
+                    "dot" => DistanceType::InnerProduct,
+                    _ => {
+                        println!(
+                            "Warning: Unknown distance metric '{}', defaulting to Cosine",
+                            dataset_info.distance
+                        );
+                        DistanceType::Cosine
+                    }
+                };
+
+                // Use the provided distance metric or the inferred one
+                let effective_distance_metric = distance_metric.unwrap_or(inferred_distance_metric);
+
+                println!("Using distance metric: {:?}", effective_distance_metric);
+
+                // Open the HDF5 file
+                let h5_file = File::open(&file_path)?;
+
+                // Get the dataset
+                let dataset = h5_file.dataset("train")?;
+
+                // Get the dimensions of the dataset
+                let shape = dataset.shape();
+                let total_vectors = shape[0];
+                let vector_dim = shape[1];
+
+                // Determine how many vectors to load
+                let vectors_to_load = if *num_vectors == 0 || *num_vectors > total_vectors {
+                    total_vectors
+                } else {
+                    *num_vectors
+                };
+
+                println!(
+                    "Loading {} vectors with dimension {}",
+                    vectors_to_load, vector_dim
+                );
+
+                // Read the vectors from the HDF5 file
+                let vectors_data: Vec<f32> = dataset.read_raw::<f32>()?;
+                let vectors = Array::from_shape_vec((total_vectors, vector_dim), vectors_data)?
+                    .slice(s![0..vectors_to_load, ..])
+                    .to_owned();
+
+                // Connect to PostgreSQL
+                let mut client = connect_to_postgres(&cli.connection_string).await?;
+
+                // Create the table if requested
+                if *create_table {
+                    create_vector_table(&client, table, vector_dim, true).await?;
+                }
+
+                // Set up progress bar
+                let progress_bar = ProgressBar::new(vectors_to_load as u64);
+                progress_bar.set_style(
+                    ProgressStyle::default_bar()
+                        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({eta})")
+                        .unwrap()
+                        .progress_chars("##-"),
+                );
+                let progress_bar = Arc::new(Mutex::new(progress_bar));
+
+                let start_time = Instant::now();
+
+                if *parallel > 1 {
+                    // Parallel loading with multiple connections
+                    let vectors_per_connection = vectors_to_load / *parallel;
+                    let mut handles = Vec::new();
+
+                    for i in 0..*parallel {
+                        let start_idx = i * vectors_per_connection;
+                        let end_idx = if i == *parallel - 1 {
+                            vectors_to_load
+                        } else {
+                            (i + 1) * vectors_per_connection
+                        };
+
+                        let connection_string = cli.connection_string.clone();
+                        let table_name = table.clone();
+                        let vectors_clone = vectors.clone();
+                        let pb_clone = progress_bar.clone();
+
+                        let handle = task::spawn(async move {
+                            let mut client = connect_to_postgres(&connection_string).await.unwrap();
+
+                            load_vectors(
+                                &mut client,
+                                &table_name,
+                                &vectors_clone,
+                                start_idx,
+                                end_idx,
+                                Some(pb_clone),
+                            )
+                            .await
+                            .unwrap();
+                        });
+
+                        handles.push(handle);
+                    }
+
+                    // Wait for all tasks to complete
+                    join_all(handles).await;
+                } else if *transactions > 1 {
+                    // Split loading into multiple transactions
+                    let vectors_per_transaction = vectors_to_load / *transactions;
+
+                    for i in 0..*transactions {
+                        let start_idx = i * vectors_per_transaction;
+                        let end_idx = if i == *transactions - 1 {
+                            vectors_to_load
+                        } else {
+                            (i + 1) * vectors_per_transaction
+                        };
+
+                        load_vectors(
+                            &mut client,
+                            table,
+                            &vectors,
+                            start_idx,
+                            end_idx,
+                            Some(progress_bar.clone()),
+                        )
+                        .await?;
+                    }
+                } else {
+                    // Single transaction loading
+                    let res = load_vectors(
+                        &mut client,
+                        table,
+                        &vectors,
+                        0,
+                        vectors_to_load,
+                        Some(progress_bar.clone()),
+                    )
+                    .await;
+                    if res.is_err() {
+                        println!("Error loading vectors: {:?}", res);
+                        res?;
+                    }
+                }
+
+                let duration = start_time.elapsed();
+                progress_bar
+                    .lock()
+                    .unwrap()
+                    .finish_with_message("Loading complete");
+
+                // Report performance statistics
+                let stats = PerformanceStats::new("Vector Loading", duration, vectors_to_load);
+                stats.print();
+
+                // Create index if requested
+                if *create_index {
+                    println!(
+                        "Creating {} index with {} distance metric...",
+                        format!("{:?}", index_type).to_lowercase(),
+                        format!("{:?}", effective_distance_metric).to_lowercase()
+                    );
+                    let index_start_time = Instant::now();
+
+                    // Create index parameters struct
+                    let index_params = IndexParams {
+                        index_type: *index_type,
+                        distance_metric: effective_distance_metric,
+                        diskann: DiskAnnIndexParams {
+                            storage_layout: diskann_storage_layout.clone(),
+                            num_neighbors: *diskann_num_neighbors,
+                            search_list_size: *diskann_search_list_size,
+                            max_alpha: *diskann_max_alpha,
+                            num_dimensions: *diskann_num_dimensions,
+                            num_bits_per_dimension: *diskann_num_bits_per_dimension,
+                        },
+                        hnsw: HnswIndexParams {
+                            m: *hnsw_m,
+                            ef_construction: *hnsw_ef_construction,
+                        },
+                        ivfflat: IvfFlatIndexParams {
+                            lists: *ivfflat_lists,
+                        },
+                    };
+
+                    create_vector_index(&client, table, vector_dim, &index_params).await?;
+
+                    let index_duration = index_start_time.elapsed();
+                    let index_stats = PerformanceStats::new("Index Creation", index_duration, 1);
+                    index_stats.print();
+                }
+            } else {
+                println!("Dataset '{}' not found. Use the ListDatasets command to see available datasets.", dataset);
+            }
+        }
         Commands::Load {
             file,
             dataset,
@@ -1014,9 +1632,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Read the ground truth neighbors
             let neighbors_data = neighbors_dataset.read_raw::<i32>()?;
             let neighbors_shape = neighbors_dataset.shape();
+
+            // Make sure we don't request more neighbors than available in ground truth
+            let effective_k = std::cmp::min(*k, neighbors_shape[1]);
+
+            // Print debug info about the ground truth data if verbose is enabled
+            if *verbose {
+                println!("Ground truth shape: {:?}", neighbors_shape);
+                println!(
+                    "Number of neighbors in ground truth: {}",
+                    neighbors_shape[1]
+                );
+                println!("Requested k: {}", k);
+
+                if effective_k < *k {
+                    println!("Warning: Requested k={} but ground truth only has {} neighbors. Using k={}.", 
+                             k, neighbors_shape[1], effective_k);
+                }
+            }
+
             let ground_truth =
                 Array::from_shape_vec((total_queries, neighbors_shape[1]), neighbors_data)?
-                    .slice(s![0..queries_to_run, 0..*k])
+                    .slice(s![0..queries_to_run, 0..effective_k])
                     .to_owned();
 
             // Connect to PostgreSQL
@@ -1047,7 +1684,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let query_params = QueryParams {
                     table_name: table.clone(),
                     query_vector: query_vector_slice.to_vec(),
-                    k: *k,
+                    k: effective_k,
                     distance_metric: *distance_metric,
                     diskann: DiskAnnQueryParams {
                         query_search_list_size: *diskann_query_search_list_size,
@@ -1068,7 +1705,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Calculate recall for this query
                 let ground_truth_row = ground_truth.row(i);
                 let expected_slice = ground_truth_row.as_slice().unwrap();
-                let recall = calculate_recall(&result, expected_slice, *k);
+                let recall = calculate_recall(&result, expected_slice, effective_k, *verbose);
                 total_recall += recall;
                 recall_values.push(recall);
 
@@ -1086,7 +1723,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\nRecall Results:");
                 println!("----------------");
                 println!("Total queries: {}", queries_to_run);
-                println!("K (nearest neighbors): {}", k);
+                println!("K (nearest neighbors): {} (effective: {})", k, effective_k);
                 println!("Distance metric: {}", distance_metric);
 
                 // Print individual recall values (limit to first 10 if there are many)
@@ -1099,18 +1736,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall);
                     }
                     println!("...");
-                    for (i, &recall) in recall_values
-                        .iter()
-                        .enumerate()
-                        .skip(queries_to_run - 5)
-                        .take(5)
-                    {
-                        println!(
-                            "Query {}: Recall@{} = {:.4}",
-                            i + queries_to_run - 5 + 1,
-                            k,
-                            recall
-                        );
+                    // Get the last 5 queries
+                    for i in (queries_to_run - 5)..queries_to_run {
+                        println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall_values[i]);
                     }
                 }
 
