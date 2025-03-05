@@ -110,6 +110,45 @@ enum Commands {
         /// Distance metric to use for the index
         #[arg(long, default_value_t = DistanceType::Cosine, requires = "create_index")]
         distance_metric: DistanceType,
+
+        // DiskANN index hyperparameters
+        /// DiskANN: Storage layout (memory_optimized or plain)
+        #[arg(long, default_value = "memory_optimized", requires = "create_index")]
+        diskann_storage_layout: Option<String>,
+
+        /// DiskANN: Number of neighbors per node (default: 50)
+        #[arg(long, requires = "create_index")]
+        diskann_num_neighbors: Option<usize>,
+
+        /// DiskANN: Search list size for construction (default: 100)
+        #[arg(long, requires = "create_index")]
+        diskann_search_list_size: Option<usize>,
+
+        /// DiskANN: Alpha parameter (default: 1.2)
+        #[arg(long, requires = "create_index")]
+        diskann_max_alpha: Option<f32>,
+
+        /// DiskANN: Number of dimensions to index (0 = all)
+        #[arg(long, requires = "create_index")]
+        diskann_num_dimensions: Option<usize>,
+
+        /// DiskANN: Number of bits per dimension for SBQ
+        #[arg(long, requires = "create_index")]
+        diskann_num_bits_per_dimension: Option<usize>,
+
+        // HNSW index hyperparameters
+        /// HNSW: Max number of connections per layer (default: 16)
+        #[arg(long, requires = "create_index")]
+        hnsw_m: Option<usize>,
+
+        /// HNSW: Size of dynamic candidate list for construction (default: 64)
+        #[arg(long, requires = "create_index")]
+        hnsw_ef_construction: Option<usize>,
+
+        // IVFFlat index hyperparameters
+        /// IVFFlat: Number of lists (default depends on data size)
+        #[arg(long, requires = "create_index")]
+        ivfflat_lists: Option<usize>,
     },
 
     /// Run test queries and calculate recall
@@ -145,7 +184,83 @@ enum Commands {
         /// Show detailed recall information for each query
         #[arg(short, long)]
         verbose: bool,
+
+        // DiskANN query-time parameters
+        /// DiskANN: Number of additional candidates during graph search (default: 100)
+        #[arg(long)]
+        diskann_query_search_list_size: Option<usize>,
+
+        /// DiskANN: Number of elements to rescore (default: 50, 0 to disable)
+        #[arg(long)]
+        diskann_query_rescore: Option<usize>,
+
+        // HNSW query-time parameters
+        /// HNSW: Size of dynamic candidate list for search (default: 40)
+        #[arg(long)]
+        hnsw_ef_search: Option<usize>,
+
+        // IVFFlat query-time parameters
+        /// IVFFlat: Number of lists to probe (default: 1)
+        #[arg(long)]
+        ivfflat_probes: Option<usize>,
     },
+}
+
+/// Parameters for DiskANN index creation
+struct DiskAnnIndexParams {
+    storage_layout: Option<String>,
+    num_neighbors: Option<usize>,
+    search_list_size: Option<usize>,
+    max_alpha: Option<f32>,
+    num_dimensions: Option<usize>,
+    num_bits_per_dimension: Option<usize>,
+}
+
+/// Parameters for HNSW index creation
+struct HnswIndexParams {
+    m: Option<usize>,
+    ef_construction: Option<usize>,
+}
+
+/// Parameters for IVFFlat index creation
+struct IvfFlatIndexParams {
+    lists: Option<usize>,
+}
+
+/// Combined parameters for index creation
+struct IndexParams {
+    index_type: IndexType,
+    distance_metric: DistanceType,
+    diskann: DiskAnnIndexParams,
+    hnsw: HnswIndexParams,
+    ivfflat: IvfFlatIndexParams,
+}
+
+/// Parameters for DiskANN query
+struct DiskAnnQueryParams {
+    query_search_list_size: Option<usize>,
+    query_rescore: Option<usize>,
+}
+
+/// Parameters for HNSW query
+struct HnswQueryParams {
+    ef_search: Option<usize>,
+}
+
+/// Parameters for IVFFlat query
+struct IvfFlatQueryParams {
+    probes: Option<usize>,
+}
+
+/// Combined parameters for query execution
+struct QueryParams {
+    table_name: String,
+    query_vector: Vec<f32>,
+    k: usize,
+    distance_metric: DistanceType,
+    diskann: DiskAnnQueryParams,
+    hnsw: HnswQueryParams,
+    ivfflat: IvfFlatQueryParams,
 }
 
 struct QueryStats {
@@ -336,49 +451,111 @@ async fn create_vector_index(
     client: &Client,
     table_name: &str,
     _vector_dim: usize, // Prefix with underscore to indicate intentionally unused
-    index_type: IndexType,
-    distance_metric: DistanceType,
+    params: &IndexParams,
 ) -> Result<(), PgError> {
     // Get the operator class for the distance metric
-    let operator_class = distance_metric.get_operator_class();
+    let operator_class = params.distance_metric.get_operator_class();
 
     // Create the index based on the index type
-    match index_type {
+    match params.index_type {
         IndexType::DiskANN => {
-            // DiskANN index
-            client
-                .execute(
-                    &format!(
-                        "CREATE INDEX ON {} USING diskann (embedding {});",
-                        table_name, operator_class
-                    ),
-                    &[],
+            // Build DiskANN index parameters
+            let mut index_params = Vec::new();
+
+            if let Some(storage_layout) = &params.diskann.storage_layout {
+                index_params.push(format!("storage_layout='{}'", storage_layout));
+            }
+
+            if let Some(num_neighbors) = params.diskann.num_neighbors {
+                index_params.push(format!("num_neighbors={}", num_neighbors));
+            }
+
+            if let Some(search_list_size) = params.diskann.search_list_size {
+                index_params.push(format!("search_list_size={}", search_list_size));
+            }
+
+            if let Some(max_alpha) = params.diskann.max_alpha {
+                index_params.push(format!("max_alpha={}", max_alpha));
+            }
+
+            if let Some(num_dimensions) = params.diskann.num_dimensions {
+                index_params.push(format!("num_dimensions={}", num_dimensions));
+            }
+
+            if let Some(num_bits) = params.diskann.num_bits_per_dimension {
+                index_params.push(format!("num_bits_per_dimension={}", num_bits));
+            }
+
+            // Create the index with parameters
+            let sql = if index_params.is_empty() {
+                format!(
+                    "CREATE INDEX ON {} USING diskann (embedding {});",
+                    table_name, operator_class
                 )
-                .await?
+            } else {
+                format!(
+                    "CREATE INDEX ON {} USING diskann (embedding {}) WITH ({});",
+                    table_name,
+                    operator_class,
+                    index_params.join(", ")
+                )
+            };
+
+            client.execute(&sql, &[]).await?
         }
         IndexType::Hnsw => {
-            // HNSW index
-            client
-                .execute(
-                    &format!(
-                        "CREATE INDEX ON {} USING hnsw (embedding {});",
-                        table_name, operator_class
-                    ),
-                    &[],
+            // Build HNSW index parameters
+            let mut index_params = Vec::new();
+
+            if let Some(m) = params.hnsw.m {
+                index_params.push(format!("m={}", m));
+            }
+
+            if let Some(ef_construction) = params.hnsw.ef_construction {
+                index_params.push(format!("ef_construction={}", ef_construction));
+            }
+
+            // Create the index with parameters
+            let sql = if index_params.is_empty() {
+                format!(
+                    "CREATE INDEX ON {} USING hnsw (embedding {});",
+                    table_name, operator_class
                 )
-                .await?
+            } else {
+                format!(
+                    "CREATE INDEX ON {} USING hnsw (embedding {}) WITH ({});",
+                    table_name,
+                    operator_class,
+                    index_params.join(", ")
+                )
+            };
+
+            client.execute(&sql, &[]).await?
         }
         IndexType::IVFFlat => {
-            // IVFFlat index
-            client
-                .execute(
-                    &format!(
-                        "CREATE INDEX ON {} USING ivfflat (embedding {});",
-                        table_name, operator_class
-                    ),
-                    &[],
+            // Build IVFFlat index parameters
+            let mut index_params = Vec::new();
+
+            if let Some(lists) = params.ivfflat.lists {
+                index_params.push(format!("lists={}", lists));
+            }
+
+            // Create the index with parameters
+            let sql = if index_params.is_empty() {
+                format!(
+                    "CREATE INDEX ON {} USING ivfflat (embedding {});",
+                    table_name, operator_class
                 )
-                .await?
+            } else {
+                format!(
+                    "CREATE INDEX ON {} USING ivfflat (embedding {}) WITH ({});",
+                    table_name,
+                    operator_class,
+                    index_params.join(", ")
+                )
+            };
+
+            client.execute(&sql, &[]).await?
         }
     };
 
@@ -519,13 +696,7 @@ fn format_vector_for_postgres(vector: &[f32]) -> String {
     vector_str
 }
 
-async fn run_query(
-    client: &Client,
-    table_name: &str,
-    query_vector: &[f32],
-    k: usize,
-    distance_metric: DistanceType,
-) -> Result<Vec<i32>, PgError> {
+async fn run_query(client: &Client, params: &QueryParams) -> Result<Vec<i32>, PgError> {
     // Set session GUCs to ensure the index is used
     client.execute("SET enable_seqscan = OFF", &[]).await?;
     client
@@ -538,16 +709,46 @@ async fn run_query(
         .execute("SET vectorscale.enable_ivfflat = ON", &[])
         .await?;
 
+    // Set DiskANN query parameters if provided
+    if let Some(search_list_size) = params.diskann.query_search_list_size {
+        client
+            .execute(
+                &format!("SET diskann.query_search_list_size = {}", search_list_size),
+                &[],
+            )
+            .await?;
+    }
+
+    if let Some(rescore) = params.diskann.query_rescore {
+        client
+            .execute(&format!("SET diskann.query_rescore = {}", rescore), &[])
+            .await?;
+    }
+
+    // Set HNSW query parameters if provided
+    if let Some(ef_search) = params.hnsw.ef_search {
+        client
+            .execute(&format!("SET hnsw.ef_search = {}", ef_search), &[])
+            .await?;
+    }
+
+    // Set IVFFlat query parameters if provided
+    if let Some(probes) = params.ivfflat.probes {
+        client
+            .execute(&format!("SET ivfflat.probes = {}", probes), &[])
+            .await?;
+    }
+
     // Get the appropriate operator for the distance metric
-    let distance_operator = distance_metric.get_operator();
+    let distance_operator = params.distance_metric.get_operator();
 
     // Format the vector for PostgreSQL
-    let vector_str = format_vector_for_postgres(query_vector);
+    let vector_str = format_vector_for_postgres(&params.query_vector);
 
     // Construct the SQL query with the vector literal directly in the query
     let query = format!(
         "SELECT id FROM {} ORDER BY embedding {} '{}' LIMIT {}",
-        table_name, distance_operator, vector_str, k
+        params.table_name, distance_operator, vector_str, params.k
     );
 
     // Run the query
@@ -582,6 +783,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             create_index,
             index_type,
             distance_metric,
+            diskann_storage_layout,
+            diskann_num_neighbors,
+            diskann_search_list_size,
+            diskann_max_alpha,
+            diskann_num_dimensions,
+            diskann_num_bits_per_dimension,
+            hnsw_m,
+            hnsw_ef_construction,
+            ivfflat_lists,
         } => {
             // Open the HDF5 file
             let h5_file = File::open(file)?;
@@ -728,8 +938,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 let index_start_time = Instant::now();
 
-                create_vector_index(&client, table, vector_dim, *index_type, *distance_metric)
-                    .await?;
+                // Create index parameters struct
+                let index_params = IndexParams {
+                    index_type: *index_type,
+                    distance_metric: *distance_metric,
+                    diskann: DiskAnnIndexParams {
+                        storage_layout: diskann_storage_layout.clone(),
+                        num_neighbors: *diskann_num_neighbors,
+                        search_list_size: *diskann_search_list_size,
+                        max_alpha: *diskann_max_alpha,
+                        num_dimensions: *diskann_num_dimensions,
+                        num_bits_per_dimension: *diskann_num_bits_per_dimension,
+                    },
+                    hnsw: HnswIndexParams {
+                        m: *hnsw_m,
+                        ef_construction: *hnsw_ef_construction,
+                    },
+                    ivfflat: IvfFlatIndexParams {
+                        lists: *ivfflat_lists,
+                    },
+                };
+
+                create_vector_index(&client, table, vector_dim, &index_params).await?;
 
                 let index_duration = index_start_time.elapsed();
                 let index_stats = PerformanceStats::new("Index Creation", index_duration, 1);
@@ -746,6 +976,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             k,
             distance_metric,
             verbose,
+            diskann_query_search_list_size,
+            diskann_query_rescore,
+            hnsw_ef_search,
+            ivfflat_probes,
         } => {
             // Open the HDF5 file
             let h5_file = File::open(file)?;
@@ -809,8 +1043,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Measure the query time
                 let query_start = Instant::now();
-                let result =
-                    run_query(&client, table, query_vector_slice, *k, *distance_metric).await?;
+                // Create query parameters struct
+                let query_params = QueryParams {
+                    table_name: table.clone(),
+                    query_vector: query_vector_slice.to_vec(),
+                    k: *k,
+                    distance_metric: *distance_metric,
+                    diskann: DiskAnnQueryParams {
+                        query_search_list_size: *diskann_query_search_list_size,
+                        query_rescore: *diskann_query_rescore,
+                    },
+                    hnsw: HnswQueryParams {
+                        ef_search: *hnsw_ef_search,
+                    },
+                    ivfflat: IvfFlatQueryParams {
+                        probes: *ivfflat_probes,
+                    },
+                };
+
+                let result = run_query(&client, &query_params).await?;
                 let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
 

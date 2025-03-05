@@ -58,6 +58,12 @@ impl ops::Mul<S> for S {
     }
 }
 
+impl ops::AddAssign for S {
+    fn add_assign(&mut self, other: S) {
+        *self = S(unsafe { aarch64::vaddq_f32(self.0, other.0) });
+    }
+}
+
 pub unsafe fn distance_l2_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
     super::distance::distance_l2_simd_body!(x, y)
 }
