@@ -1,6 +1,7 @@
 use std::fmt;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -169,13 +170,17 @@ enum Commands {
 
     /// Load training vectors from HDF5 file into PostgreSQL
     Load {
-        /// Path to HDF5 file
-        #[arg(short, long)]
-        file: PathBuf,
+        /// Path to HDF5 file (either --file or --dataset must be specified)
+        #[arg(short, long, group = "input_source")]
+        file: Option<PathBuf>,
+
+        /// Dataset name from ann-benchmarks (either --file or --dataset must be specified)
+        #[arg(short, long, group = "input_source")]
+        dataset: Option<String>,
 
         /// Dataset name within the HDF5 file (usually 'train')
-        #[arg(short, long, default_value = "train")]
-        dataset: String,
+        #[arg(short = 'd', long, default_value = "train")]
+        dataset_name: String,
 
         /// Table name to load vectors into
         #[arg(short, long)]
@@ -251,9 +256,13 @@ enum Commands {
 
     /// Run test queries and calculate recall
     Test {
-        /// Path to HDF5 file
-        #[arg(short, long)]
-        file: PathBuf,
+        /// Path to HDF5 file (either --file or --dataset must be specified)
+        #[arg(short, long, group = "input_source")]
+        file: Option<PathBuf>,
+
+        /// Dataset name from ann-benchmarks (either --file or --dataset must be specified)
+        #[arg(short, long, group = "input_source")]
+        dataset: Option<String>,
 
         /// Dataset name for test queries within the HDF5 file (usually 'test')
         #[arg(short = 'q', long, default_value = "test")]
@@ -717,6 +726,8 @@ async fn load_vectors(
     end_idx: usize,
     progress_bar: Option<Arc<Mutex<ProgressBar>>>,
 ) -> Result<(), PgError> {
+    // Mark that we have an active transaction
+    ACTIVE_TRANSACTIONS.store(true, Ordering::SeqCst);
     // No need for byteorder imports with text format
     use std::io::Write;
 
@@ -730,62 +741,94 @@ async fn load_vectors(
     // Start the COPY operation
     let sink = transaction.copy_in(&copy_cmd).await?;
 
-    // Create a buffer to hold the binary data
-    let mut buffer = Vec::new();
-
     // Helper function to convert io::Error to PgError
     let to_pg_error = |_e: std::io::Error| -> PgError {
         // let err_msg = format!("IO Error: {}", e);
         PgError::__private_api_timeout() // Using a placeholder error since we can't create PgError directly
     };
 
-    // For text format COPY, we don't need the binary header
-
-    // Process each vector
-    for i in start_idx..end_idx {
-        let vector = vectors.row(i);
-        let vector_data = vector.as_slice().unwrap();
-
-        // Format the vector as a PostgreSQL array string
-        let vector_str = format_vector_for_postgres(vector_data);
-
-        // Format the line for text COPY: id<tab>vector_str\n
-        // Write the id
-        buffer
-            .write_all(i.to_string().as_bytes())
-            .map_err(to_pg_error)?;
-
-        // Write tab separator
-        buffer.write_all(b"\t").map_err(to_pg_error)?;
-
-        // Write the vector string
-        buffer
-            .write_all(vector_str.as_bytes())
-            .map_err(to_pg_error)?;
-
-        // Write newline
-        buffer.write_all(b"\n").map_err(to_pg_error)?;
-
-        if let Some(pb) = &progress_bar {
-            pb.lock().unwrap().inc(1);
-        }
-    }
-
-    // For text format COPY, we need to write the end-of-copy marker
-    buffer.write_all(b"\\.").map_err(to_pg_error)?;
-    buffer.write_all(b"\n").map_err(to_pg_error)?;
-
     // Use Box::pin to pin the sink properly
     let mut sink = Box::pin(sink);
 
-    // Send the buffer to the sink
-    sink.as_mut().feed(Bytes::from(buffer)).await?;
+    // Define batch size for sending data to avoid connection issues with large datasets
+    const BATCH_SIZE: usize = 10000;
+
+    // Process vectors in batches
+    let mut current_idx = start_idx;
+    while current_idx < end_idx {
+        // Check if we should abort due to Ctrl+C
+        if SHOULD_ABORT.load(Ordering::SeqCst) {
+            println!("Aborting transaction due to user interrupt...");
+            transaction.rollback().await?;
+            ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
+            return Err(PgError::__private_api_timeout()); // Using a placeholder error
+        }
+
+        // Determine end of current batch
+        let batch_end = std::cmp::min(current_idx + BATCH_SIZE, end_idx);
+
+        // Create a buffer for this batch
+        let mut buffer = Vec::with_capacity((batch_end - current_idx) * 64); // Rough estimate of bytes per row
+
+        // Process each vector in this batch
+        for i in current_idx..batch_end {
+            let vector = vectors.row(i);
+            let vector_data = vector.as_slice().unwrap();
+
+            // Format the vector as a PostgreSQL array string
+            let vector_str = format_vector_for_postgres(vector_data);
+
+            // Format the line for text COPY: id<tab>vector_str\n
+            // Write the id
+            buffer
+                .write_all(i.to_string().as_bytes())
+                .map_err(to_pg_error)?;
+
+            // Write tab separator
+            buffer.write_all(b"\t").map_err(to_pg_error)?;
+
+            // Write the vector string
+            buffer
+                .write_all(vector_str.as_bytes())
+                .map_err(to_pg_error)?;
+
+            // Write newline
+            buffer.write_all(b"\n").map_err(to_pg_error)?;
+
+            if let Some(pb) = &progress_bar {
+                pb.lock().unwrap().inc(1);
+            }
+        }
+
+        // Send this batch to the sink
+        sink.as_mut().feed(Bytes::from(buffer)).await?;
+
+        // Move to the next batch
+        current_idx = batch_end;
+    }
+
+    // Write the end-of-copy marker
+    let mut end_marker = Vec::new();
+    end_marker.write_all(b"\\.").map_err(to_pg_error)?;
+    end_marker.write_all(b"\n").map_err(to_pg_error)?;
+    sink.as_mut().feed(Bytes::from(end_marker)).await?;
 
     // Finish the COPY operation
     sink.as_mut().close().await?;
 
+    // Check if we should abort due to Ctrl+C
+    if SHOULD_ABORT.load(Ordering::SeqCst) {
+        println!("Aborting transaction due to user interrupt...");
+        transaction.rollback().await?;
+        ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
+        return Err(PgError::__private_api_timeout()); // Using a placeholder error
+    }
+
     // Commit the transaction
     transaction.commit().await?;
+
+    // Mark that we no longer have an active transaction
+    ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
 
     Ok(())
 }
@@ -935,7 +978,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 9990000,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/deep-image-96-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -962,7 +1005,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 1183514,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/glove-25-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -971,7 +1014,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 1183514,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/glove-50-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -980,7 +1023,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 1183514,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/glove-100-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -989,7 +1032,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 1183514,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/glove-200-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -1016,7 +1059,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 290000,
             test_size: 10000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "cosine".to_string(),
             url: "http://ann-benchmarks.com/nytimes-256-angular.hdf5".to_string(),
         },
         DatasetInfo {
@@ -1025,7 +1068,7 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             train_size: 292385,
             test_size: 50000,
             neighbors: 100,
-            distance: "angular".to_string(),
+            distance: "inner_product".to_string(),
             url: "http://ann-benchmarks.com/lastfm-64-dot.hdf5".to_string(),
         },
     ];
@@ -1162,8 +1205,37 @@ async fn download_dataset(dataset: &DatasetInfo) -> Result<PathBuf, Box<dyn std:
     Ok(file_path)
 }
 
+// Global variables to track active transactions
+static ACTIVE_TRANSACTIONS: AtomicBool = AtomicBool::new(false);
+static SHOULD_ABORT: AtomicBool = AtomicBool::new(false);
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Set up Ctrl+C handler
+    let ctrl_c = tokio::signal::ctrl_c();
+    tokio::spawn(async move {
+        match ctrl_c.await {
+            Ok(()) => {
+                println!("\nReceived Ctrl+C, cleaning up...");
+
+                // Check if there are active transactions
+                if ACTIVE_TRANSACTIONS.load(Ordering::SeqCst) {
+                    println!("Aborting active transactions...");
+                    // Set the abort flag to true so that transactions can be aborted
+                    SHOULD_ABORT.store(true, Ordering::SeqCst);
+
+                    // Give a small delay to allow transactions to abort
+                    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                }
+
+                println!("Exiting.");
+                std::process::exit(130); // Standard exit code for SIGINT
+            }
+            Err(err) => {
+                eprintln!("Error setting up Ctrl+C handler: {}", err);
+            }
+        }
+    });
     let cli = Cli::parse();
 
     match &cli.command {
@@ -1206,7 +1278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Infer the distance metric
                 let inferred_distance_metric = match dataset_info.distance.as_str() {
-                    "angular" => DistanceType::Cosine,
+                    "cosine" => DistanceType::Cosine,
                     "euclidean" => DistanceType::L2,
                     "dot" => DistanceType::InnerProduct,
                     _ => {
@@ -1402,6 +1474,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Load {
             file,
             dataset,
+            dataset_name,
             table,
             create_table,
             num_vectors,
@@ -1420,11 +1493,36 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hnsw_ef_construction,
             ivfflat_lists,
         } => {
+            // Determine the file path - either from direct file path or by downloading the dataset
+            let file_path: PathBuf = if let Some(file_path) = file {
+                file_path.clone()
+            } else if let Some(dataset_name) = dataset {
+                // Get dataset information
+                let datasets = get_ann_benchmark_datasets().await?;
+                let dataset_info = datasets.iter().find(|d| &d.name == dataset_name);
+
+                if let Some(dataset_info) = dataset_info {
+                    println!(
+                        "Found dataset: {} ({}D, {} distance)",
+                        dataset_info.name, dataset_info.dimensions, dataset_info.distance
+                    );
+
+                    // Download the dataset
+                    download_dataset(dataset_info).await?
+                } else {
+                    println!("Dataset '{}' not found. Use the ListDatasets command to see available datasets.", dataset_name);
+                    return Ok(());
+                }
+            } else {
+                println!("Error: Either --file or --dataset must be specified");
+                return Ok(());
+            };
+
             // Open the HDF5 file
-            let h5_file = File::open(file)?;
+            let h5_file = File::open(&file_path)?;
 
             // Get the dataset
-            let dataset = h5_file.dataset(dataset)?;
+            let dataset = h5_file.dataset(dataset_name)?;
 
             // Get the dimensions of the dataset
             let shape = dataset.shape();
@@ -1596,6 +1694,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         Commands::Test {
             file,
+            dataset,
             query_dataset,
             neighbors_dataset,
             table,
@@ -1608,8 +1707,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hnsw_ef_search,
             ivfflat_probes,
         } => {
+            // Determine the file path - either from direct file path or by downloading the dataset
+            let file_path: PathBuf = if let Some(file_path) = file {
+                file_path.clone()
+            } else if let Some(dataset_name) = dataset {
+                // Get dataset information
+                let datasets = get_ann_benchmark_datasets().await?;
+                let dataset_info = datasets.iter().find(|d| &d.name == dataset_name);
+
+                if let Some(dataset_info) = dataset_info {
+                    println!(
+                        "Found dataset: {} ({}D, {} distance)",
+                        dataset_info.name, dataset_info.dimensions, dataset_info.distance
+                    );
+
+                    // Download the dataset
+                    download_dataset(dataset_info).await?
+                } else {
+                    println!("Dataset '{}' not found. Use the ListDatasets command to see available datasets.", dataset_name);
+                    return Ok(());
+                }
+            } else {
+                println!("Error: Either --file or --dataset must be specified");
+                return Ok(());
+            };
+
             // Open the HDF5 file
-            let h5_file = File::open(file)?;
+            let h5_file = File::open(&file_path)?;
 
             // Get the query dataset
             let query_dataset = h5_file.dataset(query_dataset)?;
