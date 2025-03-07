@@ -294,11 +294,11 @@ enum Commands {
 
         // DiskANN query-time parameters
         /// DiskANN: Number of additional candidates during graph search (default: 100)
-        #[arg(long)]
+        #[arg(long, default_value = "100")]
         diskann_query_search_list_size: Option<usize>,
 
-        /// DiskANN: Number of elements to rescore (default: 50, 0 to disable)
-        #[arg(long)]
+        /// DiskANN: Number of elements to rescore (default: 115, 0 to disable)
+        #[arg(long, default_value = "115")]
         diskann_query_rescore: Option<usize>,
 
         // HNSW query-time parameters
@@ -833,21 +833,6 @@ async fn load_vectors(
     Ok(())
 }
 
-// // Format vector specifically for CSV output
-// fn format_vector_for_csv(vector: &ArrayView1<f32>) -> String {
-//     let mut vector_str = String::from("\"[");
-
-//     for (i, &val) in vector.as_slice().unwrap().iter().enumerate() {
-//         if i > 0 {
-//             vector_str.push_str(", ");
-//         }
-//         vector_str.push_str(&val.to_string());
-//     }
-
-//     vector_str.push_str("]\"");
-//     vector_str
-// }
-
 // Format vector specifically for PostgreSQL vector type
 fn format_vector_for_postgres(vector: &[f32]) -> String {
     // The pgvector format is simply [val1,val2,val3,...]
@@ -1070,6 +1055,24 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             neighbors: 100,
             distance: "inner_product".to_string(),
             url: "http://ann-benchmarks.com/lastfm-64-dot.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "cohere-wikipedia-22-12-1M-angular".to_string(),
+            dimensions: 768,
+            train_size: 1000000,
+            test_size: 10000,
+            neighbors: 100,
+            distance: "cosine".to_string(),
+            url: "s3://vector-datasets/1M/cohere-wikipedia-22-12-1M-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "cohere-wikipedia-22-12-10M-angular".to_string(),
+            dimensions: 768,
+            train_size: 10000000,
+            test_size: 5000,
+            neighbors: 100,
+            distance: "cosine".to_string(),
+            url: "s3://vector-datasets/10M/cohere-wikipedia-22-12-1M-euclidean.hdf5".to_string(),
         },
     ];
 
