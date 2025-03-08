@@ -284,6 +284,10 @@ enum Commands {
         #[arg(short, long, default_value_t = 100)]
         k: usize,
 
+        /// Number of top results to consider for recall calculation (defaults to k if not specified)
+        #[arg(long)]
+        top_k: Option<usize>,
+
         /// Distance metric to use for queries
         #[arg(long, default_value_t = DistanceType::Cosine)]
         distance_metric: DistanceType,
@@ -850,47 +854,69 @@ fn format_vector_for_postgres(vector: &[f32]) -> String {
     vector_str
 }
 
-async fn run_query(client: &Client, params: &QueryParams) -> Result<Vec<i32>, PgError> {
+async fn run_query(
+    client: &Client,
+    params: &QueryParams,
+    verbose: bool,
+) -> Result<Vec<i32>, PgError> {
     // Set session GUCs to ensure the index is used
-    client.execute("SET enable_seqscan = OFF", &[]).await?;
-    client
-        .execute("SET vectorscale.enable_diskann = ON", &[])
-        .await?;
-    client
-        .execute("SET vectorscale.enable_hnsw = ON", &[])
-        .await?;
-    client
-        .execute("SET vectorscale.enable_ivfflat = ON", &[])
-        .await?;
+    let sql = "SET enable_seqscan = OFF";
+    if verbose {
+        println!("SQL: {}", sql);
+    }
+    client.execute(sql, &[]).await?;
+
+    let sql = "SET vectorscale.enable_diskann = ON";
+    if verbose {
+        println!("SQL: {}", sql);
+    }
+    client.execute(sql, &[]).await?;
+
+    let sql = "SET vectorscale.enable_hnsw = ON";
+    if verbose {
+        println!("SQL: {}", sql);
+    }
+    client.execute(sql, &[]).await?;
+
+    let sql = "SET vectorscale.enable_ivfflat = ON";
+    if verbose {
+        println!("SQL: {}", sql);
+    }
+    client.execute(sql, &[]).await?;
 
     // Set DiskANN query parameters if provided
     if let Some(search_list_size) = params.diskann.query_search_list_size {
-        client
-            .execute(
-                &format!("SET diskann.query_search_list_size = {}", search_list_size),
-                &[],
-            )
-            .await?;
+        let sql = format!("SET diskann.query_search_list_size = {}", search_list_size);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
     }
 
     if let Some(rescore) = params.diskann.query_rescore {
-        client
-            .execute(&format!("SET diskann.query_rescore = {}", rescore), &[])
-            .await?;
+        let sql = format!("SET diskann.query_rescore = {}", rescore);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
     }
 
     // Set HNSW query parameters if provided
     if let Some(ef_search) = params.hnsw.ef_search {
-        client
-            .execute(&format!("SET hnsw.ef_search = {}", ef_search), &[])
-            .await?;
+        let sql = format!("SET hnsw.ef_search = {}", ef_search);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
     }
 
     // Set IVFFlat query parameters if provided
     if let Some(probes) = params.ivfflat.probes {
-        client
-            .execute(&format!("SET ivfflat.probes = {}", probes), &[])
-            .await?;
+        let sql = format!("SET ivfflat.probes = {}", probes);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
     }
 
     // Get the appropriate operator for the distance metric
@@ -905,6 +931,11 @@ async fn run_query(client: &Client, params: &QueryParams) -> Result<Vec<i32>, Pg
         params.table_name, distance_operator, vector_str, params.k
     );
 
+    // Echo the SQL query if verbose is enabled
+    if verbose {
+        println!("SQL: {}", query);
+    }
+
     // Run the query
     let rows = client.query(&query, &[]).await?;
 
@@ -913,18 +944,48 @@ async fn run_query(client: &Client, params: &QueryParams) -> Result<Vec<i32>, Pg
     Ok(result)
 }
 
-fn calculate_recall(actual: &[i32], expected: &[i32], k: usize, verbose: bool) -> f64 {
+fn calculate_recall(
+    actual: &[i32],
+    expected: &[i32],
+    k: usize,
+    top_k: usize,
+    verbose: bool,
+) -> f64 {
     // Ensure we're not trying to take more items than available
     let effective_k = std::cmp::min(k, expected.len());
+    // Use top_k for recall calculation, but don't exceed effective_k
+    let effective_top_k = std::cmp::min(top_k, effective_k);
+
+    if verbose {
+        println!(
+            "Actual k: {}, Effective k: {}, Top k: {}, Effective top k: {}, Actual len: {}, Expected len: {}",
+            k,
+            effective_k,
+            top_k,
+            effective_top_k,
+            actual.len(),
+            expected.len()
+        );
+    }
 
     if effective_k == 0 {
         // No ground truth data available
         return 0.0;
     }
 
-    let actual_set: std::collections::HashSet<_> = actual.iter().cloned().collect();
+    // Create a set of the top-k expected (ground truth) items
+    // This is the standard approach in ANN benchmarks
     let expected_set: std::collections::HashSet<_> =
         expected.iter().take(effective_k).cloned().collect();
+
+    // Count how many of our actual results are in the ground truth set
+    // This is the standard recall calculation for ANN benchmarks
+    let mut found_count = 0;
+    for &item in actual.iter().take(effective_k) {
+        if expected_set.contains(&item) {
+            found_count += 1;
+        }
+    }
 
     // Debug output for first few queries if verbose is enabled
     if verbose {
@@ -933,23 +994,24 @@ fn calculate_recall(actual: &[i32], expected: &[i32], k: usize, verbose: bool) -
         if debug_idx < 3 {
             println!("Debug for query #{}", debug_idx + 1);
             println!(
-                "  Actual results (first 5): {:?}",
-                actual.iter().take(5).collect::<Vec<_>>()
+                "  Actual results (first {}): {:?}",
+                std::cmp::min(100, actual.len()),
+                actual.iter().take(100).collect::<Vec<_>>()
             );
             println!(
-                "  Expected results (first 5): {:?}",
-                expected.iter().take(5).collect::<Vec<_>>()
+                "  Expected results (first {}): {:?}",
+                std::cmp::min(100, expected.len()),
+                expected.iter().take(100).collect::<Vec<_>>()
             );
+            println!("  Found count: {} out of {}", found_count, effective_top_k);
             println!(
-                "  Intersection count: {}",
-                expected_set.intersection(&actual_set).count()
+                "  Recall: {:.4}",
+                found_count as f64 / effective_top_k as f64
             );
-            println!("  Effective k: {}", effective_k);
         }
     }
 
-    let intersection_count = expected_set.intersection(&actual_set).count();
-    intersection_count as f64 / effective_k as f64
+    found_count as f64 / effective_top_k as f64
 }
 
 /// Get the list of available datasets from ann-benchmarks
@@ -1703,6 +1765,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             table,
             num_queries,
             k,
+            top_k,
             distance_metric,
             verbose,
             diskann_query_search_list_size,
@@ -1816,11 +1879,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Measure the query time
                 let query_start = Instant::now();
+                // Use top_k if specified, otherwise default to effective_k
+                let top_k_value = top_k.unwrap_or(effective_k);
+
                 // Create query parameters struct
                 let query_params = QueryParams {
                     table_name: table.clone(),
                     query_vector: query_vector_slice.to_vec(),
-                    k: effective_k,
+                    k: top_k_value, // Use top_k for the query limit
                     distance_metric: *distance_metric,
                     diskann: DiskAnnQueryParams {
                         query_search_list_size: *diskann_query_search_list_size,
@@ -1834,14 +1900,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 };
 
-                let result = run_query(&client, &query_params).await?;
+                let result = run_query(&client, &query_params, *verbose).await?;
                 let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
 
                 // Calculate recall for this query
                 let ground_truth_row = ground_truth.row(i);
                 let expected_slice = ground_truth_row.as_slice().unwrap();
-                let recall = calculate_recall(&result, expected_slice, effective_k, *verbose);
+                let recall =
+                    calculate_recall(&result, expected_slice, effective_k, top_k_value, *verbose);
                 total_recall += recall;
                 recall_values.push(recall);
 
