@@ -282,11 +282,7 @@ enum Commands {
 
         /// Number of nearest neighbors to retrieve
         #[arg(short, long, default_value_t = 100)]
-        k: usize,
-
-        /// Number of top results to consider for recall calculation (defaults to k if not specified)
-        #[arg(long)]
-        top_k: Option<usize>,
+        top_k: usize,
 
         /// Distance metric to use for queries
         #[arg(long, default_value_t = DistanceType::Cosine)]
@@ -367,7 +363,7 @@ struct IvfFlatQueryParams {
 struct QueryParams {
     table_name: String,
     query_vector: Vec<f32>,
-    k: usize,
+    top_k: usize,
     distance_metric: DistanceType,
     diskann: DiskAnnQueryParams,
     hnsw: HnswQueryParams,
@@ -858,7 +854,7 @@ async fn run_query(
     client: &Client,
     params: &QueryParams,
     verbose: bool,
-) -> Result<Vec<i32>, PgError> {
+) -> Result<Vec<(i32, f64)>, PgError> {
     // Set session GUCs to ensure the index is used
     let sql = "SET enable_seqscan = OFF";
     if verbose {
@@ -926,92 +922,42 @@ async fn run_query(
     let vector_str = format_vector_for_postgres(&params.query_vector);
 
     // Construct the SQL query with the vector literal directly in the query
+    // Include the distance in the result
     let query = format!(
-        "SELECT id FROM {} ORDER BY embedding {} '{}' LIMIT {}",
-        params.table_name, distance_operator, vector_str, params.k
+        "SELECT id, embedding {} '{}' as distance FROM {} ORDER BY distance LIMIT {}",
+        distance_operator, vector_str, params.table_name, params.top_k
     );
 
     // Echo the SQL query if verbose is enabled
     if verbose {
-        println!("SQL: {}", query);
+        // println!("SQL: {}", query);
     }
 
     // Run the query
     let rows = client.query(&query, &[]).await?;
 
-    let result = rows.iter().map(|row| row.get::<_, i32>(0)).collect();
+    let result = rows
+        .iter()
+        .map(|row| (row.get::<_, i32>(0), row.get::<_, f64>(1)))
+        .collect();
 
     Ok(result)
 }
 
+/// Cf. the recall measure `knn` in ann-benchmarks
 fn calculate_recall(
-    actual: &[i32],
-    expected: &[i32],
-    k: usize,
+    actual: &[(i32, f64)],
+    expected: &[(i32, f64)],
     top_k: usize,
-    verbose: bool,
+    _verbose: bool,
+    epsilon: f64,
 ) -> f64 {
-    // Ensure we're not trying to take more items than available
-    let effective_k = std::cmp::min(k, expected.len());
-    // Use top_k for recall calculation, but don't exceed effective_k
-    let effective_top_k = std::cmp::min(top_k, effective_k);
-
-    if verbose {
-        println!(
-            "Actual k: {}, Effective k: {}, Top k: {}, Effective top k: {}, Actual len: {}, Expected len: {}",
-            k,
-            effective_k,
-            top_k,
-            effective_top_k,
-            actual.len(),
-            expected.len()
-        );
-    }
-
-    if effective_k == 0 {
-        // No ground truth data available
-        return 0.0;
-    }
-
-    // Create a set of the top-k expected (ground truth) items
-    // This is the standard approach in ANN benchmarks
-    let expected_set: std::collections::HashSet<_> =
-        expected.iter().take(effective_k).cloned().collect();
-
-    // Count how many of our actual results are in the ground truth set
-    // This is the standard recall calculation for ANN benchmarks
-    let mut found_count = 0;
-    for &item in actual.iter().take(effective_k) {
-        if expected_set.contains(&item) {
-            found_count += 1;
-        }
-    }
-
-    // Debug output for first few queries if verbose is enabled
-    if verbose {
-        static DEBUG_COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let debug_idx = DEBUG_COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if debug_idx < 3 {
-            println!("Debug for query #{}", debug_idx + 1);
-            println!(
-                "  Actual results (first {}): {:?}",
-                std::cmp::min(100, actual.len()),
-                actual.iter().take(100).collect::<Vec<_>>()
-            );
-            println!(
-                "  Expected results (first {}): {:?}",
-                std::cmp::min(100, expected.len()),
-                expected.iter().take(100).collect::<Vec<_>>()
-            );
-            println!("  Found count: {} out of {}", found_count, effective_top_k);
-            println!(
-                "  Recall: {:.4}",
-                found_count as f64 / effective_top_k as f64
-            );
-        }
-    }
-
-    found_count as f64 / effective_top_k as f64
+    let threshold = expected[top_k - 1].1 + epsilon;
+    let count = actual
+        .iter()
+        .filter(|&&(_, distance)| distance <= threshold)
+        .count();
+    count as f64 / top_k as f64
 }
 
 /// Get the list of available datasets from ann-benchmarks
@@ -1764,7 +1710,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             neighbors_dataset,
             table,
             num_queries,
-            k,
             top_k,
             distance_metric,
             verbose,
@@ -1833,27 +1778,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let neighbors_shape = neighbors_dataset.shape();
 
             // Make sure we don't request more neighbors than available in ground truth
-            let effective_k = std::cmp::min(*k, neighbors_shape[1]);
-
-            // Print debug info about the ground truth data if verbose is enabled
-            if *verbose {
-                println!("Ground truth shape: {:?}", neighbors_shape);
+            let top_k = if *top_k > neighbors_shape[1] {
                 println!(
-                    "Number of neighbors in ground truth: {}",
-                    neighbors_shape[1]
+                    "Warning: Requested k={} but ground truth only has {} neighbors. Using k={}.",
+                    *top_k, neighbors_shape[1], neighbors_shape[1]
                 );
-                println!("Requested k: {}", k);
+                neighbors_shape[1]
+            } else {
+                *top_k
+            };
 
-                if effective_k < *k {
-                    println!("Warning: Requested k={} but ground truth only has {} neighbors. Using k={}.", 
-                             k, neighbors_shape[1], effective_k);
-                }
-            }
-
-            let ground_truth =
+            let ground_truth_ids =
                 Array::from_shape_vec((total_queries, neighbors_shape[1]), neighbors_data)?
-                    .slice(s![0..queries_to_run, 0..effective_k])
+                    .slice(s![0..queries_to_run, 0..top_k])
                     .to_owned();
+
+            // Check if distances dataset exists
+            let ground_truth_distances = if h5_file.dataset("distances").is_ok() {
+                // Read the ground truth distances if available
+                let distances_dataset = h5_file.dataset("distances")?;
+                let distances_data = distances_dataset.read_raw::<f32>()?;
+                Some(
+                    Array::from_shape_vec((total_queries, neighbors_shape[1]), distances_data)?
+                        .slice(s![0..queries_to_run, 0..top_k])
+                        .to_owned(),
+                )
+            } else {
+                if *verbose {
+                    println!("No distances dataset found in HDF5 file. Will compute distances for ground truth.");
+                }
+                None
+            };
 
             // Connect to PostgreSQL
             let client = connect_to_postgres(&cli.connection_string).await?;
@@ -1879,14 +1834,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Measure the query time
                 let query_start = Instant::now();
-                // Use top_k if specified, otherwise default to effective_k
-                let top_k_value = top_k.unwrap_or(effective_k);
 
                 // Create query parameters struct
                 let query_params = QueryParams {
                     table_name: table.clone(),
                     query_vector: query_vector_slice.to_vec(),
-                    k: top_k_value, // Use top_k for the query limit
+                    top_k,
                     distance_metric: *distance_metric,
                     diskann: DiskAnnQueryParams {
                         query_search_list_size: *diskann_query_search_list_size,
@@ -1905,10 +1858,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 query_stats.add_query_time(query_duration);
 
                 // Calculate recall for this query
-                let ground_truth_row = ground_truth.row(i);
-                let expected_slice = ground_truth_row.as_slice().unwrap();
+                let ground_truth_ids_row = ground_truth_ids.row(i);
+                let expected_ids = ground_truth_ids_row.as_slice().unwrap();
+
+                // Create expected results with distances
+                let expected_with_distances: Vec<(i32, f64)> =
+                    if let Some(ref distances) = ground_truth_distances {
+                        // Use distances from the HDF5 file
+                        let distances_row = distances.row(i);
+                        let distances_slice = distances_row.as_slice().unwrap();
+                        expected_ids
+                            .iter()
+                            .zip(distances_slice.iter())
+                            .map(|(&id, &dist)| (id, dist as f64))
+                            .collect()
+                    } else {
+                        panic!("No distances dataset found in HDF5 file");
+                    };
+
+                // Use epsilon value of 0.001 (same as ann_benchmarks default)
+                let epsilon = 0.001;
                 let recall =
-                    calculate_recall(&result, expected_slice, effective_k, top_k_value, *verbose);
+                    calculate_recall(&result, &expected_with_distances, top_k, *verbose, epsilon);
                 total_recall += recall;
                 recall_values.push(recall);
 
@@ -1926,30 +1897,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("\nRecall Results:");
                 println!("----------------");
                 println!("Total queries: {}", queries_to_run);
-                println!("K (nearest neighbors): {} (effective: {})", k, effective_k);
+                println!("K (nearest neighbors): {}", top_k);
                 println!("Distance metric: {}", distance_metric);
 
                 // Print individual recall values (limit to first 10 if there are many)
                 if queries_to_run <= 10 {
                     for (i, recall) in recall_values.iter().enumerate() {
-                        println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall);
+                        println!("Query {}: Recall@{} = {:.4}", i + 1, top_k, recall);
                     }
                 } else {
                     for (i, &recall) in recall_values.iter().enumerate().take(5) {
-                        println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall);
+                        println!("Query {}: Recall@{} = {:.4}", i + 1, top_k, recall);
                     }
                     println!("...");
                     // Get the last 5 queries
                     #[allow(clippy::needless_range_loop)]
                     for i in (queries_to_run - 5)..queries_to_run {
-                        println!("Query {}: Recall@{} = {:.4}", i + 1, k, recall_values[i]);
+                        println!(
+                            "Query {}: Recall@{} = {:.4}",
+                            i + 1,
+                            top_k,
+                            recall_values[i]
+                        );
                     }
                 }
 
                 println!();
             }
 
-            println!("Average recall@{}: {:.4}", k, avg_recall);
+            println!("Average recall@{}: {:.4}", top_k, avg_recall);
 
             // Print detailed query time statistics
             query_stats.print();
