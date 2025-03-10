@@ -152,6 +152,8 @@ To enable pgvectorscale:
 1. Populate the table.
 
    For more information, see the [pgvector instructions](https://github.com/pgvector/pgvector/blob/master/README.md#storing) and [list of clients](https://github.com/pgvector/pgvector/blob/master/README.md#languages).
+   
+   Alternatively, you can use our benchmarking tool to quickly load test datasets from the [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) repository. See the [Benchmarking Tool](#benchmarking-tool) section for more details.
 1. Create a StreamingDiskANN index on the embedding column:
     ```postgresql
     CREATE INDEX document_embedding_idx ON document_embedding
@@ -198,6 +200,35 @@ USING diskann (embedding) WITH(num_neighbors=50);
 ```
 
 #### StreamingDiskANN query-time parameters
+
+## Benchmarking Tool
+
+pgvectorscale includes a command-line benchmarking tool that makes it easy to work with ANN benchmark datasets. The tool allows you to:
+
+1. **List available datasets** from the ann-benchmarks repository
+2. **Download datasets** directly from ann-benchmarks
+3. **Load vectors** into PostgreSQL tables
+4. **Run test queries** and measure performance and recall
+
+### Quick Start
+
+```bash
+# Build the tool
+cd pgvectorscale
+cargo build --release --bin bench
+
+# List available datasets
+./target/release/bench list-datasets
+
+# Download and load a dataset
+./target/release/bench download-and-load \
+    --dataset glove-25-angular \
+    --table glove_vectors \
+    --create-table \
+    --create-index
+```
+
+For more detailed information, see the [Benchmarking Tool Documentation](./pgvectorscale/BENCH.md).
 
 You can also set two parameters to control the accuracy vs. query speed trade-off at query time. We suggest adjusting `diskann.query_rescore` to fine-tune accuracy.
 
