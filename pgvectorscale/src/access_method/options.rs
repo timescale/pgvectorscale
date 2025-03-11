@@ -188,16 +188,6 @@ pub unsafe fn init() {
 
     pg_sys::add_int_reloption(
         RELOPT_KIND_TSV,
-        "num_bits_per_dimension".as_pg_cstr(),
-        "The number of bits to use per dimension for compressed storage".as_pg_cstr(),
-        SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
-        0,
-        32,
-        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
-    );
-
-    pg_sys::add_int_reloption(
-        RELOPT_KIND_TSV,
         "num_neighbors".as_pg_cstr(),
         "Maximum number of neighbors in the graph".as_pg_cstr(),
         NUM_NEIGHBORS_DEFAULT_SENTINEL,
@@ -233,6 +223,16 @@ pub unsafe fn init() {
         0,
         0,
         5000,
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
+
+    pg_sys::add_int_reloption(
+        RELOPT_KIND_TSV,
+        "num_bits_per_dimension".as_pg_cstr(),
+        "The number of bits to use per dimension for compressed storage".as_pg_cstr(),
+        SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL as _,
+        0,
+        32,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
 }

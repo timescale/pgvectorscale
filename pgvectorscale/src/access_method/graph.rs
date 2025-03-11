@@ -157,8 +157,8 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         }
 
         let head = self.candidates.pop().unwrap();
-        let idx = self.visited.partition_point(|x| *x < head.0); // TODO: O(n)
-        self.visited.insert(idx, head.0); // TODO: O(n)
+        let idx = self.visited.partition_point(|x| *x < head.0);
+        self.visited.insert(idx, head.0);
         Some(idx)
     }
 
@@ -192,6 +192,10 @@ impl<'a> Graph<'a> {
 
     pub fn get_neighbor_store(&self) -> &GraphNeighborStore {
         &self.neighbor_store
+    }
+
+    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
+        self.meta_page.get_start_nodes()
     }
 
     fn add_neighbors<S: Storage>(
@@ -257,10 +261,6 @@ impl<'a> Graph<'a> {
         self.meta_page
     }
 
-    pub fn get_start_nodes(&self) -> Option<&StartNodes> {
-        self.meta_page.get_start_nodes()
-    }
-
     /// greedy search looks for the closest neighbors to a query vector
     /// You may think that this needs the "K" parameter but it does not,
     /// instead it uses a search_list_size parameter (>K).
@@ -281,12 +281,12 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut GreedySearchStats,
     ) -> HashSet<NeighborWithDistance> {
-        let init_ids = self.meta_page.get_start_nodes();
-        if init_ids.is_none() {
+        let start_nodes = self.meta_page.get_start_nodes();
+        if start_nodes.is_none() {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
-        let start_nodes = init_ids.unwrap().get_for_node(query.labels());
+        let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
 
@@ -315,7 +315,7 @@ impl<'a> Graph<'a> {
     ) -> ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData> {
         let start_nodes = self.get_start_nodes();
         if start_nodes.is_none() {
-            // No nodes in the graph
+            //no nodes in the graph
             return ListSearchResult::empty();
         }
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());

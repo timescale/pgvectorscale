@@ -1,4 +1,5 @@
 //! Debugging methods
+
 use std::collections::HashMap;
 
 use pgrx::PgRelation;

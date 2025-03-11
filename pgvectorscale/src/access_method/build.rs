@@ -117,8 +117,6 @@ pub extern "C" fn ambuild(
         );
     }
 
-    debug1!("meta_page: {:?}", meta_page);
-
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
@@ -167,16 +165,11 @@ unsafe fn aminsert_internal(
 ) -> bool {
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
-
-    debug2!(
-        "aminsert: index_relation: {:?}, fetching meta page",
-        indexrel
-    );
     let mut meta_page = MetaPage::fetch(&index_relation);
 
     let vec = LabeledVector::from_datums(values, isnull, &meta_page);
     if vec.is_none() {
-        // TODO: check this handling of nulls
+        //todo handle NULLs?
         return false;
     }
     let vec = vec.unwrap();
@@ -224,15 +217,15 @@ unsafe fn aminsert_internal(
 unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
-    vec: LabeledVector,
+    vector: LabeledVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
     let mut tape = Tape::resume(index_relation, S::page_type());
     let index_pointer = storage.create_node(
-        vec.vec().to_index_slice(),
-        vec.labels().cloned(),
+        vector.vec().to_index_slice(),
+        vector.labels().cloned(),
         heap_pointer,
         meta_page,
         &mut tape,
@@ -240,7 +233,7 @@ unsafe fn insert_storage<S: Storage>(
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(index_relation, index_pointer, vec, storage, stats)
+    graph.insert(index_relation, index_pointer, vector, storage, stats)
 }
 
 #[pg_guard]
@@ -456,19 +449,19 @@ unsafe extern "C" fn build_callback(
     state: *mut std::os::raw::c_void,
 ) {
     let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
+    let index_relation = PgRelation::from_pg(index);
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
-    let index = PgRelation::from_pg(index);
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
             let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(&index, heap_pointer, vec, state, *bq);
+                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *bq);
             }
         }
         StorageBuildState::Plain(plain, state) => {
             let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(&index, heap_pointer, vec, state, *plain);
+                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *plain);
             }
         }
     }
@@ -490,18 +483,11 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
     state.memcxt.reset();
 }
 
-// fn pg_array_to_vec<T>(mut arr: Array<Option<T>>) -> Vec<T>
-// where
-//     T: UnboxDatum,
-// {
-//     arr.iter_deny_null().collect()
-// }
-
 #[inline(always)]
 fn build_callback_internal<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
-    vec: LabeledVector,
+    vector: LabeledVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -522,8 +508,8 @@ fn build_callback_internal<S: Storage>(
     }
 
     let index_pointer = storage.create_node(
-        vec.vec().to_index_slice(),
-        vec.labels().cloned(),
+        vector.vec().to_index_slice(),
+        vector.labels().cloned(),
         heap_pointer,
         state.graph.get_meta_page(),
         &mut state.tape,
@@ -534,7 +520,7 @@ fn build_callback_internal<S: Storage>(
 
     state
         .graph
-        .insert(index, index_pointer, vec, storage, &mut state.stats);
+        .insert(index, index_pointer, vector, storage, &mut state.stats);
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;

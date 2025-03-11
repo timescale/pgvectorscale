@@ -97,7 +97,7 @@ impl SbqMeans {
             return quantizer;
         }
         let qip = meta_page
-            .get_quantizer_metadata_ptr()
+            .get_quantizer_metadata_pointer()
             .unwrap_or_else(|| pgrx::error!("No SBQ pointer found in meta page"));
 
         let page = ReadablePage::read(index, qip.block_number);

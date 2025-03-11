@@ -209,7 +209,7 @@ pub struct MetaPage {
     quantizer_metadata: ItemPointer,
     /// Whether the index has labels
     has_labels: bool,
-    /// TMP
+    /// Total number of nodes in the graph.  Used just for debug consistency check.
     num_nodes: usize,
 }
 
@@ -262,17 +262,6 @@ impl MetaPage {
         self.has_labels
     }
 
-    pub fn get_quantizer_metadata_ptr(&self) -> Option<IndexPointer> {
-        if !self.quantizer_metadata.is_valid() {
-            return None;
-        }
-
-        match self.get_storage_type() {
-            StorageType::Plain => None,
-            StorageType::SbqCompression => Some(self.quantizer_metadata),
-        }
-    }
-
     pub fn get_start_nodes(&self) -> Option<&StartNodes> {
         self.start_nodes.as_ref()
     }
@@ -283,6 +272,17 @@ impl MetaPage {
 
     pub fn set_start_nodes(&mut self, start_nodes: StartNodes) {
         self.start_nodes = Some(start_nodes);
+    }
+
+    pub fn get_quantizer_metadata_pointer(&self) -> Option<IndexPointer> {
+        if !self.quantizer_metadata.is_valid() {
+            return None;
+        }
+
+        match self.get_storage_type() {
+            StorageType::Plain => None,
+            StorageType::SbqCompression => Some(self.quantizer_metadata),
+        }
     }
 
     fn calculate_num_neighbors(opt: &PgBox<TSVIndexOptions>) -> u32 {
