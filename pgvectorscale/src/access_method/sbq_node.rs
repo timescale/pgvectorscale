@@ -15,7 +15,7 @@ use super::{
     storage::ArchivedData,
 };
 
-/// A node in the SBQ index.  Currently just plain nodes, soon to feature labeled ones.
+/// A node in the SBQ index
 pub enum SbqNode {
     Classic(ClassicSbqNode),
     Labeled(LabeledSbqNode),

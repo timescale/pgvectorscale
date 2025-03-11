@@ -70,7 +70,7 @@ pub struct ReadableBuffer<'a> {
 }
 
 impl<'a> ReadableBuffer<'a> {
-    pub fn get_data_slice(&self) -> &[u8] {
+    pub fn get_data_slice(&self) -> &'a [u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 
@@ -95,8 +95,8 @@ pub struct WritableBuffer<'a> {
     ptr: *mut u8,
 }
 
-impl WritableBuffer<'_> {
-    pub fn get_data_slice(&mut self) -> &mut [u8] {
+impl<'a> WritableBuffer<'a> {
+    pub fn get_data_slice(&mut self) -> &'a mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 

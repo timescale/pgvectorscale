@@ -25,7 +25,6 @@ pub trait NodeDistanceMeasure {
         stats: &mut S,
     ) -> f32;
 }
-
 pub trait ArchivedData {
     fn is_deleted(&self) -> bool;
     fn get_heap_item_pointer(&self) -> HeapPointer;
