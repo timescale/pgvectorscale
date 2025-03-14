@@ -117,6 +117,10 @@ pub extern "C" fn ambuild(
         );
     }
 
+    if meta_page.has_labels() && meta_page.get_storage_type() == StorageType::Plain {
+        error!("Labeled filtering is not supported with plain storage");
+    }
+
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
@@ -233,7 +237,7 @@ unsafe fn insert_storage<S: Storage>(
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(index_relation, index_pointer, vector, storage, stats)
+    graph.insert(index_relation, index_pointer, vector, storage, stats);
 }
 
 #[pg_guard]

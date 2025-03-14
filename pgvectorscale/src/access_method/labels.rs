@@ -88,7 +88,7 @@ pub trait LabelSetView {
     }
 
     /// Do the labelsets share any labels?
-    fn matches<T: LabelSetView>(&self, other: &T) -> bool {
+    fn overlaps<T: LabelSetView>(&self, other: &T) -> bool {
         let a = self.labels();
         let b = other.labels();
 
@@ -134,6 +134,7 @@ impl Debug for ArchivedLabelSet {
 }
 
 /// A labeled vector is a vector with an optional set of labels.
+#[derive(Debug)]
 pub struct LabeledVector {
     vec: PgVector,
     labels: Option<LabelSet>,
@@ -152,12 +153,19 @@ impl LabeledVector {
         let vec = PgVector::from_pg_parts(values, isnull, 0, meta_page, true, false)?;
 
         let labels: Option<LabelSet> = if meta_page.has_labels() {
-            let arr = Array::<i16>::from_datum(*values.add(1), *isnull.add(1));
-            arr.map(|arr| {
-                let labels_iter = arr.into_iter().flatten();
-                // smallint already enforces the bounds, so we can just collect
-                labels_iter.collect()
-            })
+            if *isnull.add(1) {
+                Some(LabelSet::default())
+            } else {
+                let arr = Array::<i16>::from_datum(*values.add(1), false);
+                Some(arr.map_or_else(LabelSet::default, |arr| {
+                    // Special case to work around apparent bug in pgrx
+                    if arr.is_empty() || arr.iter().all(|x| x.is_none()) {
+                        return LabelSet::default();
+                    }
+                    let labels_iter = arr.into_iter().flatten();
+                    labels_iter.collect()
+                }))
+            }
         } else {
             None
         };
@@ -180,7 +188,11 @@ impl LabeledVector {
         };
 
         let labels: Option<LabelSet> = if keys.is_empty() {
-            None
+            if meta_page.has_labels() {
+                Some(LabelSet::default())
+            } else {
+                None
+            }
         } else {
             let arr = unsafe { Array::<i16>::from_datum(keys[0].sk_argument, false).unwrap() };
             // smallint already enforces the bounds, so we can just collect
@@ -198,5 +210,66 @@ impl LabeledVector {
 
     pub fn labels(&self) -> Option<&LabelSet> {
         self.labels.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_overlaps_empty() {
+        let a: LabelSet = vec![].into();
+        let b: LabelSet = vec![1, 2, 3].into();
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_non_empty() {
+        let a: LabelSet = vec![1, 2].into();
+        let b: LabelSet = vec![2, 3].into();
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_no_overlap() {
+        let a: LabelSet = vec![1, 2].into();
+        let b: LabelSet = vec![3, 4].into();
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_longer() {
+        let a: LabelSet = vec![1, 2, 3, 4, 5].into();
+        let b: LabelSet = vec![1, 2, 3, 4].into();
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_non_empty_no_overlap() {
+        let a: LabelSet = vec![1, 2, 3, 4, 5].into();
+        let b: LabelSet = vec![6, 7, 8, 9, 10].into();
+        assert!(!a.overlaps(&b));
+        assert!(!b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_non_empty_overlap() {
+        let a: LabelSet = vec![1, 2, 3, 4, 5].into();
+        let b: LabelSet = vec![2, 3, 4, 5, 6].into();
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_overlaps_interleavings() {
+        let a: LabelSet = vec![1, 3, 5, 10, 11].into();
+        let b: LabelSet = vec![2, 4, 6, 8, 11].into();
+        assert!(a.overlaps(&b));
+        assert!(b.overlaps(&a));
     }
 }

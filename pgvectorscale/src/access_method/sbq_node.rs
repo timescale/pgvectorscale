@@ -5,6 +5,7 @@ use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer,
 use pgrx::pg_sys::{InvalidBlockNumber, InvalidOffsetNumber};
 use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
+use std::fmt::Debug;
 use std::pin::Pin;
 
 use super::labels::{ArchivedLabelSet, LabelSet};
@@ -36,7 +37,7 @@ pub struct LabeledSbqNode {
     heap_item_pointer: HeapPointer,
     bq_vector: Vec<u64>,
     neighbor_index_pointers: Vec<ItemPointer>,
-    labels: Option<LabelSet>,
+    labels: LabelSet,
 }
 
 impl SbqNode {
@@ -72,7 +73,7 @@ impl SbqNode {
                 heap_item_pointer: heap_pointer,
                 bq_vector: bq_vector.to_vec(),
                 neighbor_index_pointers,
-                labels,
+                labels: labels.unwrap_or_default(),
             })
         } else {
             SbqNode::Classic(ClassicSbqNode {
@@ -246,6 +247,50 @@ impl ArchivedData for ArchivedSbqNode<'_> {
     }
 }
 
+impl Debug for ArchivedSbqNode<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ArchivedSbqNode::Classic(node) => node.fmt(f),
+            ArchivedSbqNode::Labeled(node) => node.fmt(f),
+        }
+    }
+}
+
+impl Debug for ArchivedClassicSbqNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivedClassicSbqNode")
+            .field(
+                "heap_item_pointer.block_number",
+                &self.heap_item_pointer.block_number,
+            )
+            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
+            .field("bq_vector", &self.bq_vector)
+            .field(
+                "neighbor_index_pointers.len()",
+                &self.neighbor_index_pointers.len(),
+            )
+            .finish()
+    }
+}
+
+impl Debug for ArchivedLabeledSbqNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivedLabeledSbqNode")
+            .field(
+                "heap_item_pointer.block_number",
+                &self.heap_item_pointer.block_number,
+            )
+            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
+            .field("bq_vector", &self.bq_vector)
+            .field(
+                "neighbor_index_pointers.len()",
+                &self.neighbor_index_pointers.len(),
+            )
+            .field("labels", &self.labels)
+            .finish()
+    }
+}
+
 impl ArchivedSbqNode<'_> {
     pub fn num_neighbors(&self) -> usize {
         match self {
@@ -294,7 +339,7 @@ impl ArchivedSbqNode<'_> {
     pub fn get_labels(&self) -> Option<&ArchivedLabelSet> {
         match self {
             ArchivedSbqNode::Classic(_) => None,
-            ArchivedSbqNode::Labeled(node) => node.labels.as_ref(),
+            ArchivedSbqNode::Labeled(node) => Some(&node.labels),
         }
     }
 }

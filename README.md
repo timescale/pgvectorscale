@@ -171,12 +171,14 @@ To enable pgvectorscale:
 
 ## Filtered Vector Search
 
-pgvectorscale supports combining vector similarity search with metadata filtering. There are two approaches to filtering:
+pgvectorscale supports combining vector similarity search with metadata filtering. There are two basic kinds of filtering, which can be combined in a single query:
 
 1. **Label-based filtering with the diskann index**: This provides optimized performance for filtering by labels.
 2. **Arbitrary WHERE clause filtering**: This uses post-filtering after the vector search.
 
 The label-based filtering implementation is based on the [Filtered DiskANN](https://dl.acm.org/doi/10.1145/3543507.3583552) approach developed by Microsoft researchers, which enables efficient filtered vector search while maintaining high recall.
+
+The post-filtering implementation, while slower, is streaming and correct, ensuring accurate results without requiring the entire result set to be loaded into memory.
 
 ### Label-based Filtering with diskann
 
@@ -349,6 +351,12 @@ SET LOCAL diskann.query_search_list_size= 10;
 SELECT * FROM document_embedding ORDER BY embedding <=> $1 LIMIT 10
 COMMIT;
 ```
+
+## Null Value Handling
+
+* Null vectors are not indexed
+* Null labels are treated as empty arrays
+* Null values in label arrays are ignored
 
 ## Get involved
 

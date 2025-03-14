@@ -9,8 +9,6 @@ use std::collections::BTreeMap;
 
 use super::labels::LabelSetView;
 
-const OVERLOAD_THRESHHOLD: usize = 20;
-
 /// Start nodes for the graph.  For unlabeled vectorsets, this is a single node.  For
 /// labeled vectorsets, this is a map of labels to nodes.
 #[derive(Clone, Debug, PartialEq, Eq, Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -33,18 +31,6 @@ impl StartNodes {
         }
     }
 
-    pub fn is_overloaded(&self, label: Label) -> bool {
-        let ip = self.labeled_nodes.get(&label);
-
-        if let Some(ip) = ip {
-            self.node_count
-                .get(ip)
-                .is_some_and(|count| *count > OVERLOAD_THRESHHOLD)
-        } else {
-            false
-        }
-    }
-
     pub fn upsert(&mut self, label: Label, node: ItemPointer) -> Option<ItemPointer> {
         let old_node = self.labeled_nodes.insert(label, node);
         if let Some(old_node) = old_node {
@@ -63,13 +49,15 @@ impl StartNodes {
     }
 
     pub fn get_for_node(&self, labels: Option<&LabelSet>) -> Vec<ItemPointer> {
-        match labels {
-            Some(labels) => labels
-                .iter()
-                .filter_map(|label| self.labeled_nodes.get(label).copied())
-                .collect(),
-            None => vec![self.default_node],
+        let mut nodes = vec![self.default_node];
+        if let Some(labels) = labels {
+            nodes.extend(
+                labels
+                    .iter()
+                    .filter_map(|label| self.labeled_nodes.get(label).copied()),
+            );
         }
+        nodes
     }
 
     pub fn contains(&self, label: Label) -> bool {
@@ -82,13 +70,6 @@ impl StartNodes {
                 .iter()
                 .all(|label| self.labeled_nodes.contains_key(label)),
             None => true,
-        }
-    }
-
-    pub fn contains_overloaded(&self, labels: Option<&LabelSet>) -> bool {
-        match labels {
-            Some(labels) => labels.iter().any(|label| self.is_overloaded(*label)),
-            None => false,
         }
     }
 

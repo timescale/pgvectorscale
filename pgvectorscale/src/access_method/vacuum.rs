@@ -163,7 +163,11 @@ pub mod tests {
         //do not run this test in parallel. (pgrx tests run in a txn rolled back after each test, but we do not have that luxury here).
 
         use rand::Rng;
-        let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
+        // Force unlock the mutex if it's poisoned from a previous test
+        let _lock = match VAC_PLAIN_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
@@ -269,7 +273,11 @@ pub mod tests {
     #[cfg(test)]
     pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
         //do not run this test in parallel
-        let _lock = VAC_FULL_MUTEX.lock().unwrap();
+        // Force unlock the mutex if it's poisoned from a previous test
+        let _lock = match VAC_FULL_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
 
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
@@ -368,7 +376,11 @@ pub mod tests {
     #[cfg(test)]
     pub fn test_update_with_null_scaffold(index_options: &str) {
         //do not run this test in parallel
-        let _lock = VAC_FULL_MUTEX.lock().unwrap();
+        // Force unlock the mutex if it's poisoned from a previous test
+        let _lock = match VAC_FULL_MUTEX.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let expected_cnt = 1000;
 
         //we need to run a few txn in this test which cannot be run from SPI.

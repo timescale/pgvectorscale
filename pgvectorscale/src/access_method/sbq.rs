@@ -551,17 +551,20 @@ impl<'a> SbqSpeedupStorage<'a> {
                             &mut lsr.stats,
                         )
                     };
+
                     let node_neighbor = rn_neighbor.get_archived_node();
                     let bq_vector = node_neighbor.get_bq_vector();
-                    let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
-                        bq_vector,
-                        gns,
-                        &mut lsr.stats,
-                    );
+                    let distance = lsr
+                        .sdm
+                        .as_ref()
+                        .expect("sdm is Some")
+                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     // Skip neighbors that have no matching labels with the query
-                    if let Some(labels) = lsr.sdm.as_ref().unwrap().query.labels() {
-                        if !labels.matches(node_neighbor.get_labels().unwrap()) {
+                    if let Some(labels) = lsr.sdm.as_ref().expect("sdm is Some").query.labels() {
+                        if !labels
+                            .overlaps(node_neighbor.get_labels().expect("Unlabeled neighbor?"))
+                        {
                             continue;
                         }
                     }
@@ -586,15 +589,16 @@ impl<'a> SbqSpeedupStorage<'a> {
                     }
                     let mut cache = self.qv_cache.borrow_mut();
                     let (bq_vector, _) = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
-                    let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
-                        bq_vector,
-                        gns,
-                        &mut lsr.stats,
-                    );
+                    let distance = lsr
+                        .sdm
+                        .as_ref()
+                        .expect("lsr.sdm is None")
+                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     // Skip neighbors that have no matching labels with the query
-                    if let Some(labels) = lsr.sdm.as_ref().unwrap().query.labels() {
-                        if !labels.matches(neighbor.get_labels().unwrap()) {
+                    if let Some(labels) = lsr.sdm.as_ref().expect("lsr.sdm is None").query.labels()
+                    {
+                        if !labels.overlaps(neighbor.get_labels().unwrap()) {
                             continue;
                         }
                     }
@@ -761,7 +765,6 @@ impl Storage for SbqSpeedupStorage<'_> {
         let rn =
             unsafe { SbqNode::read(self.index, index_pointer, self.has_labels, &mut lsr.stats) };
         let node = rn.get_archived_node();
-
         let distance = lsr.sdm.as_ref().unwrap().calculate_bq_distance(
             node.get_bq_vector(),
             gns,
@@ -824,6 +827,19 @@ impl Storage for SbqSpeedupStorage<'_> {
 
     fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
+    }
+
+    fn get_labels<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> Option<LabelSet> {
+        if !self.has_labels {
+            return None;
+        }
+        let rn = unsafe { SbqNode::read(self.index, index_pointer, true, stats) };
+        let node = rn.get_archived_node();
+        node.get_labels().map(Into::into)
     }
 }
 

@@ -133,6 +133,12 @@ pub trait Storage {
     );
 
     fn get_distance_function(&self) -> DistanceFn;
+
+    fn get_labels<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> Option<LabelSet>;
 }
 
 #[derive(PartialEq, Debug)]

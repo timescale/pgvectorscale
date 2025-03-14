@@ -289,7 +289,6 @@ impl<'a> Graph<'a> {
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
-
         let mut l = ListSearchResult::new(
             start_nodes,
             dm,
@@ -455,13 +454,11 @@ impl<'a> Graph<'a> {
         vec: &LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
-    ) -> Vec<IndexPointer> {
+    ) {
         match self.meta_page.get_start_nodes() {
             Some(start_nodes) => {
-                if start_nodes.contains_all(vec.labels())
-                    && !start_nodes.contains_overloaded(vec.labels())
-                {
-                    return vec![];
+                if start_nodes.contains_all(vec.labels()) {
+                    return;
                 }
             }
             None => {
@@ -481,15 +478,10 @@ impl<'a> Graph<'a> {
             }
         };
 
-        let mut overloaded = vec![];
         if let Some(labels) = vec.labels() {
             let start_nodes = self.meta_page.get_start_nodes_mut().unwrap();
             for label in labels.iter() {
-                if start_nodes.is_overloaded(*label) {
-                    // Replace the overloaded start node for the label with this one
-                    let pip = start_nodes.upsert(*label, index_pointer).unwrap();
-                    overloaded.push(pip);
-                } else if !start_nodes.contains(*label) {
+                if !start_nodes.contains(*label) {
                     start_nodes.upsert(*label, index_pointer);
                 }
             }
@@ -498,8 +490,6 @@ impl<'a> Graph<'a> {
         unsafe {
             self.meta_page.store(index, false);
         }
-
-        overloaded
     }
 
     /// Check that all nodes of the graph are reachable from the start node(s)
@@ -532,7 +522,13 @@ impl<'a> Graph<'a> {
             }
             return visited.len() == self.meta_page.get_num_nodes();
         }
-        true
+        self.meta_page.get_num_nodes() == 0
+    }
+
+    fn debug_format_labels(labels: Option<LabelSet>) -> String {
+        labels
+            .map(|l| format!(", {:?}", l.labels()))
+            .unwrap_or_default()
     }
 
     #[allow(dead_code)]
@@ -548,17 +544,21 @@ digraph G {
         if let Some(start_nodes) = self.meta_page.get_start_nodes() {
             let mut visited = HashSet::new();
             let to_visit = start_nodes.get_all_labeled_nodes();
-            let mut to_visit: Vec<(Option<LabelSet>, IndexPointer)> = to_visit
-                .into_iter()
-                .map(|(label, ip)| (label.map(Into::into), ip))
-                .collect();
-            while let Some((label, node)) = to_visit.pop() {
+            for (label, start_node) in to_visit.iter() {
+                let label_str = label.map_or_else(|| "None".to_string(), |l| format!("{:?}", l));
+                buf.push_str(
+                    format!(
+                        "   \"{}\"  -> \"{}, {}\"\n",
+                        label_str, start_node.block_number, start_node.offset
+                    )
+                    .as_str(),
+                );
+            }
+            let mut to_visit: Vec<IndexPointer> = to_visit.into_iter().map(|(_, ip)| ip).collect();
+            while let Some(node) = to_visit.pop() {
                 if visited.contains(&node) {
                     continue;
                 }
-                let label = label
-                    .map(|l| format!(", {:?}", l.labels()))
-                    .unwrap_or_else(|| "".to_string());
                 visited.insert(node);
                 let mut neighbors = vec![];
                 self.neighbor_store
@@ -568,11 +568,17 @@ digraph G {
                         &mut neighbors,
                         &mut stats.greedy_search_stats,
                     );
+                // Read node and get its labels
+                let labels = storage.get_labels(node, stats);
                 // print node
                 buf.push_str(
                     format!(
                         "   \"{}, {}\" [label=\"{}, {}{}\"]\n",
-                        node.block_number, node.offset, node.block_number, node.offset, label
+                        node.block_number,
+                        node.offset,
+                        node.block_number,
+                        node.offset,
+                        Self::debug_format_labels(labels)
                     )
                     .as_str(),
                 );
@@ -591,7 +597,7 @@ digraph G {
                         )
                         .as_str(),
                     );
-                    to_visit.push((neighbor.get_labels().cloned(), ip));
+                    to_visit.push(ip);
                 }
             }
         }

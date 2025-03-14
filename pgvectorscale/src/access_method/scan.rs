@@ -176,7 +176,6 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         _meta_page: MetaPage,
         quantizer_stats: QuantizerStats,
     ) -> Self {
-        debug2!("TSVResponseIterator::new fetching meta page");
         let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 

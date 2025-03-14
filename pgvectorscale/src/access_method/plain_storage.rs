@@ -14,7 +14,7 @@ use super::{
     storage_common::get_index_vector_attribute,
 };
 
-use pgrx::{info, pg_sys::AttrNumber, PgBox, PgRelation};
+use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 
 use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
 use crate::access_method::node::{ReadableNode, WriteableNode};
@@ -282,7 +282,7 @@ impl Storage for PlainStorage<'_> {
         gns: &GraphNeighborStore,
     ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>> {
         if !lsr.prepare_insert(index_pointer) {
-            info!("Node already processed, skipping");
+            // Node already processed, skip it
             return None;
         }
 
@@ -367,6 +367,14 @@ impl Storage for PlainStorage<'_> {
 
     fn get_distance_function(&self) -> DistanceFn {
         self.distance_fn
+    }
+
+    fn get_labels<S: StatsNodeRead>(
+        &self,
+        _index_pointer: IndexPointer,
+        _stats: &mut S,
+    ) -> Option<LabelSet> {
+        None
     }
 }
 
