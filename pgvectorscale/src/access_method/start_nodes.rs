@@ -18,8 +18,6 @@ pub struct StartNodes {
     default_node: ItemPointer,
     /// Labeled starting nodes for the graph
     labeled_nodes: BTreeMap<Label, ItemPointer>,
-    /// Load for a start node
-    node_count: BTreeMap<ItemPointer, usize>,
 }
 
 impl StartNodes {
@@ -27,21 +25,11 @@ impl StartNodes {
         Self {
             default_node,
             labeled_nodes: BTreeMap::new(),
-            node_count: BTreeMap::new(),
         }
     }
 
     pub fn upsert(&mut self, label: Label, node: ItemPointer) -> Option<ItemPointer> {
-        let old_node = self.labeled_nodes.insert(label, node);
-        if let Some(old_node) = old_node {
-            *self.node_count.entry(old_node).or_insert(0) -= 1;
-        }
-        *self.node_count.entry(node).or_insert(0) += 1;
-        old_node
-    }
-
-    pub fn count_for_node(&self, node: ItemPointer) -> usize {
-        *self.node_count.get(&node).unwrap_or(&0)
+        self.labeled_nodes.insert(label, node)
     }
 
     pub fn default_node(&self) -> ItemPointer {
