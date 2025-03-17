@@ -377,7 +377,7 @@ pub mod tests {
         WITH cte AS (
             SELECT * FROM test_labeled
             WHERE labels && (
-                SELECT array_agg(id) FROM label_definitions WHERE name = 'science'
+                SELECT array_agg(id::smallint) FROM label_definitions WHERE name = 'science'
             )
             ORDER BY embedding <=> '[0,0,0]'
         )
