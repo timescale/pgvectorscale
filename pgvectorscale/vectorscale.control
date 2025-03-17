@@ -3,4 +3,4 @@ default_version = '@CARGO_VERSION@'
 #module_pathname = '$libdir/pgvectorscale'
 relocatable = false
 superuser = true
-requires = 'vector, intarray'
+requires = 'vector'
