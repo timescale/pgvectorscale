@@ -1205,7 +1205,7 @@ pub mod tests {
             "CREATE TABLE test_data (
                 id int,
                 embedding vector ({dimension}),
-                labels integer[]
+                labels smallint[]
             );
 
             CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding, labels) WITH ({index_options});
@@ -1262,8 +1262,8 @@ pub mod tests {
                     (random() * 2 - 1)::float8, (random() * 2 - 1)::float8
                 ]::vector(128),
                 ARRAY[
-                    (floor(random() * 16 + 1))::int,
-                    (floor(random() * 16 + 1))::int
+                    (floor(random() * 16 + 1))::smallint,
+                    (floor(random() * 16 + 1))::smallint
                 ]
             FROM generate_series(1, {expected_cnt}) gs;
 
