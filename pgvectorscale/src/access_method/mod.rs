@@ -177,7 +177,6 @@ DECLARE
   have_l2_ops int;
   have_ip_ops int;
   have_label_ops int;
-  have_smallint_label_ops int;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -202,18 +201,10 @@ BEGIN
     WHERE c.opcname = 'vector_ip_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
-
+    
     -- Has label-filtering support been installed previously?
     SELECT count(*)
     INTO have_label_ops
-    FROM pg_catalog.pg_opclass c
-    WHERE c.opcname = 'vector_label_ops'
-    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
-    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
-    
-    -- Has smallint[] label-filtering support been installed previously?
-    SELECT count(*)
-    INTO have_smallint_label_ops
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_smallint_label_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
@@ -246,12 +237,6 @@ BEGIN
             OPERATOR 1 <#> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_inner_product();
     END IF;
-
-    IF have_label_ops = 0 THEN
-        CREATE OPERATOR CLASS vector_label_ops
-        DEFAULT FOR TYPE int[] USING diskann AS
-            OPERATOR 1 &&;
-    END IF;
     
     -- First, check if the && operator exists for smallint[]
     IF NOT EXISTS (
@@ -276,8 +261,8 @@ BEGIN
             'ALTER OPERATOR FAMILY array_ops USING btree ADD OPERATOR 3 && (smallint[], smallint[]) FOR SEARCH'
         );
     END IF;
-    
-    IF have_smallint_label_ops = 0 THEN
+
+    IF have_label_ops = 0 THEN
         CREATE OPERATOR CLASS vector_smallint_label_ops
         DEFAULT FOR TYPE smallint[] USING diskann AS
             OPERATOR 1 &&;
