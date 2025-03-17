@@ -88,6 +88,18 @@ pub mod tests {
             "Should find 1 document with label 3 (array with NULL element)"
         );
 
+        // Test 4: Query with no label filtering
+        let res: Option<i64> = Spi::get_one(
+            "
+                SET enable_seqscan = 0;
+                WITH cte AS (
+                    SELECT * FROM test_null_labels
+                    ORDER BY embedding <=> '[0,0,0]'
+                )
+                SELECT COUNT(*) FROM cte;",
+        )?;
+        assert_eq!(4, res.unwrap(), "Should find 4 documents");
+
         // Clean up
         cleanup_test_tables()?;
 
@@ -326,7 +338,6 @@ pub mod tests {
         Ok(())
     }
 
-    #[ignore] // TODO: fix this test
     #[pg_test]
     pub unsafe fn test_labeled_filtering_with_label_definitions() -> spi::Result<()> {
         // Ensure clean environment

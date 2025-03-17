@@ -188,11 +188,7 @@ impl LabeledVector {
         };
 
         let labels: Option<LabelSet> = if keys.is_empty() {
-            if meta_page.has_labels() {
-                Some(LabelSet::default())
-            } else {
-                None
-            }
+            None
         } else {
             let arr = unsafe { Array::<i16>::from_datum(keys[0].sk_argument, false).unwrap() };
             // smallint already enforces the bounds, so we can just collect
