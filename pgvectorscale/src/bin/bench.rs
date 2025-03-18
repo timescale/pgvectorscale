@@ -18,6 +18,11 @@ use serde::{Deserialize, Serialize};
 use tokio::task;
 use tokio_postgres::{Client, Error as PgError, NoTls};
 
+// Add this function near the top of the file, after the imports
+fn kebab_to_snake_case(s: &str) -> String {
+    s.replace('-', "_")
+}
+
 // Dataset information struct
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DatasetInfo {
@@ -87,87 +92,6 @@ enum Commands {
     /// List available datasets from ann-benchmarks
     ListDatasets,
 
-    /// List locally cached datasets
-    ListCachedDatasets,
-
-    /// Download and load a dataset from ann-benchmarks
-    DownloadAndLoad {
-        /// Dataset name to download and load
-        #[arg(short, long)]
-        dataset: String,
-
-        /// Table name to load vectors into
-        #[arg(short, long)]
-        table: String,
-
-        /// Whether to create a new table
-        #[arg(short, long)]
-        create_table: bool,
-
-        /// Number of vectors to load (0 = all)
-        #[arg(short, long, default_value_t = 0)]
-        num_vectors: usize,
-
-        /// Number of transactions to split the load into
-        #[arg(long, default_value_t = 1)]
-        transactions: usize,
-
-        /// Number of parallel connections to use
-        #[arg(short, long, default_value_t = 1)]
-        parallel: usize,
-
-        /// Create an index after loading data
-        #[arg(short = 'i', long)]
-        create_index: bool,
-
-        /// Type of index to create
-        #[arg(long, default_value_t = IndexType::DiskANN, requires = "create_index")]
-        index_type: IndexType,
-
-        /// Distance metric to use for the index (will be inferred if not provided)
-        #[arg(long, requires = "create_index")]
-        distance_metric: Option<DistanceType>,
-
-        // DiskANN index hyperparameters
-        /// DiskANN: Storage layout (memory_optimized or plain)
-        #[arg(long, default_value = "memory_optimized", requires = "create_index")]
-        diskann_storage_layout: Option<String>,
-
-        /// DiskANN: Number of neighbors per node (default: 50)
-        #[arg(long, requires = "create_index")]
-        diskann_num_neighbors: Option<usize>,
-
-        /// DiskANN: Search list size for construction (default: 100)
-        #[arg(long, requires = "create_index")]
-        diskann_search_list_size: Option<usize>,
-
-        /// DiskANN: Alpha parameter (default: 1.2)
-        #[arg(long, requires = "create_index")]
-        diskann_max_alpha: Option<f32>,
-
-        /// DiskANN: Number of dimensions to index (0 = all)
-        #[arg(long, requires = "create_index")]
-        diskann_num_dimensions: Option<usize>,
-
-        /// DiskANN: Number of bits per dimension for SBQ
-        #[arg(long, requires = "create_index")]
-        diskann_num_bits_per_dimension: Option<usize>,
-
-        // HNSW index hyperparameters
-        /// HNSW: Max number of connections per layer (default: 16)
-        #[arg(long, requires = "create_index")]
-        hnsw_m: Option<usize>,
-
-        /// HNSW: Size of dynamic candidate list for construction (default: 64)
-        #[arg(long, requires = "create_index")]
-        hnsw_ef_construction: Option<usize>,
-
-        // IVFFlat index hyperparameters
-        /// IVFFlat: Number of lists (default depends on data size)
-        #[arg(long, requires = "create_index")]
-        ivfflat_lists: Option<usize>,
-    },
-
     /// Load training vectors from HDF5 file into PostgreSQL
     Load {
         /// Path to HDF5 file (either --file or --dataset must be specified)
@@ -175,19 +99,19 @@ enum Commands {
         file: Option<PathBuf>,
 
         /// Dataset name from ann-benchmarks (either --file or --dataset must be specified)
-        #[arg(short, long, group = "input_source")]
+        #[arg(short, long, group = "input_source", required_unless_present = "file")]
         dataset: Option<String>,
 
         /// Dataset name within the HDF5 file (usually 'train')
         #[arg(short = 'd', long, default_value = "train")]
         dataset_name: String,
 
-        /// Table name to load vectors into
+        /// Table name to load vectors into (defaults to input name + index type)
         #[arg(short, long)]
-        table: String,
+        table: Option<String>,
 
         /// Whether to create a new table
-        #[arg(short, long)]
+        #[arg(short, long, default_value_t = false)]
         create_table: bool,
 
         /// Number of vectors to load (0 = all)
@@ -203,15 +127,15 @@ enum Commands {
         parallel: usize,
 
         /// Create an index after loading data
-        #[arg(short = 'i', long)]
+        #[arg(short = 'i', long, default_value_t = false)]
         create_index: bool,
 
         /// Type of index to create
-        #[arg(long, default_value_t = IndexType::DiskANN, requires = "create_index")]
+        #[arg(long, default_value_t = IndexType::DiskANN)]
         index_type: IndexType,
 
         /// Distance metric to use for the index
-        #[arg(long, default_value_t = DistanceType::Cosine, requires = "create_index")]
+        #[arg(long, default_value_t = DistanceType::Cosine)]
         distance_metric: DistanceType,
 
         // DiskANN index hyperparameters
@@ -252,6 +176,14 @@ enum Commands {
         /// IVFFlat: Number of lists (default depends on data size)
         #[arg(long, requires = "create_index")]
         ivfflat_lists: Option<usize>,
+
+        /// Maximum label value (0 to disable labels)
+        #[arg(long, default_value_t = 0)]
+        max_label: u16,
+
+        /// Number of labels per row (0 to disable labels)
+        #[arg(long, default_value_t = 0)]
+        num_labels: usize,
     },
 
     /// Run test queries and calculate recall
@@ -310,6 +242,14 @@ enum Commands {
         /// IVFFlat: Number of lists to probe (default: 1)
         #[arg(long)]
         ivfflat_probes: Option<usize>,
+
+        /// Maximum label value (0 to disable labels)
+        #[arg(long, default_value_t = 0)]
+        max_label: u16,
+
+        /// Number of labels per row (0 to disable labels)
+        #[arg(long, default_value_t = 0)]
+        num_labels: usize,
     },
 }
 
@@ -368,6 +308,8 @@ struct QueryParams {
     diskann: DiskAnnQueryParams,
     hnsw: HnswQueryParams,
     ivfflat: IvfFlatQueryParams,
+    max_label: u16,
+    num_labels: usize,
 }
 
 struct QueryStats {
@@ -675,6 +617,8 @@ async fn create_vector_table(
     table_name: &str,
     vector_dim: usize,
     should_drop_existing: bool,
+    max_label: u16,
+    num_labels: usize,
 ) -> Result<(), PgError> {
     // Check if vectorscale extension is installed
     let extension_exists = client
@@ -700,24 +644,39 @@ async fn create_vector_table(
             .await?;
     }
 
-    // Create the table with an id and vector column
+    // Create the table with an id, vector column, and optional labels column
     println!("Creating table {}...", table_name);
-    client
-        .execute(
-            &format!(
-                "CREATE TABLE {} (
-                    id INTEGER PRIMARY KEY,
-                    embedding VECTOR({})
-                )",
-                table_name, vector_dim
-            ),
-            &[],
-        )
-        .await?;
+    let mut create_table_sql = format!(
+        "CREATE TABLE {} (
+            id INTEGER PRIMARY KEY,
+            embedding VECTOR({})",
+        table_name, vector_dim
+    );
+
+    if max_label > 0 && num_labels > 0 {
+        create_table_sql.push_str(&format!(",\n            labels smallint[{}]", num_labels));
+    }
+
+    create_table_sql.push_str("\n        )");
+
+    client.execute(&create_table_sql, &[]).await?;
 
     Ok(())
 }
 
+// Add this new function to generate random labels
+fn generate_random_labels(max_label: u16, num_labels: usize) -> Vec<i16> {
+    use rand::seq::SliceRandom;
+    use rand::thread_rng;
+
+    let mut rng = thread_rng();
+    let mut labels: Vec<i16> = (0..=max_label).map(|x| x as i16).collect();
+    labels.shuffle(&mut rng);
+    labels.truncate(num_labels);
+    labels
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn load_vectors(
     client: &mut Client,
     table_name: &str,
@@ -725,27 +684,28 @@ async fn load_vectors(
     start_idx: usize,
     end_idx: usize,
     progress_bar: Option<Arc<Mutex<ProgressBar>>>,
+    max_label: u16,
+    num_labels: usize,
 ) -> Result<(), PgError> {
     // Mark that we have an active transaction
     ACTIVE_TRANSACTIONS.store(true, Ordering::SeqCst);
-    // No need for byteorder imports with text format
     use std::io::Write;
 
     // Start a transaction
     let transaction = client.transaction().await?;
 
     // Prepare the COPY command for binary format
-    // Let's use TEXT format instead of BINARY for better compatibility with pgvector
-    let copy_cmd = format!("COPY {} (id, embedding) FROM STDIN", table_name);
+    let copy_cmd = if max_label > 0 && num_labels > 0 {
+        format!("COPY {} (id, embedding, labels) FROM STDIN", table_name)
+    } else {
+        format!("COPY {} (id, embedding) FROM STDIN", table_name)
+    };
 
     // Start the COPY operation
     let sink = transaction.copy_in(&copy_cmd).await?;
 
     // Helper function to convert io::Error to PgError
-    let to_pg_error = |_e: std::io::Error| -> PgError {
-        // let err_msg = format!("IO Error: {}", e);
-        PgError::__private_api_timeout() // Using a placeholder error since we can't create PgError directly
-    };
+    let to_pg_error = |_e: std::io::Error| -> PgError { PgError::__private_api_timeout() };
 
     // Use Box::pin to pin the sink properly
     let mut sink = Box::pin(sink);
@@ -761,14 +721,14 @@ async fn load_vectors(
             println!("Aborting transaction due to user interrupt...");
             transaction.rollback().await?;
             ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
-            return Err(PgError::__private_api_timeout()); // Using a placeholder error
+            return Err(PgError::__private_api_timeout());
         }
 
         // Determine end of current batch
         let batch_end = std::cmp::min(current_idx + BATCH_SIZE, end_idx);
 
         // Create a buffer for this batch
-        let mut buffer = Vec::with_capacity((batch_end - current_idx) * 64); // Rough estimate of bytes per row
+        let mut buffer = Vec::with_capacity((batch_end - current_idx) * 64);
 
         // Process each vector in this batch
         for i in current_idx..batch_end {
@@ -778,7 +738,6 @@ async fn load_vectors(
             // Format the vector as a PostgreSQL array string
             let vector_str = format_vector_for_postgres(vector_data);
 
-            // Format the line for text COPY: id<tab>vector_str\n
             // Write the id
             buffer
                 .write_all(i.to_string().as_bytes())
@@ -791,6 +750,26 @@ async fn load_vectors(
             buffer
                 .write_all(vector_str.as_bytes())
                 .map_err(to_pg_error)?;
+
+            // Write labels if enabled
+            if max_label > 0 && num_labels > 0 {
+                // Write tab separator
+                buffer.write_all(b"\t").map_err(to_pg_error)?;
+
+                // Generate and format random labels
+                let labels = generate_random_labels(max_label, num_labels);
+                let labels_str = format!(
+                    "{{{}}}",
+                    labels
+                        .iter()
+                        .map(|x| x.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",")
+                );
+                buffer
+                    .write_all(labels_str.as_bytes())
+                    .map_err(to_pg_error)?;
+            }
 
             // Write newline
             buffer.write_all(b"\n").map_err(to_pg_error)?;
@@ -821,7 +800,7 @@ async fn load_vectors(
         println!("Aborting transaction due to user interrupt...");
         transaction.rollback().await?;
         ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
-        return Err(PgError::__private_api_timeout()); // Using a placeholder error
+        return Err(PgError::__private_api_timeout());
     }
 
     // Commit the transaction
@@ -921,16 +900,32 @@ async fn run_query(
     // Format the vector for PostgreSQL
     let vector_str = format_vector_for_postgres(&params.query_vector);
 
+    // Generate random labels for the query if enabled
+    let label_predicate = if params.max_label > 0 && params.num_labels > 0 {
+        let labels = generate_random_labels(params.max_label, params.num_labels);
+        let labels_str = format!(
+            "{{{}}}",
+            labels
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        format!(" WHERE labels && '{}'", labels_str)
+    } else {
+        String::new()
+    };
+
     // Construct the SQL query with the vector literal directly in the query
     // Include the distance in the result
     let query = format!(
-        "SELECT id, embedding {} '{}' as distance FROM {} ORDER BY distance LIMIT {}",
-        distance_operator, vector_str, params.table_name, params.top_k
+        "SELECT id, embedding {} '{}' as distance FROM {} {} ORDER BY distance LIMIT {}",
+        distance_operator, vector_str, params.table_name, label_predicate, params.top_k
     );
 
     // Echo the SQL query if verbose is enabled
     if verbose {
-        // println!("SQL: {}", query);
+        println!("SQL: {}", query);
     }
 
     // Run the query
@@ -1133,43 +1128,6 @@ fn get_dataset_cache_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
     Ok(cache_dir)
 }
 
-/// List locally cached datasets
-async fn list_cached_datasets() -> Result<(), Box<dyn std::error::Error>> {
-    println!("Listing locally cached datasets:");
-
-    // Get the cache directory where datasets are stored
-    let cache_dir = get_dataset_cache_dir()?;
-
-    // List all HDF5 files in the cache directory
-    let mut found_datasets = false;
-
-    if cache_dir.exists() {
-        for entry in std::fs::read_dir(cache_dir)? {
-            let entry = entry?;
-            let path = entry.path();
-
-            // Check if the file has the .hdf5 extension
-            if let Some(extension) = path.extension() {
-                if extension == "hdf5" {
-                    if let Some(filename) = path.file_stem() {
-                        if let Some(name) = filename.to_str() {
-                            println!("  - {}", name);
-                            found_datasets = true;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !found_datasets {
-        println!("  No cached datasets found in ~/.pgvectorscale/datasets");
-        println!("  Use the DownloadAndLoad command to download and cache datasets");
-    }
-
-    Ok(())
-}
-
 /// Download a dataset from ann-benchmarks
 async fn download_dataset(dataset: &DatasetInfo) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Get the cache directory
@@ -1178,11 +1136,12 @@ async fn download_dataset(dataset: &DatasetInfo) -> Result<PathBuf, Box<dyn std:
 
     // Check if the file already exists
     if file_path.exists() {
-        println!("Dataset already exists at: {}", file_path.display());
+        println!("Using cached dataset at: {}", file_path.display());
         return Ok(file_path);
     }
 
     println!("Downloading dataset from: {}", dataset.url);
+    println!("Saving to: {}", file_path.display());
 
     // Create a progress bar for the download
     let progress_bar = ProgressBar::new(0);
@@ -1252,236 +1211,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match &cli.command {
         Commands::ListDatasets => list_ann_benchmark_datasets().await?,
 
-        Commands::ListCachedDatasets => list_cached_datasets().await?,
-
-        Commands::DownloadAndLoad {
-            dataset,
-            table,
-            create_table,
-            num_vectors,
-            transactions,
-            parallel,
-            create_index,
-            index_type,
-            distance_metric,
-            diskann_storage_layout,
-            diskann_num_neighbors,
-            diskann_search_list_size,
-            diskann_max_alpha,
-            diskann_num_dimensions,
-            diskann_num_bits_per_dimension,
-            hnsw_m,
-            hnsw_ef_construction,
-            ivfflat_lists,
-        } => {
-            // Get dataset information
-            let datasets = get_ann_benchmark_datasets().await?;
-            let dataset_info = datasets.iter().find(|d| d.name == *dataset);
-
-            if let Some(dataset_info) = dataset_info {
-                println!(
-                    "Found dataset: {} ({}D, {} distance)",
-                    dataset_info.name, dataset_info.dimensions, dataset_info.distance
-                );
-
-                // Download the dataset
-                let file_path = download_dataset(dataset_info).await?;
-
-                // Infer the distance metric
-                let inferred_distance_metric = match dataset_info.distance.as_str() {
-                    "cosine" => DistanceType::Cosine,
-                    "euclidean" => DistanceType::L2,
-                    "dot" => DistanceType::InnerProduct,
-                    _ => {
-                        println!(
-                            "Warning: Unknown distance metric '{}', defaulting to Cosine",
-                            dataset_info.distance
-                        );
-                        DistanceType::Cosine
-                    }
-                };
-
-                // Use the provided distance metric or the inferred one
-                let effective_distance_metric = distance_metric.unwrap_or(inferred_distance_metric);
-
-                println!("Using distance metric: {:?}", effective_distance_metric);
-
-                // Open the HDF5 file
-                let h5_file = File::open(&file_path)?;
-
-                // Get the dataset
-                let dataset = h5_file.dataset("train")?;
-
-                // Get the dimensions of the dataset
-                let shape = dataset.shape();
-                let total_vectors = shape[0];
-                let vector_dim = shape[1];
-
-                // Determine how many vectors to load
-                let vectors_to_load = if *num_vectors == 0 || *num_vectors > total_vectors {
-                    total_vectors
-                } else {
-                    *num_vectors
-                };
-
-                println!(
-                    "Loading {} vectors with dimension {}",
-                    vectors_to_load, vector_dim
-                );
-
-                // Read the vectors from the HDF5 file
-                let vectors_data: Vec<f32> = dataset.read_raw::<f32>()?;
-                let vectors = Array::from_shape_vec((total_vectors, vector_dim), vectors_data)?
-                    .slice(s![0..vectors_to_load, ..])
-                    .to_owned();
-
-                // Connect to PostgreSQL
-                let mut client = connect_to_postgres(&cli.connection_string).await?;
-
-                // Create the table if requested
-                if *create_table {
-                    create_vector_table(&client, table, vector_dim, true).await?;
-                }
-
-                // Set up progress bar
-                let progress_bar = ProgressBar::new(vectors_to_load as u64);
-                progress_bar.set_style(
-                    ProgressStyle::default_bar()
-                        .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos}/{len} ({eta})")
-                        .unwrap()
-                        .progress_chars("##-"),
-                );
-                let progress_bar = Arc::new(Mutex::new(progress_bar));
-
-                let start_time = Instant::now();
-
-                if *parallel > 1 {
-                    // Parallel loading with multiple connections
-                    let vectors_per_connection = vectors_to_load / *parallel;
-                    let mut handles = Vec::new();
-
-                    for i in 0..*parallel {
-                        let start_idx = i * vectors_per_connection;
-                        let end_idx = if i == *parallel - 1 {
-                            vectors_to_load
-                        } else {
-                            (i + 1) * vectors_per_connection
-                        };
-
-                        let connection_string = cli.connection_string.clone();
-                        let table_name = table.clone();
-                        let vectors_clone = vectors.clone();
-                        let pb_clone = progress_bar.clone();
-
-                        let handle = task::spawn(async move {
-                            let mut client = connect_to_postgres(&connection_string).await.unwrap();
-
-                            load_vectors(
-                                &mut client,
-                                &table_name,
-                                &vectors_clone,
-                                start_idx,
-                                end_idx,
-                                Some(pb_clone),
-                            )
-                            .await
-                            .unwrap();
-                        });
-
-                        handles.push(handle);
-                    }
-
-                    // Wait for all tasks to complete
-                    join_all(handles).await;
-                } else if *transactions > 1 {
-                    // Split loading into multiple transactions
-                    let vectors_per_transaction = vectors_to_load / *transactions;
-
-                    for i in 0..*transactions {
-                        let start_idx = i * vectors_per_transaction;
-                        let end_idx = if i == *transactions - 1 {
-                            vectors_to_load
-                        } else {
-                            (i + 1) * vectors_per_transaction
-                        };
-
-                        load_vectors(
-                            &mut client,
-                            table,
-                            &vectors,
-                            start_idx,
-                            end_idx,
-                            Some(progress_bar.clone()),
-                        )
-                        .await?;
-                    }
-                } else {
-                    // Single transaction loading
-                    let res = load_vectors(
-                        &mut client,
-                        table,
-                        &vectors,
-                        0,
-                        vectors_to_load,
-                        Some(progress_bar.clone()),
-                    )
-                    .await;
-                    if res.is_err() {
-                        println!("Error loading vectors: {:?}", res);
-                        res?;
-                    }
-                }
-
-                let duration = start_time.elapsed();
-                progress_bar
-                    .lock()
-                    .unwrap()
-                    .finish_with_message("Loading complete");
-
-                // Report performance statistics
-                let stats = PerformanceStats::new("Vector Loading", duration, vectors_to_load);
-                stats.print();
-
-                // Create index if requested
-                if *create_index {
-                    println!(
-                        "Creating {} index with {} distance metric...",
-                        format!("{:?}", index_type).to_lowercase(),
-                        format!("{:?}", effective_distance_metric).to_lowercase()
-                    );
-                    let index_start_time = Instant::now();
-
-                    // Create index parameters struct
-                    let index_params = IndexParams {
-                        index_type: *index_type,
-                        distance_metric: effective_distance_metric,
-                        diskann: DiskAnnIndexParams {
-                            storage_layout: diskann_storage_layout.clone(),
-                            num_neighbors: *diskann_num_neighbors,
-                            search_list_size: *diskann_search_list_size,
-                            max_alpha: *diskann_max_alpha,
-                            num_dimensions: *diskann_num_dimensions,
-                            num_bits_per_dimension: *diskann_num_bits_per_dimension,
-                        },
-                        hnsw: HnswIndexParams {
-                            m: *hnsw_m,
-                            ef_construction: *hnsw_ef_construction,
-                        },
-                        ivfflat: IvfFlatIndexParams {
-                            lists: *ivfflat_lists,
-                        },
-                    };
-
-                    create_vector_index(&client, table, vector_dim, &index_params).await?;
-
-                    let index_duration = index_start_time.elapsed();
-                    let index_stats = PerformanceStats::new("Index Creation", index_duration, 1);
-                    index_stats.print();
-                }
-            } else {
-                println!("Dataset '{}' not found. Use the ListDatasets command to see available datasets.", dataset);
-            }
-        }
         Commands::Load {
             file,
             dataset,
@@ -1503,14 +1232,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hnsw_m,
             hnsw_ef_construction,
             ivfflat_lists,
+            max_label,
+            num_labels,
         } => {
-            // Determine the file path - either from direct file path or by downloading the dataset
-            let file_path: PathBuf = if let Some(file_path) = file {
-                file_path.clone()
+            // Determine the file path and base table name
+            let (file_path, base_table_name) = if let Some(file_path) = file {
+                let name = file_path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("vectors");
+                (file_path.clone(), kebab_to_snake_case(name))
             } else if let Some(dataset_name) = dataset {
                 // Get dataset information
                 let datasets = get_ann_benchmark_datasets().await?;
-                let dataset_info = datasets.iter().find(|d| &d.name == dataset_name);
+                let dataset_info = datasets.iter().find(|d| d.name == *dataset_name);
 
                 if let Some(dataset_info) = dataset_info {
                     println!(
@@ -1519,7 +1254,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     );
 
                     // Download the dataset
-                    download_dataset(dataset_info).await?
+                    let file_path = download_dataset(dataset_info).await?;
+                    (file_path, kebab_to_snake_case(&dataset_info.name))
                 } else {
                     println!("Dataset '{}' not found. Use the ListDatasets command to see available datasets.", dataset_name);
                     return Ok(());
@@ -1527,6 +1263,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 println!("Error: Either --file or --dataset must be specified");
                 return Ok(());
+            };
+
+            // Determine the final table name
+            let table_name = if let Some(name) = table {
+                name.clone()
+            } else {
+                let index_suffix = match index_type {
+                    IndexType::DiskANN => "diskann",
+                    IndexType::Hnsw => "hnsw",
+                    IndexType::IVFFlat => "ivfflat",
+                };
+                format!("{}_{}", base_table_name, index_suffix)
             };
 
             // Open the HDF5 file
@@ -1563,7 +1311,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             // Create the table if requested
             if *create_table {
-                create_vector_table(&client, table, vector_dim, true).await?;
+                create_vector_table(
+                    &client,
+                    &table_name,
+                    vector_dim,
+                    true,
+                    *max_label,
+                    *num_labels,
+                )
+                .await?;
             }
 
             // Set up progress bar
@@ -1592,9 +1348,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     };
 
                     let connection_string = cli.connection_string.clone();
-                    let table_name = table.clone();
+                    let table_name = table_name.clone();
                     let vectors_clone = vectors.clone();
                     let pb_clone = progress_bar.clone();
+                    let max_label = *max_label;
+                    let num_labels = *num_labels;
 
                     let handle = task::spawn(async move {
                         let mut client = connect_to_postgres(&connection_string).await.unwrap();
@@ -1606,6 +1364,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             start_idx,
                             end_idx,
                             Some(pb_clone),
+                            max_label,
+                            num_labels,
                         )
                         .await
                         .unwrap();
@@ -1630,11 +1390,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     load_vectors(
                         &mut client,
-                        table,
+                        &table_name,
                         &vectors,
                         start_idx,
                         end_idx,
                         Some(progress_bar.clone()),
+                        *max_label,
+                        *num_labels,
                     )
                     .await?;
                 }
@@ -1642,11 +1404,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Single transaction loading
                 let res = load_vectors(
                     &mut client,
-                    table,
+                    &table_name,
                     &vectors,
                     0,
                     vectors_to_load,
                     Some(progress_bar.clone()),
+                    *max_label,
+                    *num_labels,
                 )
                 .await;
                 if res.is_err() {
@@ -1695,7 +1459,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                 };
 
-                create_vector_index(&client, table, vector_dim, &index_params).await?;
+                create_vector_index(&client, &table_name, vector_dim, &index_params).await?;
 
                 let index_duration = index_start_time.elapsed();
                 let index_stats = PerformanceStats::new("Index Creation", index_duration, 1);
@@ -1717,6 +1481,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             diskann_query_rescore,
             hnsw_ef_search,
             ivfflat_probes,
+            max_label,
+            num_labels,
         } => {
             // Determine the file path - either from direct file path or by downloading the dataset
             let file_path: PathBuf = if let Some(file_path) = file {
@@ -1724,7 +1490,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             } else if let Some(dataset_name) = dataset {
                 // Get dataset information
                 let datasets = get_ann_benchmark_datasets().await?;
-                let dataset_info = datasets.iter().find(|d| &d.name == dataset_name);
+                let dataset_info = datasets.iter().find(|d| d.name == *dataset_name);
 
                 if let Some(dataset_info) = dataset_info {
                     println!(
@@ -1851,6 +1617,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ivfflat: IvfFlatQueryParams {
                         probes: *ivfflat_probes,
                     },
+                    max_label: *max_label,
+                    num_labels: *num_labels,
                 };
 
                 let result = run_query(&client, &query_params, *verbose).await?;
