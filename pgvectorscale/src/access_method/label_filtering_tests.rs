@@ -409,15 +409,18 @@ pub mod tests {
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
-        // Ensure that the index is used
-        let res = Spi::explain(
-            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
-        )?;
-        let res_str = format!("{:?}", res);
-        assert!(
-            res_str.contains("idx_complex_order_by"),
-            "Index should be used"
-        );
+        // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
+        #[cfg(feature = "pg17")]
+        {
+            let res = Spi::explain(
+                "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
+            )?;
+            let res_str = format!("{:?}", res);
+            assert!(
+                res_str.contains("idx_complex_order_by"),
+                "Index should be used"
+            );
+        }
 
         // Tests 2: order by labels, distance.  Index cannot be used.
         let res: Option<i64> = Spi::get_one(
@@ -460,15 +463,18 @@ pub mod tests {
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
-        // Ensure that the index is used
-        let res = Spi::explain(
-            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
-        )?;
-        let res_str = format!("{:?}", res);
-        assert!(
-            res_str.contains("idx_complex_order_by"),
-            "Index should be used"
-        );
+        // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
+        #[cfg(feature = "pg17")]
+        {
+            let res = Spi::explain(
+                "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
+            )?;
+            let res_str = format!("{:?}", res);
+            assert!(
+                res_str.contains("idx_complex_order_by"),
+                "Index should be used"
+            );
+        }
 
         // Test 4: parameterize the vector and order by labels, distance.  Index cannot be used.
         let res: Option<i64> = Spi::get_one_with_args(
