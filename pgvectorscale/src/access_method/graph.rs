@@ -499,6 +499,7 @@ impl<'a> Graph<'a> {
         storage: &S,
         stats: &mut InsertStats,
     ) -> bool {
+        let num_nodes = 0; // TODO: calculate from base table?
         if let Some(start_nodes) = self.meta_page.get_start_nodes() {
             let mut visited = HashSet::new();
             let mut to_visit = start_nodes.get_all_nodes();
@@ -520,9 +521,9 @@ impl<'a> Graph<'a> {
                     to_visit.push(ip);
                 }
             }
-            return visited.len() == self.meta_page.get_num_nodes();
+            return visited.len() == num_nodes;
         }
-        self.meta_page.get_num_nodes() == 0
+        num_nodes == 0
     }
 
     fn debug_format_labels(labels: Option<LabelSet>) -> String {
@@ -661,8 +662,6 @@ digraph G {
             // In production this is a warning
             pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }
-
-        self.meta_page.increment_num_nodes();
     }
 
     fn update_back_pointer<S: Storage>(

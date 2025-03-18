@@ -520,8 +520,6 @@ fn build_callback_internal<S: Storage>(
         &mut state.stats,
     );
 
-    debug1!("Inserting {:?}", index_pointer);
-
     state
         .graph
         .insert(index, index_pointer, vector, storage, &mut state.stats);

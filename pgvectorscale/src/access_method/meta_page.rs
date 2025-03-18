@@ -86,7 +86,6 @@ impl From<&MetaPageV1> for MetaPage {
             start_nodes: Some(start_nodes),
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels: false,
-            num_nodes: 0, // TODO
         }
     }
 }
@@ -158,7 +157,6 @@ impl From<MetaPageV2> for MetaPage {
             start_nodes: Some(start_nodes),
             quantizer_metadata: meta.quantizer_metadata,
             has_labels: false,
-            num_nodes: 0, // TODO
         }
     }
 }
@@ -209,8 +207,6 @@ pub struct MetaPage {
     quantizer_metadata: ItemPointer,
     /// Whether the index has labels
     has_labels: bool,
-    /// Total number of nodes in the graph.  Used just for debug consistency check.
-    num_nodes: usize,
 }
 
 impl MetaPage {
@@ -354,7 +350,6 @@ impl MetaPage {
             start_nodes: None,
             quantizer_metadata: ItemPointer::new(InvalidBlockNumber, InvalidOffsetNumber),
             has_labels,
-            num_nodes: 0,
         };
 
         meta.store(index, true);
@@ -425,17 +420,5 @@ impl MetaPage {
 
     pub fn set_quantizer_metadata_pointer(&mut self, quantizer_pointer: IndexPointer) {
         self.quantizer_metadata = quantizer_pointer;
-    }
-
-    pub fn get_num_nodes(&self) -> usize {
-        self.num_nodes
-    }
-
-    pub fn increment_num_nodes(&mut self) {
-        self.num_nodes += 1;
-    }
-
-    pub fn decrement_num_nodes(&mut self) {
-        self.num_nodes -= 1;
     }
 }

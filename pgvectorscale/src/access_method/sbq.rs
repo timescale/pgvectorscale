@@ -357,7 +357,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         stats: &mut T,
     ) -> Self {
         let cache = &mut storage.qv_cache.borrow_mut();
-        let (vec, _) = cache.get(index_pointer, storage, stats);
+        let vec = cache.get(index_pointer, storage, stats);
         Self {
             vec: vec.to_vec(),
             storage,
@@ -372,13 +372,13 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
         stats: &mut T,
     ) -> f32 {
         let cache = &mut self.storage.qv_cache.borrow_mut();
-        let (vec1, _) = cache.get(index_pointer, self.storage, stats);
+        let vec1 = cache.get(index_pointer, self.storage, stats);
         distance_xor_optimized(vec1, self.vec.as_slice()) as f32
     }
 }
 
 struct QuantizedVectorCache {
-    quantized_vector_map: HashMap<ItemPointer, (Vec<SbqVectorElement>, Option<LabelSet>)>,
+    quantized_vector_map: HashMap<ItemPointer, Vec<SbqVectorElement>>,
 }
 
 /* should be a LRU cache for quantized vector. For now cheat and never evict
@@ -396,14 +396,14 @@ impl QuantizedVectorCache {
         index_pointer: IndexPointer,
         storage: &SbqSpeedupStorage,
         stats: &mut S,
-    ) -> (&[SbqVectorElement], Option<&LabelSet>) {
-        let (vec, labels) = self
+    ) -> &[SbqVectorElement] {
+        let vec = self
             .quantized_vector_map
             .entry(index_pointer)
             .or_insert_with(|| {
                 storage.get_quantized_vector_from_index_pointer(index_pointer, stats)
             });
-        (vec.as_slice(), labels.as_ref())
+        vec.as_slice()
     }
 
     /* Ensure that all these elements are in the cache. If the capacity isn't big enough throw an error.
@@ -506,13 +506,10 @@ impl<'a> SbqSpeedupStorage<'a> {
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
-    ) -> (Vec<SbqVectorElement>, Option<LabelSet>) {
+    ) -> Vec<SbqVectorElement> {
         let rn = unsafe { SbqNode::read(self.index, index_pointer, self.has_labels, stats) };
         let node = rn.get_archived_node();
-        (
-            node.get_bq_vector().to_vec(),
-            node.get_labels().map(Into::into),
-        )
+        node.get_bq_vector().to_vec()
     }
 
     fn visit_lsn_internal(
@@ -553,12 +550,6 @@ impl<'a> SbqSpeedupStorage<'a> {
                     };
 
                     let node_neighbor = rn_neighbor.get_archived_node();
-                    let bq_vector = node_neighbor.get_bq_vector();
-                    let distance = lsr
-                        .sdm
-                        .as_ref()
-                        .expect("sdm is Some")
-                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     // Skip neighbors that have no matching labels with the query
                     if let Some(labels) = lsr.sdm.as_ref().expect("sdm is Some").query.labels() {
@@ -568,6 +559,13 @@ impl<'a> SbqSpeedupStorage<'a> {
                             continue;
                         }
                     }
+
+                    let bq_vector = node_neighbor.get_bq_vector();
+                    let distance = lsr
+                        .sdm
+                        .as_ref()
+                        .expect("sdm is Some")
+                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,
@@ -587,13 +585,6 @@ impl<'a> SbqSpeedupStorage<'a> {
                     if !lsr.prepare_insert(neighbor_index_pointer) {
                         continue;
                     }
-                    let mut cache = self.qv_cache.borrow_mut();
-                    let (bq_vector, _) = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
-                    let distance = lsr
-                        .sdm
-                        .as_ref()
-                        .expect("lsr.sdm is None")
-                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     // Skip neighbors that have no matching labels with the query
                     if let Some(labels) = lsr.sdm.as_ref().expect("lsr.sdm is None").query.labels()
@@ -602,6 +593,14 @@ impl<'a> SbqSpeedupStorage<'a> {
                             continue;
                         }
                     }
+
+                    let mut cache = self.qv_cache.borrow_mut();
+                    let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
+                    let distance = lsr
+                        .sdm
+                        .as_ref()
+                        .expect("lsr.sdm is None")
+                        .calculate_bq_distance(bq_vector, gns, &mut lsr.stats);
 
                     let lsn = ListSearchNeighbor::new(
                         neighbor_index_pointer,

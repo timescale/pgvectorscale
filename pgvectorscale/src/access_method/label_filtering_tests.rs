@@ -13,7 +13,9 @@ pub mod tests {
         Spi::run("DROP TABLE IF EXISTS test_update_labels;")?;
         Spi::run("DROP TABLE IF EXISTS test_labeled;")?;
         Spi::run("DROP TABLE IF EXISTS test_overlap;")?;
+        Spi::run("DROP TABLE IF EXISTS test_unusual_order;")?;
         Spi::run("DROP TABLE IF EXISTS label_definitions;")?;
+        Spi::run("DROP TABLE IF EXISTS test_complex_order_by;")?;
         Ok(())
     }
 
@@ -46,7 +48,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_null_labels 
+                    SELECT * FROM test_null_labels
                     WHERE labels && '{1}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -59,7 +61,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_null_labels 
+                    SELECT * FROM test_null_labels
                     WHERE labels && '{}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -76,7 +78,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_null_labels 
+                    SELECT * FROM test_null_labels
                     WHERE labels && '{3}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -118,7 +120,7 @@ pub mod tests {
                     embedding vector(3),
                     labels SMALLINT[]
                 );
-                
+
                 -- Insert data before creating the index
                 INSERT INTO test_nonempty (embedding, labels) VALUES
                 ('[1,2,3]', '{1,2}'),
@@ -137,7 +139,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_nonempty 
+                    SELECT * FROM test_nonempty
                     WHERE labels && '{1}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -150,7 +152,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_nonempty 
+                    SELECT * FROM test_nonempty
                     WHERE labels && '{2,3}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -176,9 +178,9 @@ pub mod tests {
                     labels SMALLINT[],
                     category TEXT
                 );
-                
+
                 CREATE INDEX idx_mixed_labels ON test_mixed_labels USING diskann (embedding, labels);
-                
+
                 -- Insert data with mixed scenarios
                 INSERT INTO test_mixed_labels (embedding, labels, category) VALUES
                 ('[1,2,3]', '{1,2}', 'article'),
@@ -195,7 +197,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_mixed_labels 
+                    SELECT * FROM test_mixed_labels
                     WHERE labels && '{1}' AND category = 'blog'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -221,12 +223,12 @@ pub mod tests {
                     embedding vector(3),
                     labels SMALLINT[]
                 );
-                
+
                 -- Insert initial data
                 INSERT INTO test_update_labels (embedding, labels) VALUES
                 ('[1,2,3]', '{1,2}'),
                 ('[4,5,6]', '{3,4}');
-                
+
                 -- Create index on non-empty table
                 CREATE INDEX idx_update_labels ON test_update_labels USING diskann (embedding, labels);
                 ",
@@ -237,7 +239,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_update_labels 
+                    SELECT * FROM test_update_labels
                     WHERE labels && '{1}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -254,7 +256,7 @@ pub mod tests {
             "
                 -- Update existing row
                 UPDATE test_update_labels SET labels = '{1,5}' WHERE id = 2;
-                
+
                 -- Insert new rows with edge cases
                 INSERT INTO test_update_labels (embedding, labels) VALUES
                 ('[7,8,9]', NULL),
@@ -267,7 +269,7 @@ pub mod tests {
             "
                 SET enable_seqscan = 0;
                 WITH cte AS (
-                    SELECT * FROM test_update_labels 
+                    SELECT * FROM test_update_labels
                     WHERE labels && '{1}'
                     ORDER BY embedding <=> '[0,0,0]'
                 )
@@ -297,9 +299,9 @@ pub mod tests {
             labels SMALLINT[],
             category TEXT
         );
-        
+
         CREATE INDEX idx_labeled_diskann ON test_labeled USING diskann (embedding, labels);
-        
+
         INSERT INTO test_labeled (embedding, labels, category) VALUES
         ('[1,2,3]', '{1,2}', 'article'),
         ('[4,5,6]', '{1,3}', 'blog'),
@@ -311,7 +313,7 @@ pub mod tests {
             "
         SET enable_seqscan = 0;
         WITH cte AS (
-            SELECT * FROM test_labeled 
+            SELECT * FROM test_labeled
             WHERE labels && '{1}'
             ORDER BY embedding <=> '[0,0,0]'
         )
@@ -324,7 +326,7 @@ pub mod tests {
             "
         SET enable_seqscan = 0;
         WITH cte AS (
-            SELECT * FROM test_labeled 
+            SELECT * FROM test_labeled
             WHERE labels && '{2}' AND category = 'article'
             ORDER BY embedding <=> '[0,0,0]'
         )
@@ -334,6 +336,168 @@ pub mod tests {
 
         // Clean up
         Spi::run("DROP TABLE test_labeled;")?;
+
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_unusual_column_order() -> spi::Result<()> {
+        // Ensure clean environment
+        cleanup_test_tables()?;
+
+        Spi::run(
+            "CREATE TABLE test_unusual_order (
+            id SERIAL PRIMARY KEY,
+            labels SMALLINT[],
+            comments TEXT,
+            embedding vector(3)
+        );
+
+        CREATE INDEX idx_unusual_order ON test_unusual_order USING diskann (embedding, labels);
+
+        INSERT INTO test_unusual_order (embedding, labels, comments) VALUES
+        ('[1,2,3]', '{1,2}', 'This is a comment'),
+        ('[4,5,6]', '{1,3}', 'Another comment'),
+        ('[7,8,9]', '{2,3}', 'Yet another comment');
+        ",
+        )?;
+
+        let res: Option<i64> = Spi::get_one(
+            "
+        SET enable_seqscan = 0;
+        WITH cte AS (
+            SELECT * FROM test_unusual_order WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]'
+        )
+        SELECT COUNT(*) FROM cte;",
+        )?;
+        assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
+
+        Spi::run("DROP TABLE test_unusual_order;")?;
+
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_complex_order_by() -> spi::Result<()> {
+        // Ensure clean environment
+        cleanup_test_tables()?;
+
+        Spi::run("CREATE TABLE test_complex_order_by (
+            id SERIAL PRIMARY KEY,
+            embedding vector(3),
+            labels SMALLINT[]
+        );
+
+        CREATE INDEX idx_complex_order_by ON test_complex_order_by USING diskann (embedding, labels);
+
+        INSERT INTO test_complex_order_by (embedding, labels) VALUES
+        ('[1,2,3]', '{1,2}'),
+        ('[4,5,6]', '{1,3}'),
+        ('[7,8,9]', '{2,3}');
+        ")?;
+
+        // Tests 1: order by distance, labels.  Index should be used.
+        let res: Option<i64> = Spi::get_one(
+            "
+        SET enable_seqscan = 0;
+        WITH cte AS (
+            SELECT * FROM test_complex_order_by
+            WHERE labels && '{1}'
+            ORDER BY embedding <=> '[0,0,0]', labels
+        )
+        SELECT COUNT(*) FROM cte;",
+        )?;
+        assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
+
+        // Ensure that the index is used
+        let res = Spi::explain(
+            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
+        )?;
+        let res_str = format!("{:?}", res);
+        assert!(
+            res_str.contains("idx_complex_order_by"),
+            "Index should be used"
+        );
+
+        // Tests 2: order by labels, distance.  Index cannot be used.
+        let res: Option<i64> = Spi::get_one(
+            "
+        SET enable_seqscan = 0;
+        WITH cte AS (
+            SELECT * FROM test_complex_order_by
+            WHERE labels && '{1}'
+            ORDER BY labels, embedding <=> '[0,0,0]'
+        )
+        SELECT COUNT(*) FROM cte;",
+        )?;
+        assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
+
+        // Ensure that the index is not used
+        let res = Spi::explain(
+            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY labels, embedding <=> '[0,0,0]';"
+        )?;
+        let res_str = format!("{:?}", res);
+        assert!(
+            !res_str.contains("idx_complex_order_by"),
+            "Index should not be used"
+        );
+
+        // Test 3: parameterize the vector and order by distance, labels.  Index should be used.
+        let vector = vec![0, 0, 0];
+        let res: Option<i64> = Spi::get_one_with_args(
+            "
+        SET enable_seqscan = 0;
+        WITH cte AS (
+            SELECT * FROM test_complex_order_by
+            WHERE labels && '{1}'
+            ORDER BY embedding <=> $1::vector, labels
+        )
+        SELECT COUNT(*) FROM cte;",
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                vector.clone().into_datum(),
+            )],
+        )?;
+        assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
+
+        // Ensure that the index is used
+        let res = Spi::explain(
+            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
+        )?;
+        let res_str = format!("{:?}", res);
+        assert!(
+            res_str.contains("idx_complex_order_by"),
+            "Index should be used"
+        );
+
+        // Test 4: parameterize the vector and order by labels, distance.  Index cannot be used.
+        let res: Option<i64> = Spi::get_one_with_args(
+            "
+        SET enable_seqscan = 0;
+        WITH cte AS (
+            SELECT * FROM test_complex_order_by
+            WHERE labels && '{1}'
+            ORDER BY labels, embedding <=> $1::vector
+        )
+        SELECT COUNT(*) FROM cte;",
+            vec![(
+                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
+                vector.into_datum(),
+            )],
+        )?;
+        assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
+
+        // Ensure that the index is not used
+        let res = Spi::explain(
+            "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY labels, embedding <=> '[0,0,0]';"
+        )?;
+        let res_str = format!("{:?}", res);
+        assert!(
+            !res_str.contains("idx_complex_order_by"),
+            "Index should not be used"
+        );
+
+        Spi::run("DROP TABLE test_complex_order_by;")?;
 
         Ok(())
     }
@@ -350,20 +514,20 @@ pub mod tests {
             labels SMALLINT[],
             content TEXT
         );
-        
+
         CREATE TABLE label_definitions (
             id INTEGER PRIMARY KEY,
             name TEXT,
             description TEXT
         );
-        
+
         CREATE INDEX idx_labeled_diskann ON test_labeled USING diskann (embedding, labels);
-        
+
         INSERT INTO label_definitions (id, name, description) VALUES
         (1, 'science', 'Scientific content'),
         (2, 'technology', 'Technology-related content'),
         (3, 'business', 'Business content');
-        
+
         INSERT INTO test_labeled (embedding, labels, content) VALUES
         ('[1,2,3]', '{1,2}', 'Science and technology article'),
         ('[4,5,6]', '{1,3}', 'Science and business blog'),
@@ -427,9 +591,9 @@ pub mod tests {
             category TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
-        
+
         CREATE INDEX idx_labeled_diskann ON test_labeled USING diskann (embedding, labels);
-        
+
         INSERT INTO test_labeled (embedding, labels, category) VALUES
         ('[1,2,3]', '{1,2}', 'article'),
         ('[4,5,6]', '{1,3}', 'blog'),
@@ -444,7 +608,7 @@ pub mod tests {
             "
         SET enable_seqscan = 0;
         WITH cte AS (
-            SELECT * FROM test_labeled 
+            SELECT * FROM test_labeled
             WHERE labels && '{1,4}'
             ORDER BY embedding <=> '[0,0,0]'
         )
@@ -457,7 +621,7 @@ pub mod tests {
             "
         SET enable_seqscan = 0;
         WITH filtered_docs AS (
-            SELECT * FROM test_labeled 
+            SELECT * FROM test_labeled
             WHERE labels && '{2,3}'
             ORDER BY embedding <=> '[0,0,0]'
         )
@@ -470,7 +634,7 @@ pub mod tests {
             "
         SET enable_seqscan = 0;
         WITH filtered_docs AS (
-            SELECT * FROM test_labeled 
+            SELECT * FROM test_labeled
             WHERE labels && '{1}' AND array_length(labels, 1) > 2
             ORDER BY embedding <=> '[0,0,0]'
         )
@@ -560,7 +724,7 @@ pub mod tests {
 
         // Verify the valid labels were inserted correctly using the && operator
         let res: Option<i64> = Spi::get_one(
-            "SELECT COUNT(*) FROM test_label_bounds 
+            "SELECT COUNT(*) FROM test_label_bounds
              WHERE labels && ARRAY[32767]::smallint[];",
         )?;
         assert_eq!(
@@ -591,7 +755,7 @@ pub mod tests {
                 END IF;
             END;
             $$ LANGUAGE plpgsql;
-            
+
             -- Return whether the test failed
             SELECT current_setting('pgrx.tests.failed', true) = 'true';"
         )?;
@@ -606,7 +770,7 @@ pub mod tests {
 
         // Verify the negative label was inserted correctly using the && operator
         let res: Option<i64> = Spi::get_one(
-            "SELECT COUNT(*) FROM test_label_bounds 
+            "SELECT COUNT(*) FROM test_label_bounds
              WHERE labels && ARRAY[-1]::smallint[];",
         )?;
         assert_eq!(
@@ -630,7 +794,7 @@ pub mod tests {
                 array1 SMALLINT[],
                 array2 SMALLINT[]
             );
-            
+
             INSERT INTO test_overlap (array1, array2) VALUES
             ('{1,2,3}', '{3,4,5}'),       -- Overlap: 3 (sorted)
             ('{-10,20,30}', '{40,50}'),   -- No overlap (sorted)
