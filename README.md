@@ -216,7 +216,7 @@ For optimal performance with label filtering, you must specify the label column 
     LIMIT 10;
     ```
 
-    The index directly supports this type of filtering, providing significantly better performance than post-filtering.
+    The index directly supports this type of filtering, providing significantly lower latency results compared to post-filtering.
 
 #### Giving Semantic Meaning to Labels
 
