@@ -164,10 +164,7 @@ pub mod tests {
 
         use rand::Rng;
         // Force unlock the mutex if it's poisoned from a previous test
-        let _lock = match VAC_PLAIN_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
 
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
@@ -274,10 +271,7 @@ pub mod tests {
     pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
         //do not run this test in parallel
         // Force unlock the mutex if it's poisoned from a previous test
-        let _lock = match VAC_FULL_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = VAC_FULL_MUTEX.lock().unwrap();
 
         //we need to run vacuum in this test which cannot be run from SPI.
         //so we cannot use the pg_test framework here. Thus we do a bit of
@@ -377,10 +371,7 @@ pub mod tests {
     pub fn test_update_with_null_scaffold(index_options: &str) {
         //do not run this test in parallel
         // Force unlock the mutex if it's poisoned from a previous test
-        let _lock = match VAC_FULL_MUTEX.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let _lock = VAC_FULL_MUTEX.lock().unwrap();
         let expected_cnt = 1000;
 
         //we need to run a few txn in this test which cannot be run from SPI.

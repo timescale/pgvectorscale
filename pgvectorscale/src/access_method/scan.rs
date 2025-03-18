@@ -54,7 +54,6 @@ impl TSVScanState {
         query: LabeledVector,
         search_list_size: usize,
     ) {
-        debug2!("TSVScanState::initialize fetching meta page");
         let meta_page = MetaPage::fetch(index);
         let storage = meta_page.get_storage_type();
         let distance = meta_page.get_distance_function();
@@ -308,9 +307,7 @@ pub extern "C" fn ambeginscan(
         ))
     };
     let indexrel = unsafe { PgRelation::from_pg(index_relation) };
-    debug2!("ambeginscan fetching meta page");
     let meta_page = MetaPage::fetch(&indexrel);
-    debug2!("Index scan: {:?}", meta_page);
 
     unsafe {
         pgstat_count_index_scan(index_relation, indexrel);
@@ -339,10 +336,10 @@ pub extern "C" fn amrescan(
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
 
     if nkeys > 0 {
-        scan.xs_recheck = true; // TODO: needed?
+        scan.xs_recheck = true;
     }
 
-    let orderbys = unsafe {
+    let orderby_keys = unsafe {
         std::slice::from_raw_parts(orderbys as *const pg_sys::ScanKeyData, norderbys as _)
     };
     let keys =
@@ -352,7 +349,7 @@ pub extern "C" fn amrescan(
 
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
 
-    let query = unsafe { LabeledVector::from_scan_key_data(keys, orderbys, &state.meta_page) };
+    let query = unsafe { LabeledVector::from_scan_key_data(keys, orderby_keys, &state.meta_page) };
 
     state.initialize(&indexrel, &heaprel, query, search_list_size);
 }
@@ -364,9 +361,6 @@ pub extern "C" fn amgettuple(
 ) -> bool {
     let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-    //let iter = unsafe { state.iterator.as_mut() }.expect("no iterator in state");
-
-    debug2!("amgettuple: meta_page: {:?}", state.meta_page);
 
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
     let heaprel = unsafe { PgRelation::from_pg(scan.heapRelation) };
