@@ -59,6 +59,14 @@ pub fn distance_type_inner_product() -> i16 {
     DistanceType::InnerProduct as i16
 }
 
+#[pg_extern]
+fn echo_build_info() -> &'static str {
+    match cfg!(debug_assertions) {
+        true => "unoptimized + debug info",
+        false => "optimized",
+    }
+}
+
 /* we use the avx2 version of x86 functions. This verifies that's kosher */
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[cfg(not(target_feature = "avx2"))]
