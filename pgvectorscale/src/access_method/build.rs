@@ -19,6 +19,7 @@ use crate::util::*;
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
 use super::graph_neighbor_store::BuilderNeighborCache;
+use super::labels::LabeledVector;
 use super::sbq::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
@@ -26,34 +27,27 @@ use super::meta_page::MetaPage;
 use super::plain_storage::PlainStorage;
 use super::storage::{Storage, StorageType};
 
-enum StorageBuildState<'a, 'b, 'c, 'd, 'e> {
-    SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d, 'e>),
-    Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d, 'e>),
+enum StorageBuildState<'a, 'b, 'c, 'd> {
+    SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d>),
+    Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d>),
 }
 
-struct BuildState<'a, 'b> {
+struct BuildState<'a> {
     memcxt: PgMemoryContexts,
-    meta_page: MetaPage,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
-    graph: Graph<'b>,
+    graph: Graph<'a>,
     started: Instant,
     stats: InsertStats,
 }
 
-impl<'a, 'b> BuildState<'a, 'b> {
-    fn new(
-        index_relation: &'a PgRelation,
-        meta_page: MetaPage,
-        graph: Graph<'b>,
-        page_type: PageType,
-    ) -> Self {
+impl<'a> BuildState<'a> {
+    fn new(index_relation: &'a PgRelation, graph: Graph<'a>, page_type: PageType) -> Self {
         let tape = unsafe { Tape::new(index_relation, page_type) };
 
         BuildState {
             memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
-            meta_page,
             tape,
             graph,
             started: Instant::now(),
@@ -123,6 +117,10 @@ pub extern "C" fn ambuild(
         );
     }
 
+    if meta_page.has_labels() && meta_page.get_storage_type() == StorageType::Plain {
+        error!("Labeled filtering is not supported with plain storage");
+    }
+
     let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
@@ -172,16 +170,18 @@ unsafe fn aminsert_internal(
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
     let mut meta_page = MetaPage::fetch(&index_relation);
-    let vec = PgVector::from_pg_parts(values, isnull, 0, &meta_page, true, false);
+
+    let vec = LabeledVector::from_datums(values, isnull, &meta_page);
     if vec.is_none() {
         //todo handle NULLs?
         return false;
     }
     let vec = vec.unwrap();
-    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
 
+    let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();
+
     match &mut storage {
         StorageType::Plain => {
             let plain = PlainStorage::load_for_insert(
@@ -221,14 +221,15 @@ unsafe fn aminsert_internal(
 unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
-    vector: PgVector,
+    vector: LabeledVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
     let mut tape = Tape::resume(index_relation, S::page_type());
     let index_pointer = storage.create_node(
-        vector.to_index_slice(),
+        vector.vec().to_index_slice(),
+        vector.labels().cloned(),
         heap_pointer,
         meta_page,
         &mut tape,
@@ -236,7 +237,7 @@ unsafe fn insert_storage<S: Storage>(
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(index_relation, index_pointer, vector, storage, stats)
+    graph.insert(index_relation, index_pointer, vector, storage, stats);
 }
 
 #[pg_guard]
@@ -244,18 +245,17 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
-fn do_heap_scan<'a>(
+fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
-    heap_relation: &'a PgRelation,
-    index_relation: &'a PgRelation,
-    meta_page: MetaPage,
+    heap_relation: &PgRelation,
+    index_relation: &PgRelation,
+    mut meta_page: MetaPage,
 ) -> usize {
     let storage = meta_page.get_storage_type();
 
-    let mut mp2 = meta_page.clone();
     let graph = Graph::new(
         GraphNeighborStore::Builder(BuilderNeighborCache::new()),
-        &mut mp2,
+        &mut meta_page,
     );
     let mut write_stats = WriteStats::new();
     match storage {
@@ -263,11 +263,11 @@ fn do_heap_scan<'a>(
             let mut plain = PlainStorage::new_for_build(
                 index_relation,
                 heap_relation,
-                meta_page.get_distance_function(),
+                graph.get_meta_page().get_distance_function(),
             );
-            plain.start_training(&meta_page);
+            plain.start_training(graph.get_meta_page());
             let page_type = PlainStorage::page_type();
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut bs = BuildState::new(index_relation, graph, page_type);
             let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
 
             unsafe {
@@ -280,11 +280,14 @@ fn do_heap_scan<'a>(
                 );
             }
 
-            finalize_index_build(&mut plain, &mut bs, write_stats)
+            finalize_index_build(&mut plain, &mut bs, index_relation, write_stats)
         }
         StorageType::SbqCompression => {
-            let mut bq =
-                SbqSpeedupStorage::new_for_build(index_relation, heap_relation, &meta_page);
+            let mut bq = SbqSpeedupStorage::new_for_build(
+                index_relation,
+                heap_relation,
+                graph.get_meta_page(),
+            );
 
             let page_type = SbqSpeedupStorage::page_type();
 
@@ -292,9 +295,9 @@ fn do_heap_scan<'a>(
                 pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
             }
 
-            bq.start_training(&meta_page);
+            bq.start_training(graph.get_meta_page());
 
-            let mut bs = BuildState::new(index_relation, meta_page, graph, page_type);
+            let mut bs = BuildState::new(index_relation, graph, page_type);
             let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
 
             unsafe {
@@ -306,7 +309,7 @@ fn do_heap_scan<'a>(
                     &mut state,
                 );
             }
-            bq.finish_training(&mut write_stats);
+            bq.finish_training(bs.graph.get_meta_page_mut(), &mut write_stats);
 
             unsafe {
                 pgstat_progress_update_param(
@@ -333,7 +336,8 @@ fn do_heap_scan<'a>(
                     BUILD_PHASE_FINALIZING_GRAPH,
                 );
             }
-            finalize_index_build(&mut bq, &mut bs, write_stats)
+
+            finalize_index_build(&mut bq, &mut bs, index_relation, write_stats)
         }
     }
 }
@@ -341,6 +345,7 @@ fn do_heap_scan<'a>(
 fn finalize_index_build<S: Storage>(
     storage: &mut S,
     state: &mut BuildState,
+    index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
     match state.graph.get_neighbor_store() {
@@ -364,11 +369,14 @@ fn finalize_index_build<S: Storage>(
                 write_stats.num_neighbors += neighbors.len();
 
                 storage.finalize_node_at_end_of_build(
-                    &state.meta_page,
+                    state.graph.get_meta_page(),
                     index_pointer,
                     neighbors,
                     &mut write_stats,
                 );
+            }
+            unsafe {
+                state.graph.get_meta_page().store(index_relation, false);
             }
         }
         GraphNeighborStore::Disk => {
@@ -417,7 +425,14 @@ unsafe extern "C" fn build_callback_bq_train(
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            let vec = PgVector::from_pg_parts(
+                values,
+                isnull,
+                0,
+                state.graph.get_meta_page(),
+                true,
+                false,
+            );
             if let Some(vec) = vec {
                 bq.add_sample(vec.to_index_slice());
             }
@@ -437,21 +452,20 @@ unsafe extern "C" fn build_callback(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
-    let index_relation = unsafe { PgRelation::from_pg(index) };
+    let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
+    let index_relation = PgRelation::from_pg(index);
     let state = (state as *mut StorageBuildState).as_mut().unwrap();
     match state {
         StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *bq);
+                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *bq);
             }
         }
         StorageBuildState::Plain(plain, state) => {
-            let vec = PgVector::from_pg_parts(values, isnull, 0, &state.meta_page, true, false);
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
-                build_callback_memory_wrapper(index_relation, heap_pointer, vec, state, *plain);
+                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *plain);
             }
         }
     }
@@ -459,9 +473,9 @@ unsafe extern "C" fn build_callback(
 
 #[inline(always)]
 unsafe fn build_callback_memory_wrapper<S: Storage>(
-    index: PgRelation,
+    index: &PgRelation,
     heap_pointer: ItemPointer,
-    vector: PgVector,
+    vector: LabeledVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -475,9 +489,9 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
 
 #[inline(always)]
 fn build_callback_internal<S: Storage>(
-    index: PgRelation,
+    index: &PgRelation,
     heap_pointer: ItemPointer,
-    vector: PgVector,
+    vector: LabeledVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -498,16 +512,17 @@ fn build_callback_internal<S: Storage>(
     }
 
     let index_pointer = storage.create_node(
-        vector.to_index_slice(),
+        vector.vec().to_index_slice(),
+        vector.labels().cloned(),
         heap_pointer,
-        &state.meta_page,
+        state.graph.get_meta_page(),
         &mut state.tape,
         &mut state.stats,
     );
 
     state
         .graph
-        .insert(&index, index_pointer, vector, storage, &mut state.stats);
+        .insert(index, index_pointer, vector, storage, &mut state.stats);
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
@@ -766,19 +781,22 @@ pub mod tests {
         // and [3,3,3] should return [3,3,3].  (Note that if vectors or the query vector
         // were normalized, then the results would be different.)
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[1,1,1]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[2,2,2]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <-> '[3,3,3]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
@@ -803,19 +821,22 @@ pub mod tests {
         )?;
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[1,1,1]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[2,2,2]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[2,2,2]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
 
         let res: Option<Vec<String>> = Spi::get_one(
-            "WITH cte as (select * from test order by embedding <#> '[3,3,3]' LIMIT 1)
+            "set enable_seqscan = 0;
+            WITH cte as (select * from test order by embedding <#> '[3,3,3]' LIMIT 1)
             SELECT array_agg(embedding::text) from cte;",
         )?;
         assert_eq!(vec!["[3,3,3]"], res.unwrap());
@@ -1024,19 +1045,9 @@ pub mod tests {
                 )],
             )?;
 
-            assert!(
-                cnt.unwrap() == expected_cnt,
-                "initial count is {} id is {}",
-                cnt.unwrap(),
-                id.unwrap()
-            );
+            assert_eq!(cnt.unwrap(), expected_cnt, "id is {}", id.unwrap());
         }
 
-        assert!(
-            cnt.unwrap() == expected_cnt,
-            "initial count is {}",
-            cnt.unwrap()
-        );
         Ok(())
     }
 
@@ -1179,6 +1190,99 @@ pub mod tests {
 
             Spi::run("DROP TABLE test_data CASCADE;")?;
         }
+        Ok(())
+    }
+
+    #[pg_test]
+    pub unsafe fn test_labeled_index() -> spi::Result<()> {
+        let index_options = "num_neighbors=15, search_list_size=10";
+        let expected_cnt = 50;
+        let dimension = 128;
+
+        let query = &format!(
+            "CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimension}),
+                labels smallint[]
+            );
+
+            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding, labels) WITH ({index_options});
+
+            select setseed(0.5);
+
+            -- generate {expected_cnt} vectors along with labels
+            INSERT INTO test_data (id, embedding, labels)
+            SELECT
+                gs AS id,
+                ARRAY[
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8, (random() * 2 - 1)::float8,
+                    (random() * 2 - 1)::float8, (random() * 2 - 1)::float8
+                ]::vector(128),
+                ARRAY[
+                    (floor(random() * 16 + 1))::smallint,
+                    (floor(random() * 16 + 1))::smallint
+                ]
+            FROM generate_series(1, {expected_cnt}) gs;
+
+            SET enable_seqscan = 0;
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimension}));");
+
+        warning!("Running query: {}", query);
+        Spi::run(query)?;
+
+        verify_index_accuracy(expected_cnt, dimension)?;
+
+        Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
     }
 }

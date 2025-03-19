@@ -8,16 +8,16 @@ use super::{
     distance::DistanceFn,
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
+    labels::{LabelSet, LabeledVector},
     meta_page::MetaPage,
     neighbor_with_distance::NeighborWithDistance,
-    pg_vector::PgVector,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
         StatsNodeRead, StatsNodeWrite, WriteStats,
     },
 };
 
-/// NodeDistanceMeasure keeps the state to make distance comparison between two nodes.
+/// NodeDistanceMeasure keeps the state to make distance comparisons between two nodes.
 pub trait NodeDistanceMeasure {
     unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
         &self,
@@ -43,6 +43,9 @@ pub trait Storage {
     type NodeDistanceMeasure<'a>: NodeDistanceMeasure
     where
         Self: 'a;
+    type ArchivedType<'b>: ArchivedData
+    where
+        Self: 'b;
     type LSNPrivateData;
 
     fn page_type() -> PageType;
@@ -50,15 +53,16 @@ pub trait Storage {
     fn create_node<S: StatsNodeWrite>(
         &self,
         full_vector: &[f32],
+        labels: Option<LabelSet>,
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer;
 
-    fn start_training(&mut self, meta_page: &super::meta_page::MetaPage);
+    fn start_training(&mut self, meta_page: &MetaPage);
     fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, stats: &mut WriteStats);
+    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats);
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
@@ -74,7 +78,7 @@ pub trait Storage {
         stats: &mut S,
     ) -> Self::NodeDistanceMeasure<'a>;
 
-    fn get_query_distance_measure(&self, query: PgVector) -> Self::QueryDistanceMeasure;
+    fn get_query_distance_measure(&self, query: LabeledVector) -> Self::QueryDistanceMeasure;
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
         &self,
@@ -94,12 +98,14 @@ pub trait Storage {
     ) where
         Self: Sized;
 
-    fn create_lsn_for_init_id(
+    /// Create a ListSearchNeighbor for the start node of the search.  If start node
+    /// already processed (e.g. because multiple labels use it), return None.
+    fn create_lsn_for_start_node(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
         gns: &GraphNeighborStore,
-    ) -> ListSearchNeighbor<Self::LSNPrivateData>
+    ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>>
     where
         Self: Sized;
 
@@ -127,6 +133,12 @@ pub trait Storage {
     );
 
     fn get_distance_function(&self) -> DistanceFn;
+
+    fn get_labels<S: StatsNodeRead>(
+        &self,
+        index_pointer: IndexPointer,
+        stats: &mut S,
+    ) -> Option<LabelSet>;
 }
 
 #[derive(PartialEq, Debug)]

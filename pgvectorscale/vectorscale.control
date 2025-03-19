@@ -1,4 +1,4 @@
-comment = 'pgvectorscale:  Advanced indexing for vector data'
+comment = 'diskann access method for vector search'
 default_version = '@CARGO_VERSION@'
 #module_pathname = '$libdir/pgvectorscale'
 relocatable = false

@@ -26,6 +26,7 @@ impl BuilderNeighborCache {
             neighbor_map: BTreeMap::new(),
         }
     }
+
     pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
         self.neighbor_map.iter()
     }
