@@ -328,8 +328,8 @@ pub extern "C" fn amrescan(
     orderbys: pg_sys::ScanKey,
     norderbys: ::std::os::raw::c_int,
 ) {
-    assert_eq!(norderbys, 1);
-    assert!(nkeys == 0 || nkeys == 1);
+    assert_eq!(norderbys, 1, "Expected a single order-by key");
+    assert!(nkeys == 0 || nkeys == 1, "Expected 0 or 1 keys");
 
     let mut scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
     let indexrel = unsafe { PgRelation::from_pg(scan.indexRelation) };
