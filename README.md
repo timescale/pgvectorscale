@@ -71,17 +71,17 @@ You can install pgvectorscale from source and install it in an existing PostgreS
 1. Compile and install the extension
 
     ```bash
-    # install prerequisites
-    ## rust
+    # install rust
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    ## cargo-pgrx with the same version as pgrx
-    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
-    cargo pgrx init --pg17 pg_config
 
-    #download, build and install pgvectorscale
+    # download pgvectorscale
     cd /tmp
     git clone --branch <version> https://github.com/timescale/pgvectorscale
     cd pgvectorscale/pgvectorscale
+    # install cargo-pgrx with the same version as pgrx
+    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
+    cargo pgrx init --pg17 pg_config
+    # build and install pgvectorscale
     cargo pgrx install --release
     ```
 
