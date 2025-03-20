@@ -365,7 +365,7 @@ slightly out of order by distance. This is analogous to using
 [`iterative scan with relaxed ordering`][pgvector-iterative-index-scan] with
 pgvector's ivfflat or hnsw indexes.
 
-If you need strict ordering you can use a [materlized CTE][materialized-cte]:
+If you need strict ordering you can use a [materialized CTE][materialized-cte]:
 
 ```sql
 WITH relaxed_results AS MATERIALIZED (
