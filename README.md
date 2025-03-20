@@ -358,6 +358,25 @@ COMMIT;
 * Null labels are treated as empty arrays
 * Null values in label arrays are ignored
 
+## ORDER BY vector distance
+
+pgvectorscale's diskann index uses relaxed ordering which allows results to be
+slightly out of order by distance. This is analogous to using
+[`iterative scan with relaxed ordering`][pgvector-iterative-index-scan] with
+pgvector's ivfflat or hnsw indexes.
+
+If you need strict ordering you can use a [materlized CTE][materialized-cte]:
+
+```sql
+WITH relaxed_results AS MATERIALIZED (
+    SELECT id, embedding <=> '[1,2,3]' AS distance
+    FROM items
+    WHERE category_id = 123
+    ORDER BY distance
+    LIMIT 5
+) SELECT * FROM relaxed_results ORDER BY distance;
+```
+
 ## Get involved
 
 pgvectorscale is still at an early stage. Now is a great time to help shape the
@@ -375,3 +394,5 @@ Timescale is a PostgreSQL cloud company. To learn more visit the [timescale.com]
 [pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
 [rust-language]: https://www.rust-lang.org/
 [pgvector-install]: https://github.com/pgvector/pgvector?tab=readme-ov-file#installation
+[pgvector-iterative-index-scan]: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
+[materialized-cte]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-CTE-MATERIALIZATION
