@@ -47,23 +47,18 @@ impl<'a> Tape<'a> {
         }
     }
 
-    /// Align the size to the nearest multiple of 8.
-    fn aligned_size(size: usize) -> usize {
-        (size + 7) & !7
-    }
-
     pub unsafe fn write(&mut self, data: &[u8]) -> super::ItemPointer {
-        let size = Self::aligned_size(data.len());
+        let size = data.len();
         assert!(size < BLCKSZ as usize);
         assert!(!self.page_type.is_chained());
 
         let mut current_page = WritablePage::modify(self.index, self.current);
 
         // Don't split data over pages.  (See chain.rs for that.)
-        if current_page.get_free_space() < size {
+        if current_page.get_aligned_free_space() < size {
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
-            if current_page.get_free_space() < size {
+            if current_page.get_aligned_free_space() < size {
                 panic!("Not enough free space on new page");
             }
         }
@@ -99,34 +94,6 @@ mod tests {
             .unwrap()
             .expect("oid was null");
         unsafe { PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid)) }
-    }
-
-    #[pg_test]
-    fn test_aligned_size() {
-        // Test various sizes to verify alignment behavior
-        let test_cases = vec![
-            (0, 0),   // 0 should align to 0
-            (1, 8),   // 1 should align to 8
-            (7, 8),   // 7 should align to 8
-            (8, 8),   // 8 should stay at 8
-            (9, 16),  // 9 should align to 16
-            (15, 16), // 15 should align to 16
-            (16, 16), // 16 should stay at 16
-            (17, 24), // 17 should align to 24
-            (23, 24), // 23 should align to 24
-            (24, 24), // 24 should stay at 24
-        ];
-
-        for (input, expected) in test_cases {
-            assert_eq!(
-                Tape::aligned_size(input),
-                expected,
-                "Size {} should align to {}, but got {}",
-                input,
-                expected,
-                Tape::aligned_size(input)
-            );
-        }
     }
 
     #[pg_test]
@@ -186,7 +153,7 @@ mod tests {
                 );
 
                 let page = WritablePage::modify(tape.index, tape.current);
-                assert_eq!(page.get_free_space(), 8108);
+                assert_eq!(page.get_aligned_free_space(), 8104);
             }
 
             {

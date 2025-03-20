@@ -192,8 +192,15 @@ impl<'a> WritablePage<'a> {
         self.buffer.get_block_number()
     }
 
-    pub fn get_free_space(&self) -> usize {
+    fn get_free_space(&self) -> usize {
         unsafe { pg_sys::PageGetFreeSpace(self.page) }
+    }
+
+    /// The actual free space that can be used to store data.
+    /// See https://github.com/postgres/postgres/blob/0164a0f9ee12e0eff9e4c661358a272ecd65c2d4/src/backend/storage/page/bufpage.c#L304
+    pub fn get_aligned_free_space(&self) -> usize {
+        let free_space = self.get_free_space();
+        free_space - (free_space % 8)
     }
 
     pub fn get_type(&self) -> PageType {
