@@ -68,6 +68,17 @@ The fastest ways to run PostgreSQL with pgvectorscale are:
 
 You can install pgvectorscale from source and install it in an existing PostgreSQL server
 
+> [!WARNING]
+> Building pgvectorscale on macOS X86 (Intel) machines is currently not
+> supported due to an [open issue][macos-x86-issue]. As alternatives, you can:
+>
+> - Use an ARM-based Mac.
+> - Build using Linux.
+> - Use our pre-built Docker containers.
+>
+> We welcome community contributions to resolve this limitation. If you're
+> interested in helping, please check the issue for details.
+
 1. Compile and install the extension
 
     ```bash
@@ -396,3 +407,4 @@ Timescale is a PostgreSQL cloud company. To learn more visit the [timescale.com]
 [pgvector-install]: https://github.com/pgvector/pgvector?tab=readme-ov-file#installation
 [pgvector-iterative-index-scan]: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
 [materialized-cte]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-CTE-MATERIALIZATION
+[macos-x86-issue]: https://github.com/timescale/pgvectorscale/issues/155
