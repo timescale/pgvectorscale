@@ -388,6 +388,15 @@ WITH relaxed_results AS MATERIALIZED (
 ) SELECT * FROM relaxed_results ORDER BY distance;
 ```
 
+## Index on an UNLOGGED table
+
+Creating an index on an UNLOGGED table is currently not supported.
+Trying will yield the error:
+
+```
+ERROR:  ambuildempty: not yet implemented
+```
+
 ## Get involved
 
 pgvectorscale is still at an early stage. Now is a great time to help shape the
@@ -400,7 +409,6 @@ the list, or hop on the Discussions forum.
 Timescale is a PostgreSQL cloud company. To learn more visit the [timescale.com](https://www.timescale.com).
 
 [Timescale Cloud](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch) is a high-performance, developer focused, cloud platform that provides PostgreSQL services for the most demanding AI, time-series, analytics, and event workloads. Timescale Cloud is ideal for production applications and provides high availability, streaming backups, upgrades over time, roles and permissions, and great security.
-
 
 [pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
 [rust-language]: https://www.rust-lang.org/
