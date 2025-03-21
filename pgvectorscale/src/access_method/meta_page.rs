@@ -122,8 +122,8 @@ impl MetaPageV2 {
         let rb = page.get_item_unchecked(META_HEADER_OFFSET);
         let meta = ReadableMetaPageHeader::with_readable_buffer(rb);
         let archived = meta.get_archived_node();
-        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
-        assert!(archived.version == TSV_VERSION);
+        assert_eq!(archived.magic_number, TSV_MAGIC_NUMBER);
+        assert_eq!(archived.version, 2);
 
         let page = meta.get_owned_page();
 
@@ -131,8 +131,8 @@ impl MetaPageV2 {
         let rb = page.get_item_unchecked(META_OFFSET);
         let meta = ReadableMetaPageV2::with_readable_buffer(rb);
         let archived = meta.get_archived_node();
-        assert!(archived.magic_number == TSV_MAGIC_NUMBER);
-        assert!(archived.version == TSV_VERSION);
+        assert_eq!(archived.magic_number, TSV_MAGIC_NUMBER);
+        assert_eq!(archived.version, 2);
 
         archived.deserialize(&mut rkyv::Infallible).unwrap()
     }
