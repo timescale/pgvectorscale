@@ -1,5 +1,5 @@
 use super::{
-    distance::{distance_xor_optimized, DistanceFn},
+    distance::{distance_xor_optimized, distance_and_optimized, DistanceFn},
     graph::{ListSearchNeighbor, ListSearchResult},
     graph_neighbor_store::GraphNeighborStore,
     labels::{LabelSet, LabelSetView, LabeledVector},
@@ -28,6 +28,16 @@ use crate::util::{
     HeapPointer, IndexPointer, ItemPointer, ReadableBuffer, WritableBuffer,
 };
 use pgvectorscale_derive::{Readable, Writeable};
+
+pub type BqDistanceFn = fn(&[u64], &[u64]) -> f32;
+
+fn bq_distance_xor(a: &[u64], b: &[u64]) -> f32 {
+    distance_xor_optimized(a, b) as f32
+}
+
+fn bq_distance_and(a: &[u64], b: &[u64]) -> f32 {
+    distance_and_optimized(a, b) as f32
+}
 
 pub type SbqVectorElement = u64;
 const BITS_STORE_TYPE_SIZE: usize = 64;
@@ -298,13 +308,15 @@ impl SbqQuantizer {
 pub struct SbqSearchDistanceMeasure {
     quantized_vector: Vec<SbqVectorElement>,
     query: LabeledVector,
+    bq_distance_impl: BqDistanceFn,
 }
 
 impl SbqSearchDistanceMeasure {
-    pub fn new(quantizer: &SbqQuantizer, query: LabeledVector) -> SbqSearchDistanceMeasure {
+    pub fn new(quantizer: &SbqQuantizer, query: LabeledVector, bq_distance_impl: BqDistanceFn) -> SbqSearchDistanceMeasure {
         SbqSearchDistanceMeasure {
             quantized_vector: quantizer.quantize(query.vec().to_index_slice()),
             query,
+            bq_distance_impl,
         }
     }
 
@@ -337,11 +349,8 @@ impl SbqSearchDistanceMeasure {
             }
         };
 
-        let count_ones = distance_xor_optimized(a, b);
-        //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
-        //but the distance is 1 - dot product, so the more count_ones the higher the distance.
-        // one other check for distance(a,a), xor=0, count_ones=0, distance=0
-        count_ones as f32
+        let dist = (self.bq_distance_impl)(a, b);
+        dist
     }
 }
 
@@ -373,7 +382,7 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
     ) -> f32 {
         let cache = &mut self.storage.qv_cache.borrow_mut();
         let vec1 = cache.get(index_pointer, self.storage, stats);
-        distance_xor_optimized(vec1, self.vec.as_slice()) as f32
+        (self.storage.bq_distance_impl)(vec1, self.vec.as_slice())
     }
 }
 
@@ -424,6 +433,7 @@ impl QuantizedVectorCache {
 pub struct SbqSpeedupStorage<'a> {
     pub index: &'a PgRelation,
     pub distance_fn: DistanceFn,
+    pub bq_distance_impl: BqDistanceFn,
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
@@ -440,6 +450,11 @@ impl<'a> SbqSpeedupStorage<'a> {
         Self {
             index,
             distance_fn: meta_page.get_distance_function(),
+            bq_distance_impl: if meta_page.get_bq_distance_fn() == "distance_and_optimized" {
+                bq_distance_and
+            } else {
+                bq_distance_xor
+            },
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
@@ -465,6 +480,11 @@ impl<'a> SbqSpeedupStorage<'a> {
         Self {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
+            bq_distance_impl: if meta_page.get_bq_distance_fn() == "distance_and_optimized" {
+                bq_distance_and
+            } else {
+                bq_distance_xor
+            },
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
@@ -483,6 +503,11 @@ impl<'a> SbqSpeedupStorage<'a> {
             index: index_relation,
             distance_fn: meta_page.get_distance_function(),
             //OPT: get rid of clone
+            bq_distance_impl: if meta_page.get_bq_distance_fn() == "distance_and_optimized" {
+                bq_distance_and
+            } else {
+                bq_distance_xor
+            },
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
@@ -695,7 +720,7 @@ impl Storage for SbqSpeedupStorage<'_> {
     }
 
     fn get_query_distance_measure(&self, query: LabeledVector) -> SbqSearchDistanceMeasure {
-        SbqSearchDistanceMeasure::new(&self.quantizer, query)
+        SbqSearchDistanceMeasure::new(&self.quantizer, query, self.bq_distance_impl)
     }
 
     fn get_full_distance_for_resort<S: StatsHeapNodeRead + StatsDistanceComparison>(
@@ -739,7 +764,7 @@ impl Storage for SbqSpeedupStorage<'_> {
             let rn1 = unsafe { SbqNode::read(self.index, n, self.has_labels, stats) };
             let arch = rn1.get_archived_node();
             stats.record_quantized_distance_comparison();
-            let dist = distance_xor_optimized(q, arch.get_bq_vector());
+            let dist = (self.bq_distance_impl)(q, arch.get_bq_vector());
             result.push(NeighborWithDistance::new(
                 n,
                 DistanceWithTieBreak::new(dist as f32, neighbors_of, n),

@@ -257,6 +257,16 @@ macro_rules! xor_arm {
     };
 }
 
+macro_rules! and_arm {
+    ($a: expr, $b: expr, $sz: expr) => {
+        $a[..$sz]
+            .iter()
+            .zip($b[..$sz].iter())
+            .map(|(&l, &r)| (l & r).count_ones() as isize)
+            .sum::<isize>()
+    };
+}
+
 #[inline(always)]
 pub fn distance_xor_optimized(a: &[u64], b: &[u64]) -> usize {
     match a.len() {
@@ -314,6 +324,66 @@ pub fn distance_xor_optimized(a: &[u64], b: &[u64]) -> usize {
             .zip(b.iter())
             .map(|(&l, &r)| (l ^ r).count_ones() as usize)
             .sum(),
+    }
+}
+
+#[inline(always)]
+pub fn distance_and_optimized(a: &[u64], b: &[u64]) -> isize {
+    match a.len() {
+        1 => -and_arm!(a, b, 1),
+        2 => -and_arm!(a, b, 2),
+        3 => -and_arm!(a, b, 3),
+        4 => -and_arm!(a, b, 4),
+        5 => -and_arm!(a, b, 5),
+        6 => -and_arm!(a, b, 6),
+        7 => -and_arm!(a, b, 7),
+        8 => -and_arm!(a, b, 8),
+        9 => -and_arm!(a, b, 9),
+        10 => -and_arm!(a, b, 10),
+        11 => -and_arm!(a, b, 11),
+        12 => -and_arm!(a, b, 12),
+        13 => -and_arm!(a, b, 13),
+        14 => -and_arm!(a, b, 14),
+        15 => -and_arm!(a, b, 15),
+        16 => -and_arm!(a, b, 16),
+        17 => -and_arm!(a, b, 17),
+        18 => -and_arm!(a, b, 18),
+        19 => -and_arm!(a, b, 19),
+        20 => -and_arm!(a, b, 20),
+        21 => -and_arm!(a, b, 21),
+        22 => -and_arm!(a, b, 22),
+        23 => -and_arm!(a, b, 23),
+        24 => -and_arm!(a, b, 24),
+        25 => -and_arm!(a, b, 25),
+        26 => -and_arm!(a, b, 26),
+        27 => -and_arm!(a, b, 27),
+        28 => -and_arm!(a, b, 28),
+        29 => -and_arm!(a, b, 29),
+        30 => -and_arm!(a, b, 30),
+        31 => -and_arm!(a, b, 31),
+        32 => -and_arm!(a, b, 32),
+        33 => -and_arm!(a, b, 33),
+        34 => -and_arm!(a, b, 34),
+        35 => -and_arm!(a, b, 35),
+        36 => -and_arm!(a, b, 36),
+        37 => -and_arm!(a, b, 37),
+        38 => -and_arm!(a, b, 38),
+        39 => -and_arm!(a, b, 39),
+        40 => -and_arm!(a, b, 40),
+        41 => -and_arm!(a, b, 41),
+        42 => -and_arm!(a, b, 42),
+        43 => -and_arm!(a, b, 43),
+        44 => -and_arm!(a, b, 44),
+        45 => -and_arm!(a, b, 45),
+        46 => -and_arm!(a, b, 46),
+        47 => -and_arm!(a, b, 47),
+        48 => -and_arm!(a, b, 48),
+        49 => -and_arm!(a, b, 49),
+        _ => -a
+            .iter()
+            .zip(b.iter())
+            .map(|(&l, &r)| (l & r).count_ones() as isize)
+            .sum::<isize>(),
     }
 }
 

@@ -18,6 +18,7 @@ pub struct TSVIndexOptions {
     pub num_dimensions: u32,
     pub max_alpha: f64,
     pub bq_num_bits_per_dimension: u32,
+    pub bq_distance_fn_offset: i32,
 }
 
 pub const NUM_NEIGHBORS_DEFAULT_SENTINEL: i32 = -1;
@@ -40,6 +41,7 @@ impl TSVIndexOptions {
             ops.max_alpha = DEFAULT_MAX_ALPHA;
             ops.num_dimensions = NUM_DIMENSIONS_DEFAULT_SENTINEL;
             ops.bq_num_bits_per_dimension = SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL;
+            ops.bq_distance_fn_offset = 0;
             unsafe {
                 set_varsize_4b(
                     ops.as_ptr().cast(),
@@ -73,6 +75,10 @@ impl TSVIndexOptions {
         StorageType::from_str(s.as_str())
     }
 
+    pub fn get_bq_distance_fn(&self) -> String {
+        self.get_str(self.bq_distance_fn_offset, || "distance_xor_optimized".to_owned())
+    }
+
     fn get_str<F: FnOnce() -> String>(&self, offset: i32, default: F) -> String {
         if offset == 0 {
             default()
@@ -87,6 +93,18 @@ impl TSVIndexOptions {
 }
 
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind::Type = 0;
+
+unsafe extern "C" fn validate_bq_distance_fn(value: *const std::os::raw::c_char) {
+    if value.is_null() {
+        return;
+    }
+    let value = CStr::from_ptr(value)
+        .to_str()
+        .expect("failed to parse bq_distance_fn value");
+    if value != "distance_xor_optimized" && value != "distance_and_optimized" {
+        panic!("Invalid value for bq_distance_fn, must be either 'distance_xor_optimized' or 'distance_and_optimized'");
+    }
+}
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
 // this is used to fill the rd_options field in the index relation.
@@ -104,7 +122,7 @@ pub unsafe extern "C" fn amoptions(
     validate: bool,
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
-    let tab: [pg_sys::relopt_parse_elt; 6] = [
+    let tab: [pg_sys::relopt_parse_elt; 7] = [
         pg_sys::relopt_parse_elt {
             optname: "storage_layout".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
@@ -134,6 +152,11 @@ pub unsafe extern "C" fn amoptions(
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
+        },
+        pg_sys::relopt_parse_elt {
+            optname: "bq_distance_fn".as_pg_cstr(),
+            opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
+            offset: offset_of!(TSVIndexOptions, bq_distance_fn_offset) as i32,
         },
     ];
 
@@ -235,6 +258,15 @@ pub unsafe fn init() {
         32,
         pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
     );
+
+    pg_sys::add_string_reloption(
+        RELOPT_KIND_TSV,
+        "bq_distance_fn".as_pg_cstr(),
+        "The bq distance function: either distance_xor_optimized or distance_and_optimized".as_pg_cstr(),
+        "distance_xor_optimized".as_pg_cstr(),
+        Some(validate_bq_distance_fn),
+        pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+    );
 }
 
 #[cfg(any(test, feature = "pg_test"))]
@@ -269,6 +301,7 @@ mod tests {
             options.bq_num_bits_per_dimension,
             SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         );
+        assert_eq!(options.get_bq_distance_fn(), "distance_xor_optimized".to_string());
         Ok(())
     }
 
@@ -294,6 +327,7 @@ mod tests {
             options.bq_num_bits_per_dimension,
             SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
         );
+        assert_eq!(options.get_bq_distance_fn(), "distance_xor_optimized".to_string());
         Ok(())
     }
 
@@ -315,6 +349,7 @@ mod tests {
         assert_eq!(options.search_list_size, 100);
         assert_eq!(options.max_alpha, DEFAULT_MAX_ALPHA);
         assert_eq!(options.get_storage_type(), StorageType::Plain);
+        assert_eq!(options.get_bq_distance_fn(), "distance_xor_optimized".to_string());
         Ok(())
     }
 
@@ -339,6 +374,7 @@ mod tests {
             options.bq_num_bits_per_dimension,
             SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL
         );
+        assert_eq!(options.get_bq_distance_fn(), "distance_and_optimized".to_string());
         Ok(())
     }
 
@@ -360,6 +396,7 @@ mod tests {
         assert_eq!(options.get_storage_type(), StorageType::SbqCompression);
         assert_eq!(options.num_dimensions, 20);
         assert_eq!(options.bq_num_bits_per_dimension, 5);
+        assert_eq!(options.get_bq_distance_fn(), "distance_xor_optimized".to_string());
         Ok(())
     }
 }

@@ -75,11 +75,12 @@ pub extern "C" fn ambuild(
     let opt = TSVIndexOptions::from_relation(&index_relation);
 
     notice!(
-        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}.",
+        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}, bq_distance_fn={:?}.",
         opt.get_num_neighbors(),
         opt.search_list_size,
         opt.max_alpha,
         opt.get_storage_type(),
+        opt.get_bq_distance_fn(),
     );
 
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
