@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-# BUGGY CASE 1: 2 labels, 1M scale => recall is 0.4920
+# BUGGY CASE 1: 2 labels, 1M scale => recall is 0.4920.  Works fine at smaller scales.
 cargo run --release --bin bench -- \
     --connection-string postgresql://ubuntu@localhost:5432 \
     test \
@@ -11,7 +11,18 @@ cargo run --release --bin bench -- \
     --num-labels 2 \
     --num-queries 100
 
-# BUGGY CASE 2: no labels, 1k scale => recall is 0.6140
+# BUGGY CASE 2: 2 labels, 1k scale, post-filtering with diskann => recall is 0.7570.  Works fine at smaller scales.
+cargo run --release --bin bench -- \
+    --connection-string postgresql://ubuntu@localhost:5432 \
+    test \
+    --dataset cohere-wikipedia-22-12-1M-angular \
+    --table cohere_wikipedia_22_12_1k_angular_uniform_diskann \
+    --ground-truth-table cohere_wikipedia_22_12_1k_angular_uniform \
+    --max-label 32 \
+    --num-labels 2 \
+    --num-queries 100
+
+# BUGGY CASE 3: no labels, 1k scale => recall is 0.6140.  Works fine at smaller scales.
 ./target/release/bench \
     --connection-string postgresql://ubuntu@localhost:5432 \
     test \
