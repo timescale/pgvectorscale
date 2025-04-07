@@ -212,12 +212,16 @@ enum Commands {
         #[arg(short, long)]
         table: String,
 
+        /// Table name to use for ground truth results (if not specified, uses HDF5 ground truth)
+        #[arg(long)]
+        ground_truth_table: Option<String>,
+
         /// Number of queries to run (0 = all)
         #[arg(short, long, default_value_t = 0)]
         num_queries: usize,
 
         /// Number of nearest neighbors to retrieve
-        #[arg(short, long, default_value_t = 100)]
+        #[arg(short, long, default_value_t = 10)]
         top_k: usize,
 
         /// Distance metric to use for queries
@@ -866,6 +870,7 @@ async fn run_query(
     client: &Client,
     params: &QueryParams,
     verbose: bool,
+    label_predicate: &str,
 ) -> Result<Vec<(i32, f64)>, PgError> {
     // Set session GUCs to ensure the index is used
     let sql = "SET enable_seqscan = OFF";
@@ -933,22 +938,6 @@ async fn run_query(
     // Format the vector for PostgreSQL
     let vector_str = format_vector_for_postgres(&params.query_vector);
 
-    // Generate random labels for the query if enabled
-    let label_predicate = if params.max_label > 0 && params.num_labels > 0 {
-        let labels = generate_random_labels(params.max_label, params.num_labels, params.normal);
-        let labels_str = format!(
-            "{{{}}}",
-            labels
-                .iter()
-                .map(|x| x.to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        format!(" WHERE labels && '{}'", labels_str)
-    } else {
-        String::new()
-    };
-
     // Construct the SQL query with the vector literal directly in the query
     // Include the distance in the result
     let query = format!(
@@ -961,7 +950,7 @@ async fn run_query(
         println!("SQL: {}", query);
     }
 
-    // Run the query
+    // Run the query, plugging in the table name as a $1 parameter
     let rows = client.query(&query, &[]).await?;
 
     let result = rows
@@ -972,6 +961,24 @@ async fn run_query(
     Ok(result)
 }
 
+/// Generate random labels for the query if enabled
+fn construct_label_predicate(params: &QueryParams) -> String {
+    if params.max_label > 0 && params.num_labels > 0 {
+        let labels = generate_random_labels(params.max_label, params.num_labels, params.normal);
+        let labels_str = format!(
+            "{{{}}}",
+            labels
+                .iter()
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        format!(" WHERE labels && '{}'", labels_str)
+    } else {
+        String::new()
+    }
+}
+
 /// Cf. the recall measure `knn` in ann-benchmarks
 fn calculate_recall(
     actual: &[(i32, f64)],
@@ -980,6 +987,9 @@ fn calculate_recall(
     _verbose: bool,
     epsilon: f64,
 ) -> f64 {
+    if expected.is_empty() {
+        return 1.0;
+    }
     let threshold = expected[top_k - 1].1 + epsilon;
     let count = actual
         .iter()
@@ -1481,6 +1491,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             query_dataset,
             neighbors_dataset,
             table,
+            ground_truth_table,
             num_queries,
             top_k,
             distance_metric,
@@ -1611,7 +1622,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let query_start = Instant::now();
 
                 // Create query parameters struct
-                let query_params = QueryParams {
+                let mut query_params = QueryParams {
                     table_name: table.clone(),
                     query_vector: query_vector_slice.to_vec(),
                     top_k,
@@ -1631,28 +1642,48 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     normal: *normal,
                 };
 
-                let result = run_query(&client, &query_params, *verbose).await?;
+                let filter = construct_label_predicate(&query_params);
+                let result = run_query(&client, &query_params, *verbose, &filter).await?;
                 let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
+                if *verbose {
+                    println!("Result: {:?}", result);
+                }
 
                 // Calculate recall for this query
-                let ground_truth_ids_row = ground_truth_ids.row(i);
-                let expected_ids = ground_truth_ids_row.as_slice().unwrap();
-
-                // Create expected results with distances
                 let expected_with_distances: Vec<(i32, f64)> =
-                    if let Some(ref distances) = ground_truth_distances {
-                        // Use distances from the HDF5 file
-                        let distances_row = distances.row(i);
-                        let distances_slice = distances_row.as_slice().unwrap();
-                        expected_ids
-                            .iter()
-                            .zip(distances_slice.iter())
-                            .map(|(&id, &dist)| (id, dist as f64))
-                            .collect()
+                    if let Some(ground_truth_table) = ground_truth_table {
+                        // Run the same query against the ground truth table
+                        query_params.table_name = ground_truth_table.clone();
+                        if *verbose {
+                            println!(
+                                "Running query against ground truth table: {}",
+                                query_params.table_name
+                            );
+                        }
+                        run_query(&client, &query_params, *verbose, &filter).await?
                     } else {
-                        panic!("No distances dataset found in HDF5 file");
+                        let ground_truth_ids_row = ground_truth_ids.row(i);
+                        let expected_ids = ground_truth_ids_row.as_slice().unwrap();
+
+                        // Create expected results with distances
+                        if let Some(ref distances) = ground_truth_distances {
+                            // Use distances from the HDF5 file
+                            let distances_row = distances.row(i);
+                            let distances_slice = distances_row.as_slice().unwrap();
+                            expected_ids
+                                .iter()
+                                .zip(distances_slice.iter())
+                                .map(|(&id, &dist)| (id, dist as f64))
+                                .collect()
+                        } else {
+                            panic!("No distances dataset found in HDF5 file");
+                        }
                     };
+
+                if *verbose {
+                    println!("Expected with distances: {:?}", expected_with_distances);
+                }
 
                 // Use epsilon value of 0.001 (same as ann_benchmarks default)
                 let epsilon = 0.001;
