@@ -184,6 +184,10 @@ enum Commands {
         /// Number of labels per row (0 to disable labels)
         #[arg(long, default_value_t = 0)]
         num_labels: usize,
+
+        /// Use normal distribution for labels instead of uniform
+        #[arg(long, default_value_t = false)]
+        normal: bool,
     },
 
     /// Run test queries and calculate recall
@@ -250,6 +254,10 @@ enum Commands {
         /// Number of labels per row (0 to disable labels)
         #[arg(long, default_value_t = 0)]
         num_labels: usize,
+
+        /// Use normal distribution for labels instead of uniform
+        #[arg(long, default_value_t = false)]
+        normal: bool,
     },
 }
 
@@ -310,6 +318,7 @@ struct QueryParams {
     ivfflat: IvfFlatQueryParams,
     max_label: u16,
     num_labels: usize,
+    normal: bool,
 }
 
 struct QueryStats {
@@ -665,15 +674,38 @@ async fn create_vector_table(
 }
 
 // Add this new function to generate random labels
-fn generate_random_labels(max_label: u16, num_labels: usize) -> Vec<i16> {
+fn generate_random_labels(max_label: u16, num_labels: usize, use_normal: bool) -> Vec<i16> {
     use rand::seq::SliceRandom;
     use rand::thread_rng;
+    use rand_distr::{Distribution, Normal};
 
     let mut rng = thread_rng();
-    let mut labels: Vec<i16> = (0..=max_label).map(|x| x as i16).collect();
-    labels.shuffle(&mut rng);
-    labels.truncate(num_labels);
-    labels
+
+    if use_normal {
+        // Create a normal distribution centered at max_label/2 with standard deviation of max_label/8
+        let mean = max_label as f64 / 2.0;
+        let std_dev = max_label as f64 / 8.0;
+        let normal = Normal::new(mean, std_dev).unwrap();
+
+        let mut labels = Vec::with_capacity(num_labels);
+        for _ in 0..num_labels {
+            let mut value;
+            loop {
+                value = normal.sample(&mut rng).round() as i16;
+                if value >= 0 && value <= max_label as i16 {
+                    break;
+                }
+            }
+            labels.push(value);
+        }
+        labels
+    } else {
+        // Original uniform distribution implementation
+        let mut labels: Vec<i16> = (0..=max_label).map(|x| x as i16).collect();
+        labels.shuffle(&mut rng);
+        labels.truncate(num_labels);
+        labels
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -686,6 +718,7 @@ async fn load_vectors(
     progress_bar: Option<Arc<Mutex<ProgressBar>>>,
     max_label: u16,
     num_labels: usize,
+    normal: bool,
 ) -> Result<(), PgError> {
     // Mark that we have an active transaction
     ACTIVE_TRANSACTIONS.store(true, Ordering::SeqCst);
@@ -757,7 +790,7 @@ async fn load_vectors(
                 buffer.write_all(b"\t").map_err(to_pg_error)?;
 
                 // Generate and format random labels
-                let labels = generate_random_labels(max_label, num_labels);
+                let labels = generate_random_labels(max_label, num_labels, normal);
                 let labels_str = format!(
                     "{{{}}}",
                     labels
@@ -902,7 +935,7 @@ async fn run_query(
 
     // Generate random labels for the query if enabled
     let label_predicate = if params.max_label > 0 && params.num_labels > 0 {
-        let labels = generate_random_labels(params.max_label, params.num_labels);
+        let labels = generate_random_labels(params.max_label, params.num_labels, params.normal);
         let labels_str = format!(
             "{{{}}}",
             labels
@@ -1218,7 +1251,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             table,
             create_table,
             num_vectors,
-            transactions,
+            transactions: _,
             parallel,
             create_index,
             index_type,
@@ -1234,6 +1267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ivfflat_lists,
             max_label,
             num_labels,
+            normal,
         } => {
             // Determine the file path and base table name
             let (file_path, base_table_name) = if let Some(file_path) = file {
@@ -1353,6 +1387,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let pb_clone = progress_bar.clone();
                     let max_label = *max_label;
                     let num_labels = *num_labels;
+                    let normal = *normal;
 
                     let handle = task::spawn(async move {
                         let mut client = connect_to_postgres(&connection_string).await.unwrap();
@@ -1366,43 +1401,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             Some(pb_clone),
                             max_label,
                             num_labels,
+                            normal,
                         )
                         .await
-                        .unwrap();
                     });
 
                     handles.push(handle);
                 }
 
-                // Wait for all tasks to complete
+                // Wait for all parallel loads to complete
                 join_all(handles).await;
-            } else if *transactions > 1 {
-                // Split loading into multiple transactions
-                let vectors_per_transaction = vectors_to_load / *transactions;
-
-                for i in 0..*transactions {
-                    let start_idx = i * vectors_per_transaction;
-                    let end_idx = if i == *transactions - 1 {
-                        vectors_to_load
-                    } else {
-                        (i + 1) * vectors_per_transaction
-                    };
-
-                    load_vectors(
-                        &mut client,
-                        &table_name,
-                        &vectors,
-                        start_idx,
-                        end_idx,
-                        Some(progress_bar.clone()),
-                        *max_label,
-                        *num_labels,
-                    )
-                    .await?;
-                }
             } else {
-                // Single transaction loading
-                let res = load_vectors(
+                // Single connection loading
+                load_vectors(
                     &mut client,
                     &table_name,
                     &vectors,
@@ -1411,12 +1422,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     Some(progress_bar.clone()),
                     *max_label,
                     *num_labels,
+                    *normal,
                 )
-                .await;
-                if res.is_err() {
-                    println!("Error loading vectors: {:?}", res);
-                    res?;
-                }
+                .await?;
             }
 
             let duration = start_time.elapsed();
@@ -1483,6 +1491,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             ivfflat_probes,
             max_label,
             num_labels,
+            normal,
         } => {
             // Determine the file path - either from direct file path or by downloading the dataset
             let file_path: PathBuf = if let Some(file_path) = file {
@@ -1619,6 +1628,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     max_label: *max_label,
                     num_labels: *num_labels,
+                    normal: *normal,
                 };
 
                 let result = run_query(&client, &query_params, *verbose).await?;
