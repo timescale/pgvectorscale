@@ -1,4 +1,3 @@
-
 <p></p>
 <div align=center>
 
@@ -13,6 +12,7 @@
 pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations for pgvector data:
 - A new index type called StreamingDiskANN, inspired by the [DiskANN](https://github.com/microsoft/DiskANN) algorithm, based on research from Microsoft.
 - Statistical Binary Quantization: developed by Timescale researchers, This compression method improves on standard Binary Quantization.
+- Label-based filtered vector search: based on Microsoft's Filtered DiskANN research, this allows you to combine vector similarity search with label filtering for more precise and efficient results.
 
 On a benchmark dataset of 50 million Cohere embeddings with 768 dimensions
 each, PostgreSQL with `pgvector` and `pgvectorscale` achieves **28x lower p95
@@ -68,20 +68,31 @@ The fastest ways to run PostgreSQL with pgvectorscale are:
 
 You can install pgvectorscale from source and install it in an existing PostgreSQL server
 
+> [!WARNING]
+> Building pgvectorscale on macOS X86 (Intel) machines is currently not
+> supported due to an [open issue][macos-x86-issue]. As alternatives, you can:
+>
+> - Use an ARM-based Mac.
+> - Build using Linux.
+> - Use our pre-built Docker containers.
+>
+> We welcome community contributions to resolve this limitation. If you're
+> interested in helping, please check the issue for details.
+
 1. Compile and install the extension
 
     ```bash
-    # install prerequisites
-    ## rust
+    # install rust
     curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-    ## cargo-pgrx with the same version as pgrx
-    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
-    cargo pgrx init --pg17 pg_config
 
-    #download, build and install pgvectorscale
+    # download pgvectorscale
     cd /tmp
     git clone --branch <version> https://github.com/timescale/pgvectorscale
     cd pgvectorscale/pgvectorscale
+    # install cargo-pgrx with the same version as pgrx
+    cargo install --locked cargo-pgrx --version $(cargo metadata --format-version 1 | jq -r '.packages[] | select(.name == "pgrx") | .version')
+    cargo pgrx init --pg17 pg_config
+    # build and install pgvectorscale
     cargo pgrx install --release
     ```
 
@@ -165,11 +176,133 @@ To enable pgvectorscale:
     SELECT *
     FROM document_embedding
     ORDER BY embedding <=> $1
-    LIMIT 10
+    LIMIT 10;
     ```
 
     Note: pgvectorscale currently supports: cosine distance (`<=>`) queries, for indices created with `vector_cosine_ops`; L2 distance (`<->`) queries, for indices created with `vector_l2_ops`; and inner product (`<#>`) queries, for indices created with `vector_ip_ops`.  This is the same syntax used by `pgvector`.  If you would like additional distance types,
     [create an issue](https://github.com/timescale/pgvectorscale/issues).  (Note: inner product indices are not compatible with plain storage.)
+
+## Filtered Vector Search
+
+pgvectorscale supports combining vector similarity search with metadata filtering. There are two basic kinds of filtering, which can be combined in a single query:
+
+1. **Label-based filtering with the diskann index**: This provides optimized performance for filtering by labels.
+2. **Arbitrary WHERE clause filtering**: This uses post-filtering after the vector search.
+
+The label-based filtering implementation is based on the [Filtered DiskANN](https://dl.acm.org/doi/10.1145/3543507.3583552) approach developed by Microsoft researchers, which enables efficient filtered vector search while maintaining high recall.
+
+The post-filtering implementation, while slower, is streaming and correct, ensuring accurate results without requiring the entire result set to be loaded into memory.
+
+### Label-based Filtering with diskann
+
+For optimal performance with label filtering, you must specify the label column directly in the index creation:
+
+1. Create a table with an embedding column and a labels array:
+
+    ```postgresql
+    CREATE TABLE documents (
+        id SERIAL PRIMARY KEY,
+        embedding VECTOR(1536),
+        labels SMALLINT[],  -- Array of category labels
+        status TEXT,
+        created_at TIMESTAMPTZ
+    );
+    ```
+
+2. Create a StreamingDiskANN index on the embedding column, including the labels column:
+
+    ```postgresql
+    CREATE INDEX ON documents USING diskann (embedding vector_cosine_ops, labels);
+    ```
+
+> **Note**: Label values must be within the PostgreSQL `smallint` range (-32768 to 32767). Using `smallint[]` for labels ensures that PostgreSQL's type system will automatically enforce these bounds.
+> 
+> pgvectorscale includes an implementation of the `&&` overlap operator for `smallint[]` arrays, which is used for efficient label-based filtering.
+
+3. Perform label-filtered vector searches using the `&&` operator (array overlap):
+
+    ```postgresql
+    -- Find similar documents with specific labels
+    SELECT * FROM documents
+    WHERE labels && ARRAY[1, 3]  -- Documents with label 1 OR 3
+    ORDER BY embedding <=> '[...]'
+    LIMIT 10;
+    ```
+
+    The index directly supports this type of filtering, providing significantly lower latency results compared to post-filtering.
+
+#### Giving Semantic Meaning to Labels
+
+While the labels must be stored as integers in the array for the index to work efficiently, you can give them semantic meaning by relating them to a separate labels table:
+
+1. Create a labels table with meaningful descriptions:
+
+    ```postgresql
+    CREATE TABLE label_definitions (
+        id INTEGER PRIMARY KEY,
+        name TEXT,
+        description TEXT,
+        attributes JSONB  -- Can store additional metadata about the label
+    );
+
+    -- Insert some label definitions
+    INSERT INTO label_definitions (id, name, description, attributes) VALUES
+    (1, 'science', 'Scientific content', '{"domain": "academic", "confidence": 0.95}'),
+    (2, 'technology', 'Technology-related content', '{"domain": "technical", "confidence": 0.92}'),
+    (3, 'business', 'Business and finance content', '{"domain": "commercial", "confidence": 0.88}');
+    ```
+
+2. When inserting documents, use the appropriate label IDs:
+
+    ```postgresql
+    -- Insert a document with science and technology labels
+    INSERT INTO documents (embedding, labels)
+    VALUES ('[...]', ARRAY[1, 2]);
+    ```
+
+3. When querying, you can join with the labels table to work with meaningful names:
+
+    ```postgresql
+    -- Find similar science documents and include label information
+    SELECT d.*, array_agg(l.name) as label_names
+    FROM documents d
+    JOIN label_definitions l ON l.id = ANY(d.labels)
+    WHERE d.labels && ARRAY[1]  -- Science label
+    GROUP BY d.id, d.embedding, d.labels, d.status, d.created_at
+    ORDER BY d.embedding <=> '[...]'
+    LIMIT 10;
+    ```
+
+4. You can also convert between label names and IDs when filtering:
+
+    ```postgresql
+    -- Find documents with specific label names
+    SELECT d.*
+    FROM documents d
+    WHERE d.labels && (
+        SELECT array_agg(id)
+        FROM label_definitions
+        WHERE name IN ('science', 'business')
+    )
+    ORDER BY d.embedding <=> '[...]'
+    LIMIT 10;
+    ```
+
+This approach gives you the performance benefits of integer-based label filtering while still allowing you to work with semantically meaningful labels in your application.
+
+### Arbitrary WHERE Clause Filtering
+
+You can also use any PostgreSQL WHERE clause with vector search, but these conditions will be applied as post-filtering:
+
+```postgresql
+-- Find similar documents with specific status and date range
+SELECT * FROM documents
+WHERE status = 'active' AND created_at > '2024-01-01'
+ORDER BY embedding <=> '[...]'
+LIMIT 10;
+```
+
+For these arbitrary conditions, the vector search happens first, and then the WHERE conditions are applied to the results. For best performance with frequently used filters, consider using the label-based approach described above.
 
 ## Tuning
 
@@ -197,6 +330,13 @@ An example of how to set the `num_neighbors` parameter is:
 ```sql
 CREATE INDEX document_embedding_idx ON document_embedding
 USING diskann (embedding) WITH(num_neighbors=50);
+```
+
+An example of creating an index with label-based filtering:
+
+```sql
+CREATE INDEX document_embedding_idx ON document_embedding
+USING diskann (embedding vector_cosine_ops, labels);
 ```
 
 #### StreamingDiskANN query-time parameters
@@ -254,6 +394,40 @@ SELECT * FROM document_embedding ORDER BY embedding <=> $1 LIMIT 10
 COMMIT;
 ```
 
+## Null Value Handling
+
+* Null vectors are not indexed
+* Null labels are treated as empty arrays
+* Null values in label arrays are ignored
+
+## ORDER BY vector distance
+
+pgvectorscale's diskann index uses relaxed ordering which allows results to be
+slightly out of order by distance. This is analogous to using
+[`iterative scan with relaxed ordering`][pgvector-iterative-index-scan] with
+pgvector's ivfflat or hnsw indexes.
+
+If you need strict ordering you can use a [materialized CTE][materialized-cte]:
+
+```sql
+WITH relaxed_results AS MATERIALIZED (
+    SELECT id, embedding <=> '[1,2,3]' AS distance
+    FROM items
+    WHERE category_id = 123
+    ORDER BY distance
+    LIMIT 5
+) SELECT * FROM relaxed_results ORDER BY distance;
+```
+
+## Index on an UNLOGGED table
+
+Creating an index on an UNLOGGED table is currently not supported.
+Trying will yield the error:
+
+```
+ERROR:  ambuildempty: not yet implemented
+```
+
 ## Get involved
 
 pgvectorscale is still at an early stage. Now is a great time to help shape the
@@ -267,7 +441,9 @@ Timescale is a PostgreSQL cloud company. To learn more visit the [timescale.com]
 
 [Timescale Cloud](https://console.cloud.timescale.com/signup?utm_campaign=vectorlaunch) is a high-performance, developer focused, cloud platform that provides PostgreSQL services for the most demanding AI, time-series, analytics, and event workloads. Timescale Cloud is ideal for production applications and provides high availability, streaming backups, upgrades over time, roles and permissions, and great security.
 
-
 [pgvector]: https://github.com/pgvector/pgvector/blob/master/README.md
 [rust-language]: https://www.rust-lang.org/
 [pgvector-install]: https://github.com/pgvector/pgvector?tab=readme-ov-file#installation
+[pgvector-iterative-index-scan]: https://github.com/pgvector/pgvector?tab=readme-ov-file#iterative-index-scans
+[materialized-cte]: https://www.postgresql.org/docs/current/queries-with.html#QUERIES-WITH-CTE-MATERIALIZATION
+[macos-x86-issue]: https://github.com/timescale/pgvectorscale/issues/155

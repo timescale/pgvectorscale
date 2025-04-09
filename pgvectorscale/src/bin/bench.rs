@@ -987,6 +987,7 @@ fn calculate_recall(
     _verbose: bool,
     epsilon: f64,
 ) -> f64 {
+    assert_eq!(expected.len(), top_k);
     if expected.is_empty() {
         return 1.0;
     }

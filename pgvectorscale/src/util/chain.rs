@@ -31,10 +31,6 @@ struct ChainItemHeader {
 
 const CHAIN_ITEM_HEADER_SIZE: usize = std::mem::size_of::<ArchivedChainItemHeader>();
 
-// Empirically-measured slop factor for how much `pg_sys::PageGetFreeSpace` can
-// overestimate the free space in a page in our usage patterns.
-const PG_SLOP_SIZE: usize = 4;
-
 pub struct ChainTapeWriter<'a, S: StatsNodeWrite> {
     page_type: PageType,
     index: &'a PgRelation,
@@ -57,12 +53,31 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         }
     }
 
+    pub fn reinit(
+        index: &'a PgRelation,
+        page_type: PageType,
+        stats: &'a mut S,
+        block_number: BlockNumber,
+    ) -> Self {
+        assert!(page_type.is_chained());
+        let mut page = WritablePage::modify(index, block_number);
+        page.reinit(page_type);
+        page.commit();
+
+        Self {
+            page_type,
+            index,
+            current: block_number,
+            stats,
+        }
+    }
+
     /// Write chained data to the tape, returning an `ItemPointer` to the start of the data.
     pub fn write(&mut self, mut data: &[u8]) -> super::ItemPointer {
         let mut current_page = WritablePage::modify(self.index, self.current);
 
         // If there isn't enough space for the header plus some data, start a new page.
-        if current_page.get_free_space() < CHAIN_ITEM_HEADER_SIZE + PG_SLOP_SIZE + 1 {
+        if current_page.get_aligned_free_space() < CHAIN_ITEM_HEADER_SIZE + 1 {
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
         }
@@ -71,13 +86,13 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         let mut result: Option<super::ItemPointer> = None;
 
         // Write the data in chunks, creating new pages as needed.
-        while CHAIN_ITEM_HEADER_SIZE + data.len() + PG_SLOP_SIZE > current_page.get_free_space() {
+        while CHAIN_ITEM_HEADER_SIZE + data.len() > current_page.get_aligned_free_space() {
             let next_page = WritablePage::new(self.index, self.page_type);
             let header = ChainItemHeader {
                 next: ItemPointer::new(next_page.get_block_number(), 1),
             };
             let header_bytes = rkyv::to_bytes::<_, 256>(&header).unwrap();
-            let data_size = current_page.get_free_space() - PG_SLOP_SIZE - CHAIN_ITEM_HEADER_SIZE;
+            let data_size = current_page.get_aligned_free_space() - CHAIN_ITEM_HEADER_SIZE;
             let chunk = &data[..data_size];
             let combined = [header_bytes.as_slice(), chunk].concat();
             let offset_number = current_page.add_item(combined.as_ref());

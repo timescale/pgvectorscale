@@ -55,10 +55,10 @@ impl<'a> Tape<'a> {
         let mut current_page = WritablePage::modify(self.index, self.current);
 
         // Don't split data over pages.  (See chain.rs for that.)
-        if current_page.get_free_space() < size {
+        if current_page.get_aligned_free_space() < size {
             current_page = WritablePage::new(self.index, self.page_type);
             self.current = current_page.get_block_number();
-            if current_page.get_free_space() < size {
+            if current_page.get_aligned_free_space() < size {
                 panic!("Not enough free space on new page");
             }
         }
@@ -153,7 +153,7 @@ mod tests {
                 );
 
                 let page = WritablePage::modify(tape.index, tape.current);
-                assert_eq!(page.get_free_space(), 8108);
+                assert_eq!(page.get_aligned_free_space(), 8104);
             }
 
             {

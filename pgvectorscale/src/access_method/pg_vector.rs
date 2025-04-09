@@ -22,6 +22,7 @@ impl PgVectorInternal {
     }
 }
 
+#[derive(Debug)]
 pub struct PgVector {
     index_distance: Option<*mut PgVectorInternal>,
     index_distance_needs_pfree: bool,

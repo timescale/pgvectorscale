@@ -32,8 +32,9 @@ pub enum PageType {
     PqQuantizerVector = 3,
     SbqMeansV1 = 4,
     SbqNode = 5,
-    Meta = 6,
+    MetaV2 = 6,
     SbqMeans = 7,
+    Meta = 8,
 }
 
 impl PageType {
@@ -45,8 +46,9 @@ impl PageType {
             3 => PageType::PqQuantizerVector,
             4 => PageType::SbqMeansV1,
             5 => PageType::SbqNode,
-            6 => PageType::Meta,
+            6 => PageType::MetaV2,
             7 => PageType::SbqMeans,
+            8 => PageType::Meta,
             _ => panic!("Unknown PageType number {}", value),
         }
     }
@@ -55,7 +57,7 @@ impl PageType {
     /// This is not supported for all page types.  Note that `Tape` requires
     /// that the page type not be chained.
     pub fn is_chained(self) -> bool {
-        matches!(self, PageType::SbqMeans)
+        matches!(self, PageType::SbqMeans) || matches!(self, PageType::Meta)
     }
 }
 
@@ -190,8 +192,15 @@ impl<'a> WritablePage<'a> {
         self.buffer.get_block_number()
     }
 
-    pub fn get_free_space(&self) -> usize {
+    fn get_free_space(&self) -> usize {
         unsafe { pg_sys::PageGetFreeSpace(self.page) }
+    }
+
+    /// The actual free space that can be used to store data.
+    /// See https://github.com/postgres/postgres/blob/0164a0f9ee12e0eff9e4c661358a272ecd65c2d4/src/backend/storage/page/bufpage.c#L304
+    pub fn get_aligned_free_space(&self) -> usize {
+        let free_space = self.get_free_space();
+        free_space - (free_space % 8)
     }
 
     pub fn get_type(&self) -> PageType {

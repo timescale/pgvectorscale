@@ -41,6 +41,28 @@ impl ArchivedItemPointer {
     }
 }
 
+impl PartialEq for ArchivedItemPointer {
+    fn eq(&self, other: &Self) -> bool {
+        self.block_number == other.block_number && self.offset == other.offset
+    }
+}
+
+impl Eq for ArchivedItemPointer {}
+
+impl PartialOrd for ArchivedItemPointer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ArchivedItemPointer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.block_number
+            .cmp(&other.block_number)
+            .then_with(|| self.offset.cmp(&other.offset))
+    }
+}
+
 pub struct ReadableBuffer<'a> {
     _page: ReadablePage<'a>,
     len: usize,
@@ -48,7 +70,7 @@ pub struct ReadableBuffer<'a> {
 }
 
 impl<'a> ReadableBuffer<'a> {
-    pub fn get_data_slice(&self) -> &[u8] {
+    pub fn get_data_slice(&self) -> &'a [u8] {
         unsafe { std::slice::from_raw_parts(self.ptr, self.len) }
     }
 
@@ -73,8 +95,8 @@ pub struct WritableBuffer<'a> {
     ptr: *mut u8,
 }
 
-impl WritableBuffer<'_> {
-    pub fn get_data_slice(&mut self) -> &mut [u8] {
+impl<'a> WritableBuffer<'a> {
+    pub fn get_data_slice(&mut self) -> &'a mut [u8] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 

@@ -6,6 +6,6 @@ runs:
     - name: Install Linux Dependencies
       shell: bash
       run: |
-        sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)"
+        sudo bash -c "$(wget -O - https://apt.llvm.org/llvm.sh)" -- 18
         sudo apt-get update
         sudo apt-get install -y flex bison lcov systemd-coredump gdb libblas-dev libipc-run-perl libtest-most-perl clang-18 llvm-18 llvm-18-dev llvm-18-runtime llvm-18-tools libopenblas-dev libhdf5-serial-dev

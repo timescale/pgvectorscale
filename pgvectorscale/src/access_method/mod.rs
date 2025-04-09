@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use pgrx::*;
 mod build;
 mod cost_estimate;
@@ -5,6 +7,8 @@ mod debugging;
 mod graph;
 mod graph_neighbor_store;
 pub mod guc;
+mod label_filtering_tests;
+mod labels;
 mod meta_page;
 mod neighbor_with_distance;
 mod node;
@@ -15,6 +19,7 @@ mod plain_storage;
 mod sbq;
 mod sbq_node;
 mod scan;
+mod start_nodes;
 pub mod stats;
 mod storage;
 mod storage_common;
@@ -59,7 +64,7 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
     amroutine.amcanorderbyop = true;
     amroutine.amcanbackward = false; /* can change direction mid-scan */
     amroutine.amcanunique = false;
-    amroutine.amcanmulticol = false;
+    amroutine.amcanmulticol = true;
     amroutine.amoptionalkey = true;
     amroutine.amsearcharray = false;
     amroutine.amsearchnulls = false;
@@ -171,6 +176,7 @@ DECLARE
   have_cos_ops int;
   have_l2_ops int;
   have_ip_ops int;
+  have_label_ops int;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -193,6 +199,14 @@ BEGIN
     INTO have_ip_ops
     FROM pg_catalog.pg_opclass c
     WHERE c.opcname = 'vector_ip_ops'
+    AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
+    AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
+    
+    -- Has label-filtering support been installed previously?
+    SELECT count(*)
+    INTO have_label_ops
+    FROM pg_catalog.pg_opclass c
+    WHERE c.opcname = 'vector_smallint_label_ops'
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
@@ -223,6 +237,36 @@ BEGIN
             OPERATOR 1 <#> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_inner_product();
     END IF;
+    
+    -- First, check if the && operator exists for smallint[]
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_operator 
+        WHERE oprname = '&&' 
+        AND oprleft = 'smallint[]'::regtype 
+        AND oprright = 'smallint[]'::regtype
+    ) THEN
+        -- Create the && operator for smallint[]
+        CREATE OPERATOR && (
+            LEFTARG = smallint[],
+            RIGHTARG = smallint[],
+            PROCEDURE = smallint_array_overlap,
+            COMMUTATOR = &&,
+            RESTRICT = contsel,
+            JOIN = contjoinsel
+        );
+        
+        -- Register the operator with the system catalogs for proper selectivity estimation
+        -- This is done by adding entries to pg_amop for the array_ops operator class
+        EXECUTE format(
+            'ALTER OPERATOR FAMILY array_ops USING btree ADD OPERATOR 3 && (smallint[], smallint[]) FOR SEARCH'
+        );
+    END IF;
+
+    IF have_label_ops = 0 THEN
+        CREATE OPERATOR CLASS vector_smallint_label_ops
+        DEFAULT FOR TYPE smallint[] USING diskann AS
+            OPERATOR 1 &&;
+    END IF;
 END;
 $$;
 "#,
@@ -231,11 +275,129 @@ $$;
         amhandler,
         distance_type_cosine,
         distance_type_l2,
-        distance_type_inner_product
+        distance_type_inner_product,
+        smallint_array_overlap
     ]
 );
 
 #[pg_guard]
 pub extern "C" fn amvalidate(_opclassoid: pg_sys::Oid) -> bool {
     true
+}
+
+/// Implementation of the array overlap operator (&&) for smallint arrays
+/// This function checks if two smallint arrays have at least one element in common
+#[pg_extern(immutable, parallel_safe)]
+pub fn smallint_array_overlap(left: Array<i16>, right: Array<i16>) -> bool {
+    // Early return for empty arrays
+    if left.is_empty() || right.is_empty() {
+        return false;
+    }
+
+    // If the arrays are small, use a simple quadratic search
+    if left.len() <= 10 && right.len() <= 10 {
+        for a in left.iter() {
+            for b in right.iter() {
+                if a.is_some() && b.is_some() && a.unwrap() == b.unwrap() {
+                    return true;
+                }
+            }
+        }
+    } else {
+        // Use a hash set to check if there are any elements in common
+        let mut left_set = HashSet::new();
+        for a in left.into_iter().flatten() {
+            if !left_set.contains(&a) {
+                left_set.insert(a);
+            }
+        }
+
+        for b in right.into_iter().flatten() {
+            if left_set.contains(&b) {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use super::*;
+
+    #[pg_test]
+    fn test_empty_overlap() -> spi::Result<()> {
+        // Test overlap with arrays containing only NULL values
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[NULL, NULL, NULL]::smallint[] && ARRAY[NULL, NULL, NULL]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(!result);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn test_simple_overlap() -> spi::Result<()> {
+        // Test simple overlap case with unsorted arrays
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[3, 1, 2]::smallint[] && ARRAY[6, 2, 4]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn test_no_overlap() -> spi::Result<()> {
+        // Test no overlap with unsorted arrays
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[3, 1, 2]::smallint[] && ARRAY[8, 4, 6]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(!result);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn test_repeated_overlap() -> spi::Result<()> {
+        // Test overlap with repeated elements and unsorted arrays
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[2, 1, 3, 2]::smallint[] && ARRAY[6, 4, 2]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn test_overlap_with_larger_arrays() -> spi::Result<()> {
+        // Test overlap with larger unsorted arrays (triggering the hash set path)
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[19, 3, 2, 15, 7, 1, 14, 10, 11, 8, 13, 12, 9, 16, 17, 18, 2]::smallint[] && 
+                    ARRAY[8, 6, 2, 4, 7]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(result);
+        Ok(())
+    }
+
+    #[pg_test]
+    fn test_no_overlap_with_larger_arrays() -> spi::Result<()> {
+        // Test no overlap with larger unsorted arrays (triggering the hash set path)
+        let result = Spi::get_one::<bool>(
+            "SELECT ARRAY[33, 2, 30, 5, 10, 20, 23, 24, 25, 26, 27, 28, 29, 1, 31, 32, 3]::smallint[] && 
+                    ARRAY[9, 4, 8, 6]::smallint[];",
+        )?
+        .expect("result was null");
+
+        assert!(!result);
+        Ok(())
+    }
 }

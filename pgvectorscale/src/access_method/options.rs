@@ -86,7 +86,6 @@ impl TSVIndexOptions {
     }
 }
 
-const NUM_REL_OPTS: usize = 6;
 static mut RELOPT_KIND_TSV: pg_sys::relopt_kind::Type = 0;
 
 // amoptions is a function that gets a datum of text[] data from pg_class.reloptions (which contains text in the format "key=value") and returns a bytea for the struct for the parsed options.
@@ -105,7 +104,7 @@ pub unsafe extern "C" fn amoptions(
     validate: bool,
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
-    let tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS] = [
+    let tab: [pg_sys::relopt_parse_elt; 6] = [
         pg_sys::relopt_parse_elt {
             optname: "storage_layout".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
@@ -138,13 +137,13 @@ pub unsafe extern "C" fn amoptions(
         },
     ];
 
-    build_relopts(reloptions, validate, tab)
+    build_relopts(reloptions, validate, &tab)
 }
 
 unsafe fn build_relopts(
     reloptions: pg_sys::Datum,
     validate: bool,
-    tab: [pg_sys::relopt_parse_elt; NUM_REL_OPTS],
+    tab: &[pg_sys::relopt_parse_elt],
 ) -> *mut pg_sys::bytea {
     /* Parse the user-given reloptions */
     let rdopts = pg_sys::build_reloptions(
@@ -153,7 +152,7 @@ unsafe fn build_relopts(
         RELOPT_KIND_TSV,
         std::mem::size_of::<TSVIndexOptions>(),
         tab.as_ptr(),
-        NUM_REL_OPTS as i32,
+        tab.len() as i32,
     );
 
     rdopts as *mut pg_sys::bytea

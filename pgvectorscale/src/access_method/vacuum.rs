@@ -4,7 +4,13 @@ use pgrx::{
 };
 
 use crate::{
-    access_method::{meta_page::MetaPage, plain_storage::PlainStorage, sbq::SbqSpeedupStorage},
+    access_method::{
+        meta_page::MetaPage,
+        plain_node::ArchivedPlainNode,
+        plain_storage::PlainStorage,
+        sbq::SbqSpeedupStorage,
+        sbq_node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
+    },
     util::{
         page::WritablePage,
         ports::{PageGetItem, PageGetItemId, PageGetMaxOffsetNumber},
@@ -12,9 +18,7 @@ use crate::{
     },
 };
 
-use crate::access_method::storage::ArchivedData;
-
-use super::storage::{Storage, StorageType};
+use super::storage::{NodeVacuum, Storage, StorageType};
 
 #[pg_guard]
 pub extern "C" fn ambulkdelete(
@@ -40,17 +44,28 @@ pub extern "C" fn ambulkdelete(
     let meta_page = MetaPage::fetch(&index_relation);
     let storage = meta_page.get_storage_type();
     match storage {
-        StorageType::SbqCompression => {
-            bulk_delete_for_storage::<SbqSpeedupStorage>(
-                &index_relation,
-                nblocks,
-                results,
-                callback,
-                callback_state,
-            );
-        }
+        StorageType::SbqCompression => match meta_page.has_labels() {
+            true => {
+                bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedLabeledSbqNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+            false => {
+                bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedClassicSbqNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+        },
         StorageType::Plain => {
-            bulk_delete_for_storage::<PlainStorage>(
+            bulk_delete_for_storage::<PlainStorage, ArchivedPlainNode>(
                 &index_relation,
                 nblocks,
                 results,
@@ -62,7 +77,7 @@ pub extern "C" fn ambulkdelete(
     results
 }
 
-fn bulk_delete_for_storage<S: Storage>(
+fn bulk_delete_for_storage<S: Storage, N: NodeVacuum>(
     index: &PgRelation,
     nblocks: u32,
     results: *mut IndexBulkDeleteResult,
@@ -85,7 +100,7 @@ fn bulk_delete_for_storage<S: Storage>(
                 let item = PageGetItem(*page, item_id) as *mut u8;
                 let len = (*item_id).lp_len();
                 let data = std::slice::from_raw_parts_mut(item, len as _);
-                let node = S::ArchivedType::with_data(data);
+                let node = N::with_data(data);
 
                 if node.is_deleted() {
                     continue;
@@ -99,7 +114,7 @@ fn bulk_delete_for_storage<S: Storage>(
 
                 let deleted = callback.unwrap()(&mut ctid, callback_state);
                 if deleted {
-                    node.delete();
+                    N::delete(node);
                     modified = true;
                     (*results).tuples_removed += 1.0;
                 } else {
@@ -148,6 +163,7 @@ pub mod tests {
         //do not run this test in parallel. (pgrx tests run in a txn rolled back after each test, but we do not have that luxury here).
 
         use rand::Rng;
+        // Force unlock the mutex if it's poisoned from a previous test
         let _lock = VAC_PLAIN_MUTEX.lock().unwrap();
 
         //we need to run vacuum in this test which cannot be run from SPI.
@@ -254,6 +270,7 @@ pub mod tests {
     #[cfg(test)]
     pub fn test_delete_vacuum_full_scaffold(index_options: &str) {
         //do not run this test in parallel
+        // Force unlock the mutex if it's poisoned from a previous test
         let _lock = VAC_FULL_MUTEX.lock().unwrap();
 
         //we need to run vacuum in this test which cannot be run from SPI.
@@ -353,6 +370,7 @@ pub mod tests {
     #[cfg(test)]
     pub fn test_update_with_null_scaffold(index_options: &str) {
         //do not run this test in parallel
+        // Force unlock the mutex if it's poisoned from a previous test
         let _lock = VAC_FULL_MUTEX.lock().unwrap();
         let expected_cnt = 1000;
 
