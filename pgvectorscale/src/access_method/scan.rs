@@ -236,11 +236,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             return self.next(storage);
         }
 
-        while self.resort_buffer.len() < 2
-            || self.streaming_stats.count < 2
-            || (self.streaming_stats.max_distance - self.resort_buffer.peek().unwrap().distance)
-                < self.streaming_stats.variance().sqrt() * (self.resort_size as f32 / 100.0)
-        {
+        while self.resort_buffer.len() < self.resort_size {
             match self.next(storage) {
                 Some((heap_pointer, index_pointer)) => {
                     self.full_distance_comparisons += 1;
