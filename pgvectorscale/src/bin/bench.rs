@@ -983,20 +983,26 @@ fn construct_label_predicate(params: &QueryParams) -> String {
 fn calculate_recall(
     actual: &[(i32, f64)],
     expected: &[(i32, f64)],
-    top_k: usize,
-    _verbose: bool,
+    verbose: bool,
     epsilon: f64,
 ) -> f64 {
-    assert_eq!(expected.len(), top_k);
     if expected.is_empty() {
         return 1.0;
     }
-    let threshold = expected[top_k - 1].1 + epsilon;
+    let threshold = expected[expected.len() - 1].1 + epsilon;
     let count = actual
         .iter()
         .filter(|&&(_, distance)| distance <= threshold)
         .count();
-    count as f64 / top_k as f64
+    if verbose {
+        println!(
+            "count={}, actual.len()={}, expected.len()={}",
+            count,
+            actual.len(),
+            expected.len()
+        );
+    }
+    count as f64 / expected.len() as f64
 }
 
 /// Get the list of available datasets from ann-benchmarks
@@ -1688,8 +1694,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Use epsilon value of 0.001 (same as ann_benchmarks default)
                 let epsilon = 0.001;
-                let recall =
-                    calculate_recall(&result, &expected_with_distances, top_k, *verbose, epsilon);
+                let recall = calculate_recall(&result, &expected_with_distances, *verbose, epsilon);
                 total_recall += recall;
                 recall_values.push(recall);
 
