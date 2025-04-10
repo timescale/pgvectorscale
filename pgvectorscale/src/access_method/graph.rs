@@ -278,6 +278,7 @@ impl<'a> Graph<'a> {
         &self,
         index_pointer: IndexPointer,
         query: LabeledVector,
+        no_filter: bool,
         storage: &S,
         stats: &mut GreedySearchStats,
     ) -> HashSet<NeighborWithDistance> {
@@ -286,7 +287,13 @@ impl<'a> Graph<'a> {
             //no nodes in the graph
             return HashSet::with_capacity(0);
         }
-        let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
+
+        let start_nodes = if no_filter {
+            start_nodes.unwrap().get_for_node(None)
+        } else {
+            start_nodes.unwrap().get_for_node(query.labels())
+        };
+
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
         let mut l = ListSearchResult::new(
@@ -299,7 +306,13 @@ impl<'a> Graph<'a> {
             storage,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
-        self.greedy_search_iterate(&mut l, search_list_size, Some(&mut visited_nodes), storage);
+        self.greedy_search_iterate(
+            &mut l,
+            search_list_size,
+            no_filter,
+            Some(&mut visited_nodes),
+            storage,
+        );
         stats.combine(&l.stats);
         visited_nodes
     }
@@ -321,13 +334,13 @@ impl<'a> Graph<'a> {
         let dm = storage.get_query_distance_measure(query);
 
         // check graph consistency
-        let reachable = self.debug_count_reachable_nodes(storage, &mut InsertStats::new());
-        if reachable != 1000 {
-            pgrx::error!(
-                "Graph is inconsistent, only {} nodes are reachable",
-                reachable
-            );
-        }
+        // let reachable = self.debug_count_reachable_nodes(storage, &mut InsertStats::new());
+        // if reachable != 1000 {
+        //     pgrx::error!(
+        //         "Graph is inconsistent, only {} nodes are reachable",
+        //         reachable
+        //     );
+        // }
 
         ListSearchResult::new(
             start_nodes,
@@ -345,6 +358,7 @@ impl<'a> Graph<'a> {
         &self,
         lsr: &mut ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
         visit_n_closest: usize,
+        no_filter: bool,
         mut visited_nodes: Option<&mut HashSet<NeighborWithDistance>>,
         storage: &S,
     ) {
@@ -361,7 +375,7 @@ impl<'a> Graph<'a> {
                 }
             }
             lsr.stats.record_visit();
-            storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store);
+            storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store, no_filter);
         }
     }
 
@@ -620,17 +634,36 @@ digraph G {
         index: &PgRelation,
         index_pointer: IndexPointer,
         vec: LabeledVector,
+        spare_vec: LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
     ) {
         self.update_start_nodes(index, index_pointer, &vec, storage, stats);
 
+        if vec.labels().is_some() {
+            // Insert starting from label start nodes and apply label filtering
+            self.insert2(index_pointer, spare_vec, false, storage, stats);
+        }
+
+        // Insert starting from default start node and avoid label filtering
+        self.insert2(index_pointer, vec, true, storage, stats);
+    }
+
+    pub fn insert2<S: Storage>(
+        &mut self,
+        index_pointer: IndexPointer,
+        vec: LabeledVector,
+        no_filter: bool,
+        storage: &S,
+        stats: &mut InsertStats,
+    ) {
         let labels = vec.labels().cloned();
 
         #[allow(clippy::mutable_key_type)]
         let v = self.greedy_search_for_build(
             index_pointer,
             vec,
+            no_filter,
             storage,
             &mut stats.greedy_search_stats,
         );

@@ -520,6 +520,7 @@ impl<'a> SbqSpeedupStorage<'a> {
         >,
         lsn_index_pointer: IndexPointer,
         gns: &GraphNeighborStore,
+        no_filter: bool,
     ) {
         match gns {
             GraphNeighborStore::Disk => {
@@ -553,8 +554,9 @@ impl<'a> SbqSpeedupStorage<'a> {
 
                     // Skip neighbors that have no matching labels with the query
                     if let Some(labels) = lsr.sdm.as_ref().expect("sdm is Some").query.labels() {
-                        if !labels
-                            .overlaps(node_neighbor.get_labels().expect("Unlabeled neighbor?"))
+                        if !no_filter
+                            && !labels
+                                .overlaps(node_neighbor.get_labels().expect("Unlabeled neighbor?"))
                         {
                             continue;
                         }
@@ -589,7 +591,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                     // Skip neighbors that have no matching labels with the query
                     if let Some(labels) = lsr.sdm.as_ref().expect("lsr.sdm is None").query.labels()
                     {
-                        if !labels.overlaps(neighbor.get_labels().unwrap()) {
+                        if !no_filter && !labels.overlaps(neighbor.get_labels().unwrap()) {
                             continue;
                         }
                     }
@@ -783,9 +785,10 @@ impl Storage for SbqSpeedupStorage<'_> {
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
+        no_filter: bool,
     ) {
         let lsn_index_pointer = lsr.get_lsn_by_idx(lsn_idx).index_pointer;
-        self.visit_lsn_internal(lsr, lsn_index_pointer, gns);
+        self.visit_lsn_internal(lsr, lsn_index_pointer, gns, no_filter);
     }
 
     fn return_lsn(

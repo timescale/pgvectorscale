@@ -178,6 +178,10 @@ unsafe fn aminsert_internal(
     }
     let vec = vec.unwrap();
 
+    // PgVector is not cloneable, but in some cases we need a second copy of it
+    // for the insert.  This is a bit of a hack to get that second copy.
+    let spare_vec = LabeledVector::from_datums(values, isnull, &meta_page).unwrap();
+
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();
     let mut stats = InsertStats::new();
@@ -189,10 +193,12 @@ unsafe fn aminsert_internal(
                 &heap_relation,
                 meta_page.get_distance_function(),
             );
+            assert!(vec.labels().is_none());
             insert_storage(
                 &plain,
                 &index_relation,
                 vec,
+                spare_vec,
                 heap_pointer,
                 &mut meta_page,
                 &mut stats,
@@ -209,6 +215,7 @@ unsafe fn aminsert_internal(
                 &bq,
                 &index_relation,
                 vec,
+                spare_vec,
                 heap_pointer,
                 &mut meta_page,
                 &mut stats,
@@ -222,6 +229,7 @@ unsafe fn insert_storage<S: Storage>(
     storage: &S,
     index_relation: &PgRelation,
     vector: LabeledVector,
+    spare_vector: LabeledVector,
     heap_pointer: ItemPointer,
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
@@ -237,7 +245,14 @@ unsafe fn insert_storage<S: Storage>(
     );
 
     let mut graph = Graph::new(GraphNeighborStore::Disk, meta_page);
-    graph.insert(index_relation, index_pointer, vector, storage, stats);
+    graph.insert(
+        index_relation,
+        index_pointer,
+        vector,
+        spare_vector,
+        storage,
+        stats,
+    );
 }
 
 #[pg_guard]
@@ -459,13 +474,33 @@ unsafe extern "C" fn build_callback(
         StorageBuildState::SbqSpeedup(bq, state) => {
             let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *bq);
+                let spare_vec =
+                    LabeledVector::from_datums(values, isnull, state.graph.get_meta_page())
+                        .unwrap();
+                build_callback_memory_wrapper(
+                    &index_relation,
+                    heap_pointer,
+                    vec,
+                    spare_vec,
+                    state,
+                    *bq,
+                );
             }
         }
         StorageBuildState::Plain(plain, state) => {
             let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
             if let Some(vec) = vec {
-                build_callback_memory_wrapper(&index_relation, heap_pointer, vec, state, *plain);
+                let spare_vec =
+                    LabeledVector::from_datums(values, isnull, state.graph.get_meta_page())
+                        .unwrap();
+                build_callback_memory_wrapper(
+                    &index_relation,
+                    heap_pointer,
+                    vec,
+                    spare_vec,
+                    state,
+                    *plain,
+                );
             }
         }
     }
@@ -476,12 +511,13 @@ unsafe fn build_callback_memory_wrapper<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
+    spare_vector: LabeledVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
     let mut old_context = state.memcxt.set_as_current();
 
-    build_callback_internal(index, heap_pointer, vector, state, storage);
+    build_callback_internal(index, heap_pointer, vector, spare_vector, state, storage);
 
     old_context.set_as_current();
     state.memcxt.reset();
@@ -492,6 +528,7 @@ fn build_callback_internal<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
+    spare_vector: LabeledVector,
     state: &mut BuildState,
     storage: &mut S,
 ) {
@@ -520,9 +557,14 @@ fn build_callback_internal<S: Storage>(
         &mut state.stats,
     );
 
-    state
-        .graph
-        .insert(index, index_pointer, vector, storage, &mut state.stats);
+    state.graph.insert(
+        index,
+        index_pointer,
+        vector,
+        spare_vector,
+        storage,
+        &mut state.stats,
+    );
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
