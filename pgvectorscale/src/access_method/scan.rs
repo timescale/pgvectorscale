@@ -13,6 +13,7 @@ use crate::{
 use super::{
     distance::DistanceFn,
     graph::{Graph, ListSearchResult},
+    labels::LabelSetView,
     plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
     sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
     stats::QuantizerStats,
@@ -164,6 +165,7 @@ struct TSVResponseIterator<QDM, PD> {
     next_calls: i32,
     next_calls_with_resort: i32,
     full_distance_comparisons: i32,
+    has_label_filter: bool,
 }
 
 impl<QDM, PD> TSVResponseIterator<QDM, PD> {
@@ -179,6 +181,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         let mut meta_page = MetaPage::fetch(index);
         let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
+        let has_label_filter = query.labels().is_some_and(|labels| !labels.is_empty());
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
         let resort_size = super::guc::TSV_RESORT_SIZE.get() as usize;
 
@@ -193,6 +196,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
             next_calls: 0,
             next_calls_with_resort: 0,
             full_distance_comparisons: 0,
+            has_label_filter,
         }
     }
 }
@@ -207,7 +211,13 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 
         /* Iterate until we find a non-deleted tuple */
         loop {
-            graph.greedy_search_iterate(&mut self.lsr, self.search_list_size, false, None, storage);
+            graph.greedy_search_iterate(
+                &mut self.lsr,
+                self.search_list_size,
+                !self.has_label_filter,
+                None,
+                storage,
+            );
 
             let item = self.lsr.consume(storage);
 

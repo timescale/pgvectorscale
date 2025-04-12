@@ -365,14 +365,14 @@ fn finalize_index_build<S: Storage>(
 ) -> usize {
     match state.graph.get_neighbor_store() {
         GraphNeighborStore::Builder(builder) => {
-            for (&index_pointer, neighbors) in builder.iter() {
+            for (&index_pointer, (labels, neighbors)) in builder.iter() {
                 write_stats.num_nodes += 1;
                 let prune_neighbors;
                 let neighbors =
                     if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
                         //OPT: get rid of this clone
                         prune_neighbors = state.graph.prune_neighbors(
-                            index_pointer,
+                            labels,
                             neighbors.clone(),
                             storage,
                             &mut write_stats.prune_stats,

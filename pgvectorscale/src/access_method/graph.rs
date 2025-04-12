@@ -202,6 +202,7 @@ impl<'a> Graph<'a> {
         &mut self,
         storage: &S,
         neighbors_of: ItemPointer,
+        labels: Option<&LabelSet>,
         additional_neighbors: Vec<NeighborWithDistance>,
         stats: &mut PruneNeighborStats,
     ) -> (bool, Vec<NeighborWithDistance>) {
@@ -237,7 +238,7 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(neighbors_of, candidates, storage, stats);
+                let new_list = self.prune_neighbors(labels, candidates, storage, stats);
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -247,6 +248,7 @@ impl<'a> Graph<'a> {
             storage,
             self.meta_page,
             neighbors_of,
+            labels.cloned(),
             new_neighbors.clone(),
             stats,
         );
@@ -384,9 +386,12 @@ impl<'a> Graph<'a> {
     ///
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
+    ///
+    /// TODO: this is the old implementation. We should use the new one instead.
+    #[allow(dead_code)]
     pub fn prune_neighbors<S: Storage>(
         &self,
-        _neighbors_of: ItemPointer,
+        labels: Option<&LabelSet>,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
@@ -416,6 +421,7 @@ impl<'a> Graph<'a> {
                 if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
                     return results;
                 }
+
                 if max_factors[i] > alpha {
                     continue;
                 }
@@ -440,6 +446,17 @@ impl<'a> Graph<'a> {
                     //has it been completely excluded?
                     if max_factors[j] > max_alpha {
                         continue;
+                    }
+
+                    // Does it contain essential labels?
+                    if let Some(labels) = labels {
+                        if !existing_neighbor
+                            .get_labels()
+                            .unwrap()
+                            .contains_intersection(candidate_neighbor.get_labels().unwrap(), labels)
+                        {
+                            continue;
+                        }
                     }
 
                     let raw_distance_between_candidate_and_existing_neighbor = unsafe {
@@ -491,6 +508,7 @@ impl<'a> Graph<'a> {
                     storage,
                     self.meta_page,
                     index_pointer,
+                    vec.labels().cloned(),
                     Vec::<NeighborWithDistance>::with_capacity(
                         self.neighbor_store.max_neighbors(self.meta_page) as _,
                     ),
@@ -671,6 +689,7 @@ digraph G {
         let (_, neighbor_list) = self.add_neighbors(
             storage,
             index_pointer,
+            labels.as_ref(),
             v.into_iter().collect(),
             &mut stats.prune_neighbor_stats,
         );
@@ -682,6 +701,7 @@ digraph G {
             let neighbor_contains_new_point = self.update_back_pointer(
                 neighbor.get_index_pointer_to_neighbor(),
                 index_pointer,
+                neighbor.get_labels(),
                 labels.as_ref(),
                 neighbor.get_distance_with_tie_break(),
                 storage,
@@ -705,10 +725,12 @@ digraph G {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn update_back_pointer<S: Storage>(
         &mut self,
         from: IndexPointer,
         to: IndexPointer,
+        from_labels: Option<&LabelSet>,
         to_labels: Option<&LabelSet>,
         distance_with_tie_break: &DistanceWithTieBreak,
         storage: &S,
@@ -719,7 +741,7 @@ digraph G {
             distance_with_tie_break.clone(),
             to_labels.cloned(),
         )];
-        let (_pruned, n) = self.add_neighbors(storage, from, new.clone(), prune_stats);
+        let (_pruned, n) = self.add_neighbors(storage, from, from_labels, new.clone(), prune_stats);
         n.contains(&new[0])
     }
 }

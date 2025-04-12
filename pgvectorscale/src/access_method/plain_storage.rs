@@ -313,7 +313,7 @@ impl Storage for PlainStorage<'_> {
         gns: &GraphNeighborStore,
         no_filter: bool,
     ) {
-        assert!(!no_filter);
+        assert!(no_filter);
 
         let lsn = lsr.get_lsn_by_idx(lsn_idx);
         //clone needed so we don't continue to borrow lsr
