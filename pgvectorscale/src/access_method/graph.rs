@@ -377,7 +377,6 @@ impl<'a> Graph<'a> {
     ///
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
-    #[allow(dead_code)]
     pub fn prune_neighbors<S: Storage>(
         &self,
         labels: Option<&LabelSet>,
@@ -429,6 +428,9 @@ impl<'a> Graph<'a> {
                         stats,
                     )
                 };
+
+                // TODO: optimization: precompute intersection of `labels` and `existing_neighbor.get_labels()`
+                // and use this for the `contains_intersection` check inside the loop
 
                 //go thru the other candidates (tail of the list)
                 for (j, candidate_neighbor) in candidates.iter().enumerate().skip(i + 1) {
@@ -649,14 +651,14 @@ digraph G {
 
         if vec.labels().is_some() {
             // Insert starting from label start nodes and apply label filtering
-            self.insert2(index_pointer, spare_vec, false, storage, stats);
+            self.insert_internal(index_pointer, spare_vec, false, storage, stats);
         }
 
         // Insert starting from default start node and avoid label filtering
-        self.insert2(index_pointer, vec, true, storage, stats);
+        self.insert_internal(index_pointer, vec, true, storage, stats);
     }
 
-    pub fn insert2<S: Storage>(
+    fn insert_internal<S: Storage>(
         &mut self,
         index_pointer: IndexPointer,
         vec: LabeledVector,
