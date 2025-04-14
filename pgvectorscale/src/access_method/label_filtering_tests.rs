@@ -941,10 +941,7 @@ pub mod tests {
         .unwrap();
 
         // Create the index
-        Spi::run(
-            "CREATE INDEX idx_recall ON test_recall USING diskann (embedding, labels)
-             WITH (num_neighbors=15, search_list_size=10);",
-        )?;
+        Spi::run("CREATE INDEX idx_recall ON test_recall USING diskann (embedding, labels);")?;
 
         // Run queries with index and compute recall
         let compute_recall = |ground_truth: &[String], query: &str| -> f64 {
