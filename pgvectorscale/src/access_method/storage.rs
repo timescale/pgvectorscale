@@ -95,6 +95,7 @@ pub trait Storage {
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
+        no_filter: bool,
     ) where
         Self: Sized;
 

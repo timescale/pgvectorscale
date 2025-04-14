@@ -311,7 +311,10 @@ impl Storage for PlainStorage<'_> {
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
         gns: &GraphNeighborStore,
+        no_filter: bool,
     ) {
+        assert!(no_filter);
+
         let lsn = lsr.get_lsn_by_idx(lsn_idx);
         //clone needed so we don't continue to borrow lsr
         let neighbors = lsn.get_private_data().neighbors.clone();

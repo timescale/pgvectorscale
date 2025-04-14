@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::util::{IndexPointer, ItemPointer};
 
+use super::labels::LabelSet;
 use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
 
 use super::meta_page::MetaPage;
@@ -17,7 +18,7 @@ pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk
     //use a btree to provide ordering on the item pointers in iter().
     //this ensures the write in finalize_node_at_end_of_build() is ordered, not random.
-    neighbor_map: BTreeMap<ItemPointer, Vec<NeighborWithDistance>>,
+    neighbor_map: BTreeMap<ItemPointer, (Option<LabelSet>, Vec<NeighborWithDistance>)>,
 }
 
 impl BuilderNeighborCache {
@@ -27,14 +28,23 @@ impl BuilderNeighborCache {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&ItemPointer, &Vec<NeighborWithDistance>)> {
-        self.neighbor_map.iter()
+    pub fn iter(
+        &self,
+    ) -> impl Iterator<
+        Item = (
+            &ItemPointer,
+            (Option<&LabelSet>, &Vec<NeighborWithDistance>),
+        ),
+    > {
+        self.neighbor_map
+            .iter()
+            .map(|(k, (v1, v2))| (k, (v1.as_ref(), v2)))
     }
 
     pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
         let neighbors = self.neighbor_map.get(&neighbors_of);
         match neighbors {
-            Some(n) => n
+            Some((_, n)) => n
                 .iter()
                 .map(|n| n.get_index_pointer_to_neighbor())
                 .collect(),
@@ -48,7 +58,7 @@ impl BuilderNeighborCache {
         result: &mut Vec<NeighborWithDistance>,
     ) {
         let neighbors = self.neighbor_map.get(&neighbors_of);
-        if let Some(n) = neighbors {
+        if let Some((_, n)) = neighbors {
             for nwd in n {
                 result.push(nwd.clone());
             }
@@ -58,9 +68,11 @@ impl BuilderNeighborCache {
     pub fn set_neighbors(
         &mut self,
         neighbors_of: ItemPointer,
+        labels: Option<LabelSet>,
         new_neighbors: Vec<NeighborWithDistance>,
     ) {
-        self.neighbor_map.insert(neighbors_of, new_neighbors);
+        self.neighbor_map
+            .insert(neighbors_of, (labels, new_neighbors));
     }
 
     pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
@@ -99,11 +111,12 @@ impl GraphNeighborStore {
         storage: &S,
         meta_page: &MetaPage,
         neighbors_of: ItemPointer,
+        labels: Option<LabelSet>,
         new_neighbors: Vec<NeighborWithDistance>,
         stats: &mut T,
     ) {
         match self {
-            GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, new_neighbors),
+            GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, labels, new_neighbors),
             GraphNeighborStore::Disk => storage.set_neighbors_on_disk(
                 meta_page,
                 neighbors_of,
