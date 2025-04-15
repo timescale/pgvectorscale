@@ -37,15 +37,14 @@ impl StartNodes {
     }
 
     pub fn get_for_node(&self, labels: Option<&LabelSet>) -> Vec<ItemPointer> {
-        let mut nodes = vec![self.default_node];
         if let Some(labels) = labels {
-            nodes.extend(
-                labels
-                    .iter()
-                    .filter_map(|label| self.labeled_nodes.get(label).copied()),
-            );
+            labels
+                .iter()
+                .filter_map(|label| self.labeled_nodes.get(label).copied())
+                .collect()
+        } else {
+            vec![self.default_node]
         }
-        nodes
     }
 
     pub fn contains(&self, label: Label) -> bool {

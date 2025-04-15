@@ -78,6 +78,37 @@ impl FromIterator<Label> for LabelSet {
     }
 }
 
+impl LabelSet {
+    /// Given sorted arrays of labels, check: Is $a \cap b \subseteq self$?
+    pub fn contains_intersection(&self, a: &LabelSet, b: &LabelSet) -> bool {
+        let a = a.labels();
+        let b = b.labels();
+        let c = self.labels();
+
+        let mut i = 0;
+        let mut j = 0;
+        let mut k = 0;
+
+        while i < a.len() && j < b.len() {
+            match a[i].cmp(&b[j]) {
+                std::cmp::Ordering::Equal => {
+                    while k < c.len() && c[k] < a[i] {
+                        k += 1;
+                    }
+                    if k == c.len() || c[k] > a[i] {
+                        return false;
+                    }
+                    i += 1;
+                    j += 1;
+                }
+                std::cmp::Ordering::Less => i += 1,
+                std::cmp::Ordering::Greater => j += 1,
+            }
+        }
+        true
+    }
+}
+
 /// Accessor trait to allow common logic between `LabelSet` and `ArchivedLabelSet`.
 pub trait LabelSetView {
     fn labels(&self) -> &[Label];
@@ -267,5 +298,122 @@ mod tests {
         let b: LabelSet = vec![2, 4, 6, 8, 11].into();
         assert!(a.overlaps(&b));
         assert!(b.overlaps(&a));
+    }
+
+    #[test]
+    fn test_contains_intersection() {
+        let a: LabelSet = vec![1, 3, 5, 10, 11].into();
+        let b: LabelSet = vec![2, 4, 6, 8, 11].into();
+        let c: LabelSet = vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_empty_sets() {
+        let a: LabelSet = vec![].into();
+        let b: LabelSet = vec![1, 2, 3].into();
+        let c: LabelSet = vec![1, 2, 3].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_no_intersection() {
+        let a: LabelSet = vec![1, 2, 3].into();
+        let b: LabelSet = vec![4, 5, 6].into();
+        let c: LabelSet = vec![1, 2, 3, 4, 5, 6].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_missing_element() {
+        let a: LabelSet = vec![1, 2, 3].into();
+        let b: LabelSet = vec![2, 3, 4].into();
+        let c: LabelSet = vec![1, 3, 4].into(); // Missing 2
+        assert!(!c.contains_intersection(&a, &b));
+        assert!(!c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_empty_intersection() {
+        let a: LabelSet = vec![1, 2, 3].into();
+        let b: LabelSet = vec![4, 5, 6].into();
+        let c: LabelSet = vec![1, 2, 3, 4, 5, 6].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_missing_intersection_element() {
+        let a: LabelSet = vec![1, 2, 3, 4].into();
+        let b: LabelSet = vec![2, 3, 4, 5].into();
+        let c: LabelSet = vec![1, 2, 4, 5].into(); // Missing 3 which is in intersection
+        assert!(!c.contains_intersection(&a, &b));
+        assert!(!c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_empty_c() {
+        let a: LabelSet = vec![1, 2, 3].into();
+        let b: LabelSet = vec![2, 3, 4].into();
+        let c: LabelSet = vec![].into();
+        assert!(!c.contains_intersection(&a, &b));
+        assert!(!c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_single_missing() {
+        let a: LabelSet = vec![1, 2, 3].into();
+        let b: LabelSet = vec![2, 3, 4].into();
+        let c: LabelSet = vec![2, 4].into(); // Missing 3 which is in intersection
+        assert!(!c.contains_intersection(&a, &b));
+        assert!(!c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_single_element() {
+        let a: LabelSet = vec![1].into();
+        let b: LabelSet = vec![1].into();
+        let c: LabelSet = vec![1].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_all_empty() {
+        let a: LabelSet = vec![].into();
+        let b: LabelSet = vec![].into();
+        let c: LabelSet = vec![].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_large_sets() {
+        let a: LabelSet = (1..=100).collect();
+        let b: LabelSet = (50..=150).collect();
+        let c: LabelSet = (1..=200).collect();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_duplicate_elements() {
+        let a: LabelSet = vec![1, 1, 2, 2, 3, 3].into();
+        let b: LabelSet = vec![2, 2, 3, 3, 4, 4].into();
+        let c: LabelSet = vec![1, 2, 3, 4].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
+    }
+
+    #[test]
+    fn test_contains_intersection_negative_numbers() {
+        let a: LabelSet = vec![-3, -2, -1, 0].into();
+        let b: LabelSet = vec![-2, -1, 0, 1].into();
+        let c: LabelSet = vec![-3, -2, -1, 0, 1].into();
+        assert!(c.contains_intersection(&a, &b));
+        assert!(c.contains_intersection(&b, &a));
     }
 }
