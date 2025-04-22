@@ -106,5 +106,7 @@ jobs:
         package_cloud push timescale/timescaledb/$ID/$VERSION_CODENAME pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
 
     - name: Upload artifacts to GitHub release
+      env:
+        GH_TOKEN: ${{ github.token }}
       run: |
         gh release upload ${{ env.TAG }} pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
