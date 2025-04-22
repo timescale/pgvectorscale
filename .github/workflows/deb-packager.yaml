@@ -107,4 +107,4 @@ jobs:
 
     - name: Upload artifacts to GitHub release
       run: |
-        gh release upload ${{ TAG }} pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
+        gh release upload ${{ env.TAG }} pkgdump/pgvectorscale-*${{ env.TAG }}*.deb
