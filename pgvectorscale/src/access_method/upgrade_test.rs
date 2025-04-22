@@ -292,4 +292,11 @@ pub mod tests {
     fn test_upgrade_from_0_6_0() {
         test_upgrade_base("0.6.0", "0.12.5", "pgvectorscale", "vectorscale", "diskann");
     }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_7_0() {
+        test_upgrade_base("0.7.0", "0.12.9", "pgvectorscale", "vectorscale", "diskann");
+    }
 }
