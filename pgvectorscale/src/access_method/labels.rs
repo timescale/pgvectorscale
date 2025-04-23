@@ -79,7 +79,7 @@ impl FromIterator<Label> for LabelSet {
 }
 
 impl LabelSet {
-    /// Given sorted arrays of labels, check: Is $a \cap b \subseteq c$?
+    /// Given sorted arrays of labels, check: Is $a \cap b \subseteq self$?
     pub fn contains_intersection(&self, a: &LabelSet, b: &LabelSet) -> bool {
         let a = a.labels();
         let b = b.labels();

@@ -873,4 +873,153 @@ pub mod tests {
 
         Ok(())
     }
+
+    // For simplicity, only run this test on pg version 16 and above.  Otherwise, we have
+    // to choose different seeds for different pg versions to get the test to pass.
+    #[cfg(any(feature = "pg16", feature = "pg17"))]
+    #[pg_test]
+    pub unsafe fn test_labeled_recall() -> spi::Result<()> {
+        // Ensure clean environment
+        cleanup_test_tables()?;
+
+        // Make it reproducible
+        Spi::run("SELECT setseed(0.2);")?;
+
+        // Create test table with 1K vectors and random labels
+        Spi::run(
+            "CREATE TABLE test_recall (
+                id SERIAL PRIMARY KEY,
+                embedding vector(128),
+                labels SMALLINT[]
+            );
+
+            -- Generate 1K vectors with random labels from [1,32]
+            INSERT INTO test_recall (embedding, labels)
+            SELECT 
+                ('[' || array_to_string(array_agg(random() * 2 - 1), ',') || ']')::vector,
+                ARRAY[floor(random() * 32 + 1)::smallint]
+            FROM generate_series(1, 128 * 1000) i
+            GROUP BY i % 1000;
+
+            -- Create a query vector for testing
+            CREATE TEMP TABLE query_vector AS
+            SELECT ('[' || array_to_string(array_agg(random() * 2 - 1), ',') || ']')::vector AS vec
+            FROM generate_series(1, 128);",
+        )?;
+
+        // Compute ground truth results for different query types
+        // 1. No filter
+        let ground_truth_no_filter: Vec<String> = Spi::get_one(
+            "WITH cte AS (
+                SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                FROM test_recall
+                ORDER BY dist
+                LIMIT 10
+            )
+            SELECT array_agg(id::text) FROM cte;",
+        )?
+        .unwrap();
+
+        // 2. Single label filter (pick a random label that exists)
+        let ground_truth_single_label: Vec<String> = Spi::get_one(
+            "WITH cte AS (
+                SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                FROM test_recall
+                WHERE labels && ARRAY[1]::smallint[]
+                ORDER BY dist
+                LIMIT 10
+            )
+            SELECT array_agg(id::text) FROM cte;",
+        )?
+        .unwrap();
+
+        // 3. Two label filter (pick two random labels that exist)
+        let ground_truth_two_labels: Vec<String> = Spi::get_one(
+            "WITH cte AS (
+                SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                FROM test_recall
+                WHERE labels && ARRAY[1,2]::smallint[]
+                ORDER BY dist
+                LIMIT 10
+            )
+            SELECT array_agg(id::text) FROM cte;",
+        )?
+        .unwrap();
+
+        // Create the index
+        Spi::run("CREATE INDEX idx_recall ON test_recall USING diskann (embedding, labels);")?;
+
+        // Run queries with index and compute recall
+        let compute_recall = |ground_truth: &[String], query: &str| -> f64 {
+            let indexed_results: Vec<String> = Spi::get_one(query).unwrap().unwrap();
+            let ground_truth_set: std::collections::HashSet<_> = ground_truth.iter().collect();
+            let matches = indexed_results
+                .iter()
+                .filter(|id| ground_truth_set.contains(id))
+                .count();
+            matches as f64 / ground_truth.len() as f64
+        };
+
+        // 1. No filter recall
+        let recall_no_filter = compute_recall(
+            &ground_truth_no_filter,
+            "SET enable_seqscan = 0;
+             WITH cte AS (
+                 SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                 FROM test_recall
+                 ORDER BY dist
+                 LIMIT 10
+             )
+             SELECT array_agg(id::text) FROM cte;",
+        );
+
+        // 2. Single label recall
+        let recall_single_label = compute_recall(
+            &ground_truth_single_label,
+            "SET enable_seqscan = 0;
+             WITH cte AS (
+                 SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                 FROM test_recall
+                 WHERE labels && ARRAY[1]::smallint[]
+                 ORDER BY dist
+                 LIMIT 10
+             )
+             SELECT array_agg(id::text) FROM cte;",
+        );
+
+        // 3. Two label recall
+        let recall_two_labels = compute_recall(
+            &ground_truth_two_labels,
+            "SET enable_seqscan = 0;
+             WITH cte AS (
+                 SELECT id, embedding <=> (SELECT vec FROM query_vector) AS dist
+                 FROM test_recall
+                 WHERE labels && ARRAY[1,2]::smallint[]
+                 ORDER BY dist
+                 LIMIT 10
+             )
+             SELECT array_agg(id::text) FROM cte;",
+        );
+
+        assert!(
+            recall_no_filter >= 0.9,
+            "Recall for no filter case is too low: {}",
+            recall_no_filter
+        );
+        assert!(
+            recall_single_label >= 0.9,
+            "Recall for single label case is too low: {}",
+            recall_single_label
+        );
+        assert!(
+            recall_two_labels >= 0.9,
+            "Recall for two label case is too low: {}",
+            recall_two_labels
+        );
+
+        // Clean up
+        cleanup_test_tables()?;
+
+        Ok(())
+    }
 }

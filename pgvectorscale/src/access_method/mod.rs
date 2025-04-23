@@ -287,7 +287,7 @@ pub extern "C" fn amvalidate(_opclassoid: pg_sys::Oid) -> bool {
 
 /// Implementation of the array overlap operator (&&) for smallint arrays
 /// This function checks if two smallint arrays have at least one element in common
-#[pg_extern(immutable, parallel_safe)]
+#[pg_extern(immutable, parallel_safe, create_or_replace)]
 pub fn smallint_array_overlap(left: Array<i16>, right: Array<i16>) -> bool {
     // Early return for empty arrays
     if left.is_empty() || right.is_empty() {
