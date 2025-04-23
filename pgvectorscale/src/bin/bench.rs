@@ -224,7 +224,7 @@ enum Commands {
         #[arg(short, long, default_value_t = 10)]
         top_k: usize,
 
-        /// Distance metric to use for queries
+        /// Distance metric to use for querie
         #[arg(long, default_value_t = DistanceType::Cosine)]
         distance_metric: DistanceType,
 
@@ -245,6 +245,18 @@ enum Commands {
         /// HNSW: Size of dynamic candidate list for search (default: 40)
         #[arg(long)]
         hnsw_ef_search: Option<usize>,
+
+        /// HNSW: Maximum number of tuples to scan during search
+        #[arg(long)]
+        hnsw_max_scan_tuples: Option<usize>,
+
+        /// HNSW: Memory multiplier for scan operations
+        #[arg(long)]
+        hnsw_scan_mem_multiplier: Option<usize>,
+
+        /// HNSW: Iterative scan order ("strict_order" or "relaxed_order")
+        #[arg(long)]
+        hnsw_iterative_scan: Option<String>,
 
         // IVFFlat query-time parameters
         /// IVFFlat: Number of lists to probe (default: 1)
@@ -304,6 +316,9 @@ struct DiskAnnQueryParams {
 /// Parameters for HNSW query
 struct HnswQueryParams {
     ef_search: Option<usize>,
+    max_scan_tuples: Option<usize>,
+    scan_mem_multiplier: Option<usize>,
+    iterative_scan: Option<String>,
 }
 
 /// Parameters for IVFFlat query
@@ -923,6 +938,30 @@ async fn run_query(
         client.execute(&sql, &[]).await?;
     }
 
+    if let Some(max_scan_tuples) = params.hnsw.max_scan_tuples {
+        let sql = format!("SET hnsw.max_scan_tuples = {}", max_scan_tuples);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
+    }
+
+    if let Some(scan_mem_multiplier) = params.hnsw.scan_mem_multiplier {
+        let sql = format!("SET hnsw.scan_mem_multiplier = {}", scan_mem_multiplier);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
+    }
+
+    if let Some(iterative_scan) = &params.hnsw.iterative_scan {
+        let sql = format!("SET hnsw.iterative_scan = '{}'", iterative_scan);
+        if verbose {
+            println!("SQL: {}", sql);
+        }
+        client.execute(&sql, &[]).await?;
+    }
+
     // Set IVFFlat query parameters if provided
     if let Some(probes) = params.ivfflat.probes {
         let sql = format!("SET ivfflat.probes = {}", probes);
@@ -1506,6 +1545,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             diskann_query_search_list_size,
             diskann_query_rescore,
             hnsw_ef_search,
+            hnsw_max_scan_tuples,
+            hnsw_scan_mem_multiplier,
+            hnsw_iterative_scan,
             ivfflat_probes,
             max_label,
             num_labels,
@@ -1640,6 +1682,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     },
                     hnsw: HnswQueryParams {
                         ef_search: *hnsw_ef_search,
+                        max_scan_tuples: *hnsw_max_scan_tuples,
+                        scan_mem_multiplier: *hnsw_scan_mem_multiplier,
+                        iterative_scan: hnsw_iterative_scan.clone(),
                     },
                     ivfflat: IvfFlatQueryParams {
                         probes: *ivfflat_probes,
