@@ -366,6 +366,10 @@ enum Commands {
         /// Use normal distribution for labels instead of uniform
         #[arg(long, default_value_t = false)]
         normal: bool,
+
+        /// Number of warmup runs before timing each query
+        #[arg(long, default_value_t = 0)]
+        warmup: usize,
     },
 }
 
@@ -1024,6 +1028,7 @@ async fn run_query(
     label_predicate: &str,
     vector_dim: usize,
     is_ground_truth: bool,
+    warmup: usize,
 ) -> Result<Vec<(i32, f64)>, PgError> {
     // Set session GUCs to ensure the index is used
     let sql = "SET enable_seqscan = OFF";
@@ -1170,7 +1175,15 @@ async fn run_query(
         println!("SQL: {}", query);
     }
 
-    // Run the query, plugging in the table name as a $1 parameter
+    // Run warmup queries if specified
+    for i in 0..warmup {
+        if verbose {
+            println!("Warmup run {}/{}", i + 1, warmup);
+        }
+        client.query(&query, &[]).await?;
+    }
+
+    // Run the actual query
     let rows = client.query(&query, &[]).await?;
 
     let result: Vec<(i32, f64)> = rows
@@ -1770,6 +1783,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             max_label,
             num_labels,
             normal,
+            warmup,
         } => {
             // Determine the file path - either from direct file path or by downloading the dataset
             let file_path: PathBuf = if let Some(file_path) = file {
@@ -1915,8 +1929,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Measure the query time
                 let query_start = Instant::now();
 
-                let result =
-                    run_query(&client, &query_params, *verbose, &filter, vector_dim, false).await?;
+                let result = run_query(
+                    &client,
+                    &query_params,
+                    *verbose,
+                    &filter,
+                    vector_dim,
+                    false,
+                    *warmup,
+                )
+                .await?;
                 let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
 
@@ -1925,36 +1947,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
 
                 // Calculate recall for this query
-                let expected_with_distances: Vec<(i32, f64)> = if let Some(ground_truth_table) =
-                    ground_truth_table
-                {
-                    // Run the same query against the ground truth table
-                    query_params.table_name = ground_truth_table.clone();
-                    if *verbose {
-                        println!(
-                            "Running query against ground truth table: {}",
-                            query_params.table_name
-                        );
-                    }
-                    run_query(&client, &query_params, *verbose, &filter, vector_dim, true).await?
-                } else {
-                    let ground_truth_ids_row = ground_truth_ids.row(i);
-                    let expected_ids = ground_truth_ids_row.as_slice().unwrap();
-
-                    // Create expected results with distances
-                    if let Some(ref distances) = ground_truth_distances {
-                        // Use distances from the HDF5 file
-                        let distances_row = distances.row(i);
-                        let distances_slice = distances_row.as_slice().unwrap();
-                        expected_ids
-                            .iter()
-                            .zip(distances_slice.iter())
-                            .map(|(&id, &dist)| (id, dist as f64))
-                            .collect()
+                let expected_with_distances: Vec<(i32, f64)> =
+                    if let Some(ground_truth_table) = ground_truth_table {
+                        // Run the same query against the ground truth table
+                        query_params.table_name = ground_truth_table.clone();
+                        if *verbose {
+                            println!(
+                                "Running query against ground truth table: {}",
+                                query_params.table_name
+                            );
+                        }
+                        run_query(
+                            &client,
+                            &query_params,
+                            *verbose,
+                            &filter,
+                            vector_dim,
+                            true,
+                            *warmup,
+                        )
+                        .await?
                     } else {
-                        panic!("No distances dataset found in HDF5 file");
-                    }
-                };
+                        let ground_truth_ids_row = ground_truth_ids.row(i);
+                        let expected_ids = ground_truth_ids_row.as_slice().unwrap();
+
+                        // Create expected results with distances
+                        if let Some(ref distances) = ground_truth_distances {
+                            // Use distances from the HDF5 file
+                            let distances_row = distances.row(i);
+                            let distances_slice = distances_row.as_slice().unwrap();
+                            expected_ids
+                                .iter()
+                                .zip(distances_slice.iter())
+                                .map(|(&id, &dist)| (id, dist as f64))
+                                .collect()
+                        } else {
+                            panic!("No distances dataset found in HDF5 file");
+                        }
+                    };
 
                 if *verbose {
                     println!("Expected with distances: {:?}", expected_with_distances);
