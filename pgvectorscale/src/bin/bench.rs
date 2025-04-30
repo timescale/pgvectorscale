@@ -18,6 +18,83 @@ use serde::{Deserialize, Serialize};
 use tokio::task;
 use tokio_postgres::{Client, Error as PgError, NoTls};
 
+/// Cache key for ground truth results
+#[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
+struct GroundTruthCacheKey {
+    table_name: String,
+    query_vector_hash: String,
+    labels: Option<Vec<i16>>,
+    top_k: usize,
+}
+
+/// Cache value for ground truth results
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GroundTruthCacheValue {
+    results: Vec<(i32, f64)>,
+    timestamp: chrono::DateTime<chrono::Utc>,
+}
+
+/// Get the cache directory for ground truth results
+fn get_ground_truth_cache_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    // Get the user's home directory
+    let home_dir = dirs::home_dir().ok_or_else(|| "Could not find home directory".to_string())?;
+
+    // Create the cache directory path
+    let cache_dir = home_dir.join(".pgvectorscale").join("ground_truth");
+
+    // Create the directory if it doesn't exist
+    if !cache_dir.exists() {
+        std::fs::create_dir_all(&cache_dir)?;
+    }
+
+    Ok(cache_dir)
+}
+
+/// Get the cache file path for a given cache key
+fn get_cache_file_path(key: &GroundTruthCacheKey) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let cache_dir = get_ground_truth_cache_dir()?;
+    let key_bytes = bincode::serialize(key)?;
+    let key_hash = blake3::hash(&key_bytes);
+    Ok(cache_dir.join(format!("{}.bin", key_hash.to_hex())))
+}
+
+/// Load ground truth results from cache
+fn load_from_cache(
+    key: &GroundTruthCacheKey,
+) -> Result<Option<Vec<(i32, f64)>>, Box<dyn std::error::Error>> {
+    let cache_file = get_cache_file_path(key)?;
+    if !cache_file.exists() {
+        return Ok(None);
+    }
+
+    let file = std::fs::File::open(cache_file)?;
+    let value: GroundTruthCacheValue = bincode::deserialize_from(file)?;
+
+    // Check if the cache is older than 7 days
+    let now = chrono::Utc::now();
+    let cache_age = now - value.timestamp;
+    if cache_age > chrono::Duration::days(7) {
+        return Ok(None);
+    }
+
+    Ok(Some(value.results))
+}
+
+/// Save ground truth results to cache
+fn save_to_cache(
+    key: &GroundTruthCacheKey,
+    results: &[(i32, f64)],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let cache_file = get_cache_file_path(key)?;
+    let value = GroundTruthCacheValue {
+        results: results.to_vec(),
+        timestamp: chrono::Utc::now(),
+    };
+    let file = std::fs::File::create(cache_file)?;
+    bincode::serialize_into(file, &value)?;
+    Ok(())
+}
+
 // Add this function near the top of the file, after the imports
 fn kebab_to_snake_case(s: &str) -> String {
     s.replace('-', "_")
@@ -739,13 +816,25 @@ async fn create_vector_table(
     Ok(())
 }
 
-// Add this new function to generate random labels
-fn generate_random_labels(max_label: u16, num_labels: usize, use_normal: bool) -> Vec<i16> {
+// Add this new function to generate deterministic random labels
+fn generate_random_labels(
+    max_label: u16,
+    num_labels: usize,
+    use_normal: bool,
+    query_vector: &[f32],
+) -> Vec<i16> {
     use rand::seq::SliceRandom;
-    use rand::thread_rng;
+    use rand::SeedableRng;
     use rand_distr::{Distribution, Normal};
+    use rand_pcg::Pcg64;
 
-    let mut rng = thread_rng();
+    // Create a deterministic seed from the query vector
+    let seed = blake3::hash(&bincode::serialize(query_vector).unwrap()).as_bytes()[0..8]
+        .iter()
+        .fold(0u64, |acc, &b| (acc << 8) | b as u64);
+
+    // Create a deterministic RNG using the seed
+    let mut rng = Pcg64::seed_from_u64(seed);
 
     if use_normal {
         // Create a normal distribution centered at max_label/2 with standard deviation of max_label/8
@@ -856,7 +945,7 @@ async fn load_vectors(
                 buffer.write_all(b"\t").map_err(to_pg_error)?;
 
                 // Generate and format random labels
-                let labels = generate_random_labels(max_label, num_labels, normal);
+                let labels = generate_random_labels(max_label, num_labels, normal, &vector_data);
                 let labels_str = format!(
                     "{{{}}}",
                     labels
@@ -1008,6 +1097,39 @@ async fn run_query(
     // Format the vector for PostgreSQL
     let vector_str = format_vector_for_postgres(&params.query_vector);
 
+    // For ground truth queries, try to use the cache first
+    if is_ground_truth {
+        let labels = if params.max_label > 0 && params.num_labels > 0 {
+            Some(generate_random_labels(
+                params.max_label,
+                params.num_labels,
+                params.normal,
+                &params.query_vector,
+            ))
+        } else {
+            None
+        };
+
+        // Create a hash of the query vector
+        let query_vector_hash = blake3::hash(&bincode::serialize(&params.query_vector).unwrap())
+            .to_hex()
+            .to_string();
+
+        let cache_key = GroundTruthCacheKey {
+            table_name: params.table_name.clone(),
+            query_vector_hash,
+            labels: labels.clone(),
+            top_k: params.top_k,
+        };
+
+        if let Ok(Some(cached_results)) = load_from_cache(&cache_key) {
+            if verbose {
+                println!("Using cached ground truth results");
+            }
+            return Ok(cached_results);
+        }
+    }
+
     // Construct the SQL query with the vector literal directly in the query
     // Include the distance in the result
     let query = if params.hnsw.rerank_candidates.is_none() || is_ground_truth {
@@ -1051,10 +1173,40 @@ async fn run_query(
     // Run the query, plugging in the table name as a $1 parameter
     let rows = client.query(&query, &[]).await?;
 
-    let result = rows
+    let result: Vec<(i32, f64)> = rows
         .iter()
         .map(|row| (row.get::<_, i32>(0), row.get::<_, f64>(1)))
         .collect();
+
+    // Cache the results if this is a ground truth query
+    if is_ground_truth {
+        let labels = if params.max_label > 0 && params.num_labels > 0 {
+            Some(generate_random_labels(
+                params.max_label,
+                params.num_labels,
+                params.normal,
+                &params.query_vector,
+            ))
+        } else {
+            None
+        };
+
+        // Create a hash of the query vector
+        let query_vector_hash = blake3::hash(&bincode::serialize(&params.query_vector).unwrap())
+            .to_hex()
+            .to_string();
+
+        let cache_key = GroundTruthCacheKey {
+            table_name: params.table_name.clone(),
+            query_vector_hash,
+            labels,
+            top_k: params.top_k,
+        };
+
+        if let Err(e) = save_to_cache(&cache_key, &result) {
+            eprintln!("Warning: Failed to cache ground truth results: {}", e);
+        }
+    }
 
     Ok(result)
 }
@@ -1062,7 +1214,12 @@ async fn run_query(
 /// Generate random labels for the query if enabled
 fn construct_label_predicate(params: &QueryParams) -> String {
     if params.max_label > 0 && params.num_labels > 0 {
-        let labels = generate_random_labels(params.max_label, params.num_labels, params.normal);
+        let labels = generate_random_labels(
+            params.max_label,
+            params.num_labels,
+            params.normal,
+            &params.query_vector,
+        );
         let labels_str = format!(
             "{{{}}}",
             labels

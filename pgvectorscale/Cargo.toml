@@ -31,6 +31,7 @@ rkyv = { version = "0.7.43", features = ["validation"] }
 simdeez = { version = "1.0.8" }
 rand = { version = "0.8", features = ["small_rng"] }
 rand_distr = "0.4.3"
+rand_pcg = "0.3.1"
 pgvectorscale_derive = { path = "pgvectorscale_derive" }
 semver = "1.0.24"
 serial_test = "3.2.0"
@@ -49,9 +50,12 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tempfile = "3.8"
 dirs = "5.0"
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 byteorder = "1.5.0"
 bytes = "1.5.0"
+cached = "0.45.0"
+bincode = "1.3.3"
+blake3 = "1.5.0"
 
 [dev-dependencies]
 pgrx-tests = "=0.12.9"
