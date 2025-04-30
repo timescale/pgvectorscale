@@ -10,6 +10,7 @@ use vectorscale::access_method::distance::DistanceType;
 
 use bytes::Bytes;
 use clap::{Parser, Subcommand, ValueEnum};
+use csv;
 use futures::{future::join_all, SinkExt, StreamExt};
 use hdf5_metno::File;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -370,6 +371,10 @@ enum Commands {
         /// Number of warmup runs before timing each query
         #[arg(long, default_value_t = 0)]
         warmup: usize,
+
+        /// CSV file to append results to
+        #[arg(long)]
+        csv: Option<PathBuf>,
     },
 }
 
@@ -1029,7 +1034,7 @@ async fn run_query(
     vector_dim: usize,
     is_ground_truth: bool,
     warmup: usize,
-) -> Result<Vec<(i32, f64)>, PgError> {
+) -> Result<(Vec<(i32, f64)>, Duration), PgError> {
     // Set session GUCs to ensure the index is used
     let sql = "SET enable_seqscan = OFF";
     if verbose {
@@ -1131,7 +1136,7 @@ async fn run_query(
             if verbose {
                 println!("Using cached ground truth results");
             }
-            return Ok(cached_results);
+            return Ok((cached_results, Duration::new(0, 0)));
         }
     }
 
@@ -1183,8 +1188,19 @@ async fn run_query(
         client.query(&query, &[]).await?;
     }
 
-    // Run the actual query
+    // Clear the query cache after warmup
+    if warmup > 0 {
+        let clear_cache_sql = "DISCARD ALL";
+        if verbose {
+            println!("SQL: {}", clear_cache_sql);
+        }
+        client.execute(clear_cache_sql, &[]).await?;
+    }
+
+    // Run the actual query and measure its time
+    let start_time = Instant::now();
     let rows = client.query(&query, &[]).await?;
+    let query_time = start_time.elapsed();
 
     let result: Vec<(i32, f64)> = rows
         .iter()
@@ -1221,7 +1237,7 @@ async fn run_query(
         }
     }
 
-    Ok(result)
+    Ok((result, query_time))
 }
 
 /// Generate random labels for the query if enabled
@@ -1496,6 +1512,41 @@ async fn download_dataset(dataset: &DatasetInfo) -> Result<PathBuf, Box<dyn std:
 // Global variables to track active transactions
 static ACTIVE_TRANSACTIONS: AtomicBool = AtomicBool::new(false);
 static SHOULD_ABORT: AtomicBool = AtomicBool::new(false);
+
+#[derive(Debug, Serialize)]
+struct TestResult {
+    timestamp: chrono::DateTime<chrono::Utc>,
+    dataset: String,
+    table: String,
+    ground_truth_table: Option<String>,
+    num_queries: usize,
+    top_k: usize,
+    distance_metric: String,
+    avg_recall: f64,
+    min_query_time_ms: f64,
+    p25_query_time_ms: f64,
+    p50_query_time_ms: f64,
+    p75_query_time_ms: f64,
+    p90_query_time_ms: f64,
+    p95_query_time_ms: f64,
+    p99_query_time_ms: f64,
+    max_query_time_ms: f64,
+    mean_query_time_ms: f64,
+    qps: f64,
+    warmup: usize,
+    diskann_query_search_list_size: Option<usize>,
+    diskann_query_rescore: Option<usize>,
+    hnsw_ef_search: Option<usize>,
+    hnsw_max_scan_tuples: Option<usize>,
+    hnsw_scan_mem_multiplier: Option<usize>,
+    hnsw_iterative_scan: Option<String>,
+    hnsw_rerank_candidates: Option<usize>,
+    ivfflat_probes: Option<usize>,
+    max_label: u16,
+    num_labels: usize,
+    normal: bool,
+    command_line: String,
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -1784,6 +1835,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             num_labels,
             normal,
             warmup,
+            csv,
         } => {
             // Determine the file path - either from direct file path or by downloading the dataset
             let file_path: PathBuf = if let Some(file_path) = file {
@@ -1926,10 +1978,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 let filter = construct_label_predicate(&query_params);
 
-                // Measure the query time
-                let query_start = Instant::now();
-
-                let result = run_query(
+                // Run the query and get the result and query time
+                let (result, query_duration) = run_query(
                     &client,
                     &query_params,
                     *verbose,
@@ -1939,7 +1989,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     *warmup,
                 )
                 .await?;
-                let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
 
                 if *verbose {
@@ -1957,7 +2006,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 query_params.table_name
                             );
                         }
-                        run_query(
+                        let (result, _) = run_query(
                             &client,
                             &query_params,
                             *verbose,
@@ -1966,7 +2015,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             true,
                             *warmup,
                         )
-                        .await?
+                        .await?;
+                        result
                     } else {
                         let ground_truth_ids_row = ground_truth_ids.row(i);
                         let expected_ids = ground_truth_ids_row.as_slice().unwrap();
@@ -2046,6 +2096,77 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // Report overall performance statistics
             let stats = PerformanceStats::new("Query Testing", duration, queries_to_run);
             stats.print();
+
+            // Write results to CSV if specified
+            if let Some(csv_path) = csv {
+                let result = TestResult {
+                    timestamp: chrono::Utc::now(),
+                    dataset: if let Some(dataset_name) = dataset {
+                        dataset_name.clone()
+                    } else if let Some(file_path) = file {
+                        file_path
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("unknown")
+                            .to_string()
+                    } else {
+                        "unknown".to_string()
+                    },
+                    table: table.clone(),
+                    ground_truth_table: ground_truth_table.clone(),
+                    num_queries: queries_to_run,
+                    top_k: top_k,
+                    distance_metric: format!("{:?}", distance_metric),
+                    avg_recall,
+                    min_query_time_ms: query_stats.min().as_secs_f64() * 1000.0,
+                    p25_query_time_ms: query_stats.percentile(0.25).as_secs_f64() * 1000.0,
+                    p50_query_time_ms: query_stats.percentile(0.5).as_secs_f64() * 1000.0,
+                    p75_query_time_ms: query_stats.percentile(0.75).as_secs_f64() * 1000.0,
+                    p90_query_time_ms: query_stats.percentile(0.9).as_secs_f64() * 1000.0,
+                    p95_query_time_ms: query_stats.percentile(0.95).as_secs_f64() * 1000.0,
+                    p99_query_time_ms: query_stats.percentile(0.99).as_secs_f64() * 1000.0,
+                    max_query_time_ms: query_stats.max().as_secs_f64() * 1000.0,
+                    mean_query_time_ms: query_stats.mean().as_secs_f64() * 1000.0,
+                    qps: queries_to_run as f64 / duration.as_secs_f64(),
+                    warmup: *warmup,
+                    diskann_query_search_list_size: *diskann_query_search_list_size,
+                    diskann_query_rescore: *diskann_query_rescore,
+                    hnsw_ef_search: *hnsw_ef_search,
+                    hnsw_max_scan_tuples: *hnsw_max_scan_tuples,
+                    hnsw_scan_mem_multiplier: *hnsw_scan_mem_multiplier,
+                    hnsw_iterative_scan: hnsw_iterative_scan.clone(),
+                    hnsw_rerank_candidates: *hnsw_rerank_candidates,
+                    ivfflat_probes: *ivfflat_probes,
+                    max_label: *max_label,
+                    num_labels: *num_labels,
+                    normal: *normal,
+                    command_line: std::env::args().collect::<Vec<_>>().join(" "),
+                };
+
+                let file_exists = csv_path.exists();
+                let mut writer = if !file_exists {
+                    // Create new file and write header
+                    let file = std::fs::File::create(csv_path)?;
+                    let mut writer = csv::WriterBuilder::new()
+                        .has_headers(true)
+                        .from_writer(file);
+                    writer.serialize(result)?;
+                    writer
+                } else {
+                    // Open existing file in append mode
+                    let file = std::fs::OpenOptions::new()
+                        .write(true)
+                        .append(true)
+                        .open(csv_path)?;
+                    let mut writer = csv::WriterBuilder::new()
+                        .has_headers(false)
+                        .from_writer(file);
+                    writer.serialize(result)?;
+                    writer
+                };
+
+                writer.flush()?;
+            }
         }
     }
 
