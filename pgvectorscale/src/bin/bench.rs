@@ -55,13 +55,20 @@ enum IndexType {
     DiskANN,
     /// HNSW index
     Hnsw,
+    /// HNSW index with BQ
+    HnswBq,
     /// IVFFlat index
     IVFFlat,
 }
 
 impl ValueEnum for IndexType {
     fn value_variants<'a>() -> &'a [Self] {
-        &[IndexType::DiskANN, IndexType::Hnsw, IndexType::IVFFlat]
+        &[
+            IndexType::DiskANN,
+            IndexType::Hnsw,
+            IndexType::HnswBq,
+            IndexType::IVFFlat,
+        ]
     }
 
     fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
@@ -70,6 +77,9 @@ impl ValueEnum for IndexType {
                 clap::builder::PossibleValue::new("diskann").help("DiskANN index (default)")
             }
             IndexType::Hnsw => clap::builder::PossibleValue::new("hnsw").help("HNSW index"),
+            IndexType::HnswBq => {
+                clap::builder::PossibleValue::new("hnsw_bq").help("HNSW index with BQ")
+            }
             IndexType::IVFFlat => {
                 clap::builder::PossibleValue::new("ivfflat").help("IVFFlat index")
             }
@@ -82,6 +92,7 @@ impl fmt::Display for IndexType {
         match self {
             IndexType::DiskANN => write!(f, "diskann"),
             IndexType::Hnsw => write!(f, "hnsw"),
+            IndexType::HnswBq => write!(f, "hnsw_bq"),
             IndexType::IVFFlat => write!(f, "ivfflat"),
         }
     }
@@ -258,6 +269,10 @@ enum Commands {
         #[arg(long)]
         hnsw_iterative_scan: Option<String>,
 
+        /// HNSW: Number of candidates to rerank
+        #[arg(long)]
+        hnsw_rerank_candidates: Option<usize>,
+
         // IVFFlat query-time parameters
         /// IVFFlat: Number of lists to probe (default: 1)
         #[arg(long)]
@@ -319,6 +334,8 @@ struct HnswQueryParams {
     max_scan_tuples: Option<usize>,
     scan_mem_multiplier: Option<usize>,
     iterative_scan: Option<String>,
+    /// rerank candidates implies HNSW BQ
+    rerank_candidates: Option<usize>,
 }
 
 /// Parameters for IVFFlat query
@@ -528,7 +545,7 @@ async fn connect_to_postgres(connection_string: &str) -> Result<Client, PgError>
 async fn create_vector_index(
     client: &Client,
     table_name: &str,
-    _vector_dim: usize, // Prefix with underscore to indicate intentionally unused
+    vector_dim: usize,
     params: &IndexParams,
 ) -> Result<(), PgError> {
     // Get the operator class for the distance metric
@@ -603,6 +620,36 @@ async fn create_vector_index(
                 format!(
                     "CREATE INDEX ON {} USING hnsw (embedding {}) WITH ({});",
                     table_name,
+                    operator_class,
+                    index_params.join(", ")
+                )
+            };
+
+            client.execute(&sql, &[]).await?
+        }
+        IndexType::HnswBq => {
+            // Build HNSW index parameters
+            let mut index_params = Vec::new();
+
+            if let Some(m) = params.hnsw.m {
+                index_params.push(format!("m={}", m));
+            }
+
+            if let Some(ef_construction) = params.hnsw.ef_construction {
+                index_params.push(format!("ef_construction={}", ef_construction));
+            }
+
+            // Create the index with parameters
+            let sql = if index_params.is_empty() {
+                format!(
+                    "CREATE INDEX ON {} USING hnsw (binary_quantize(embedding)::bit({}) {});",
+                    table_name, vector_dim, operator_class
+                )
+            } else {
+                format!(
+                    "CREATE INDEX ON {} USING hnsw (binary_quantize(embedding)::bit({}) {}) WITH ({});",
+                    table_name,
+                    vector_dim,
                     operator_class,
                     index_params.join(", ")
                 )
@@ -886,27 +933,11 @@ async fn run_query(
     params: &QueryParams,
     verbose: bool,
     label_predicate: &str,
+    vector_dim: usize,
+    is_ground_truth: bool,
 ) -> Result<Vec<(i32, f64)>, PgError> {
     // Set session GUCs to ensure the index is used
     let sql = "SET enable_seqscan = OFF";
-    if verbose {
-        println!("SQL: {}", sql);
-    }
-    client.execute(sql, &[]).await?;
-
-    let sql = "SET vectorscale.enable_diskann = ON";
-    if verbose {
-        println!("SQL: {}", sql);
-    }
-    client.execute(sql, &[]).await?;
-
-    let sql = "SET vectorscale.enable_hnsw = ON";
-    if verbose {
-        println!("SQL: {}", sql);
-    }
-    client.execute(sql, &[]).await?;
-
-    let sql = "SET vectorscale.enable_ivfflat = ON";
     if verbose {
         println!("SQL: {}", sql);
     }
@@ -979,10 +1010,38 @@ async fn run_query(
 
     // Construct the SQL query with the vector literal directly in the query
     // Include the distance in the result
-    let query = format!(
-        "SELECT id, embedding {} '{}' as distance FROM {} {} ORDER BY distance LIMIT {}",
-        distance_operator, vector_str, params.table_name, label_predicate, params.top_k
-    );
+    let query = if params.hnsw.rerank_candidates.is_none() || is_ground_truth {
+        // Standard query without re-ranking
+        format!(
+            "SELECT id, embedding {} '{}' as distance FROM {} {} ORDER BY distance LIMIT {}",
+            distance_operator, vector_str, params.table_name, label_predicate, params.top_k
+        )
+    } else {
+        // Use re-ranking pattern when rerank_candidates is specified and not ground truth
+        let rerank_candidates = params.hnsw.rerank_candidates.unwrap();
+        format!(
+            "WITH candidates AS (
+                SELECT id, embedding, binary_quantize(embedding)::bit({}) <~> binary_quantize('{}'::vector({}))::bit({}) as distance
+                FROM {} {}
+                ORDER BY distance
+                LIMIT {}
+            )
+            SELECT id, embedding {} '{}' as distance
+            FROM candidates
+            ORDER BY distance
+            LIMIT {}",
+            vector_dim,
+            vector_str,
+            vector_dim,
+            vector_dim,
+            params.table_name,
+            label_predicate,
+            rerank_candidates,
+            distance_operator,
+            vector_str,
+            params.top_k
+        )
+    };
 
     // Echo the SQL query if verbose is enabled
     if verbose {
@@ -1362,6 +1421,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let index_suffix = match index_type {
                     IndexType::DiskANN => "diskann",
                     IndexType::Hnsw => "hnsw",
+                    IndexType::HnswBq => "hnsw_bq",
                     IndexType::IVFFlat => "ivfflat",
                 };
                 format!("{}_{}", base_table_name, index_suffix)
@@ -1548,6 +1608,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             hnsw_max_scan_tuples,
             hnsw_scan_mem_multiplier,
             hnsw_iterative_scan,
+            hnsw_rerank_candidates,
             ivfflat_probes,
             max_label,
             num_labels,
@@ -1667,9 +1728,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let query_row = query_vectors.row(i);
                 let query_vector_slice = query_row.as_slice().unwrap();
 
-                // Measure the query time
-                let query_start = Instant::now();
-
                 // Create query parameters struct
                 let mut query_params = QueryParams {
                     table_name: table.clone(),
@@ -1685,6 +1743,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         max_scan_tuples: *hnsw_max_scan_tuples,
                         scan_mem_multiplier: *hnsw_scan_mem_multiplier,
                         iterative_scan: hnsw_iterative_scan.clone(),
+                        rerank_candidates: *hnsw_rerank_candidates,
                     },
                     ivfflat: IvfFlatQueryParams {
                         probes: *ivfflat_probes,
@@ -1695,43 +1754,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 };
 
                 let filter = construct_label_predicate(&query_params);
-                let result = run_query(&client, &query_params, *verbose, &filter).await?;
+
+                // Measure the query time
+                let query_start = Instant::now();
+
+                let result =
+                    run_query(&client, &query_params, *verbose, &filter, vector_dim, false).await?;
                 let query_duration = query_start.elapsed();
                 query_stats.add_query_time(query_duration);
+
                 if *verbose {
                     println!("Result: {:?}", result);
                 }
 
                 // Calculate recall for this query
-                let expected_with_distances: Vec<(i32, f64)> =
-                    if let Some(ground_truth_table) = ground_truth_table {
-                        // Run the same query against the ground truth table
-                        query_params.table_name = ground_truth_table.clone();
-                        if *verbose {
-                            println!(
-                                "Running query against ground truth table: {}",
-                                query_params.table_name
-                            );
-                        }
-                        run_query(&client, &query_params, *verbose, &filter).await?
-                    } else {
-                        let ground_truth_ids_row = ground_truth_ids.row(i);
-                        let expected_ids = ground_truth_ids_row.as_slice().unwrap();
+                let expected_with_distances: Vec<(i32, f64)> = if let Some(ground_truth_table) =
+                    ground_truth_table
+                {
+                    // Run the same query against the ground truth table
+                    query_params.table_name = ground_truth_table.clone();
+                    if *verbose {
+                        println!(
+                            "Running query against ground truth table: {}",
+                            query_params.table_name
+                        );
+                    }
+                    run_query(&client, &query_params, *verbose, &filter, vector_dim, true).await?
+                } else {
+                    let ground_truth_ids_row = ground_truth_ids.row(i);
+                    let expected_ids = ground_truth_ids_row.as_slice().unwrap();
 
-                        // Create expected results with distances
-                        if let Some(ref distances) = ground_truth_distances {
-                            // Use distances from the HDF5 file
-                            let distances_row = distances.row(i);
-                            let distances_slice = distances_row.as_slice().unwrap();
-                            expected_ids
-                                .iter()
-                                .zip(distances_slice.iter())
-                                .map(|(&id, &dist)| (id, dist as f64))
-                                .collect()
-                        } else {
-                            panic!("No distances dataset found in HDF5 file");
-                        }
-                    };
+                    // Create expected results with distances
+                    if let Some(ref distances) = ground_truth_distances {
+                        // Use distances from the HDF5 file
+                        let distances_row = distances.row(i);
+                        let distances_slice = distances_row.as_slice().unwrap();
+                        expected_ids
+                            .iter()
+                            .zip(distances_slice.iter())
+                            .map(|(&id, &dist)| (id, dist as f64))
+                            .collect()
+                    } else {
+                        panic!("No distances dataset found in HDF5 file");
+                    }
+                };
 
                 if *verbose {
                     println!("Expected with distances: {:?}", expected_with_distances);
