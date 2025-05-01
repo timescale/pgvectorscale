@@ -224,6 +224,10 @@ impl MetaPage {
         self.bq_num_bits_per_dimension
     }
 
+    pub fn get_bq_distance_fn(&self) -> &str {
+        "distance_xor_optimized"
+    }
+
     /// Maximum number of neigbors per node. Given that we pre-allocate
     /// these many slots for each node, this cannot change after the graph is built.
     pub fn get_num_neighbors(&self) -> u32 {
