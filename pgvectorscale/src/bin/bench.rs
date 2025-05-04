@@ -14,10 +14,11 @@ use csv;
 use futures::{future::join_all, SinkExt, StreamExt};
 use hdf5_metno::File;
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray::{s, Array, Array2};
+use ndarray::{s, Array, Array2, Ix2};
 use serde::{Deserialize, Serialize};
 use tokio::task;
 use tokio_postgres::{Client, Error as PgError, NoTls};
+use hdf5_metno::{Selection, Hyperslab};
 
 /// Cache key for ground truth results
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -884,35 +885,126 @@ async fn load_vectors(
     num_labels: usize,
     normal: bool,
 ) -> Result<(), PgError> {
-    // Mark that we have an active transaction
-    ACTIVE_TRANSACTIONS.store(true, Ordering::SeqCst);
-    use std::io::Write;
+    // Define chunk size (1M vectors)
+    const CHUNK_SIZE: usize = 1_000_000;
 
-    // Start a transaction
-    let transaction = client.transaction().await?;
+    // Calculate total vectors to process
+    let total_vectors = end_idx - start_idx;
 
-    // Prepare the COPY command for binary format
-    let copy_cmd = if max_label > 0 && num_labels > 0 {
-        format!("COPY {} (id, embedding, labels) FROM STDIN", table_name)
-    } else {
-        format!("COPY {} (id, embedding) FROM STDIN", table_name)
-    };
-
-    // Start the COPY operation
-    let sink = transaction.copy_in(&copy_cmd).await?;
-
-    // Helper function to convert io::Error to PgError
-    let to_pg_error = |_e: std::io::Error| -> PgError { PgError::__private_api_timeout() };
-
-    // Use Box::pin to pin the sink properly
-    let mut sink = Box::pin(sink);
-
-    // Define batch size for sending data to avoid connection issues with large datasets
-    const BATCH_SIZE: usize = 10000;
-
-    // Process vectors in batches
+    // Process vectors in chunks
     let mut current_idx = start_idx;
     while current_idx < end_idx {
+        // Mark that we have an active transaction
+        ACTIVE_TRANSACTIONS.store(true, Ordering::SeqCst);
+
+        // Calculate end of current chunk
+        let chunk_end = std::cmp::min(current_idx + CHUNK_SIZE, end_idx);
+
+        // Start a transaction for this chunk
+        let transaction = client.transaction().await?;
+
+        // Prepare the COPY command for binary format
+        let copy_cmd = if max_label > 0 && num_labels > 0 {
+            format!("COPY {} (id, embedding, labels) FROM STDIN", table_name)
+        } else {
+            format!("COPY {} (id, embedding) FROM STDIN", table_name)
+        };
+
+        // Start the COPY operation
+        let sink = transaction.copy_in(&copy_cmd).await?;
+
+        // Helper function to convert io::Error to PgError
+        let to_pg_error = |_e: std::io::Error| -> PgError { PgError::__private_api_timeout() };
+
+        // Use Box::pin to pin the sink properly
+        let mut sink = Box::pin(sink);
+
+        // Define batch size for sending data to avoid connection issues
+        const BATCH_SIZE: usize = 10000;
+
+        // Process vectors in batches within the current chunk
+        let mut batch_start = current_idx;
+        while batch_start < chunk_end {
+            // Check if we should abort due to Ctrl+C
+            if SHOULD_ABORT.load(Ordering::SeqCst) {
+                println!("Aborting transaction due to user interrupt...");
+                transaction.rollback().await?;
+                ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
+                return Err(PgError::__private_api_timeout());
+            }
+
+            // Determine end of current batch
+            let batch_end = std::cmp::min(batch_start + BATCH_SIZE, chunk_end);
+
+            // Create a buffer for this batch
+            let mut buffer = Vec::with_capacity((batch_end - batch_start) * 64);
+
+            // Process each vector in this batch
+            for i in batch_start..batch_end {
+                let vector = vectors.row(i);
+                let vector_data = vector.as_slice().unwrap();
+
+                // Format the vector as a PostgreSQL array string
+                let vector_str = format_vector_for_postgres(vector_data);
+
+                // Write the id
+                buffer
+                    .write_all(i.to_string().as_bytes())
+                    .map_err(to_pg_error)?;
+
+                // Write tab separator
+                buffer.write_all(b"\t").map_err(to_pg_error)?;
+
+                // Write the vector string
+                buffer
+                    .write_all(vector_str.as_bytes())
+                    .map_err(to_pg_error)?;
+
+                // Write labels if enabled
+                if max_label > 0 && num_labels > 0 {
+                    // Write tab separator
+                    buffer.write_all(b"\t").map_err(to_pg_error)?;
+
+                    // Generate and format random labels
+                    let labels =
+                        generate_random_labels(max_label, num_labels, normal, &vector_data);
+                    let labels_str = format!(
+                        "{{{}}}",
+                        labels
+                            .iter()
+                            .map(|x| x.to_string())
+                            .collect::<Vec<_>>()
+                            .join(",")
+                    );
+                    buffer
+                        .write_all(labels_str.as_bytes())
+                        .map_err(to_pg_error)?;
+                }
+
+                // Write newline
+                buffer.write_all(b"\n").map_err(to_pg_error)?;
+
+                if let Some(pb) = &progress_bar {
+                    pb.lock().unwrap().inc(1);
+                }
+            }
+
+            // Send this batch to the sink
+            sink.as_mut().feed(Bytes::from(buffer)).await?;
+
+            // Move to the next batch
+            batch_start = batch_end;
+        }
+
+        // Write the end-of-copy marker
+        let mut end_marker = Vec::new();
+        end_marker.write_all(b"\\.").map_err(to_pg_error)?;
+        end_marker.write_all(b"\n").map_err(to_pg_error)?;
+        sink.as_mut().feed(Bytes::from(end_marker)).await?;
+
+        // Finish the COPY operation
+        sink.as_mut().close().await?;
+
         // Check if we should abort due to Ctrl+C
         if SHOULD_ABORT.load(Ordering::SeqCst) {
             println!("Aborting transaction due to user interrupt...");
@@ -921,90 +1013,22 @@ async fn load_vectors(
             return Err(PgError::__private_api_timeout());
         }
 
-        // Determine end of current batch
-        let batch_end = std::cmp::min(current_idx + BATCH_SIZE, end_idx);
+        // Commit the transaction for this chunk
+        transaction.commit().await?;
 
-        // Create a buffer for this batch
-        let mut buffer = Vec::with_capacity((batch_end - current_idx) * 64);
-
-        // Process each vector in this batch
-        for i in current_idx..batch_end {
-            let vector = vectors.row(i);
-            let vector_data = vector.as_slice().unwrap();
-
-            // Format the vector as a PostgreSQL array string
-            let vector_str = format_vector_for_postgres(vector_data);
-
-            // Write the id
-            buffer
-                .write_all(i.to_string().as_bytes())
-                .map_err(to_pg_error)?;
-
-            // Write tab separator
-            buffer.write_all(b"\t").map_err(to_pg_error)?;
-
-            // Write the vector string
-            buffer
-                .write_all(vector_str.as_bytes())
-                .map_err(to_pg_error)?;
-
-            // Write labels if enabled
-            if max_label > 0 && num_labels > 0 {
-                // Write tab separator
-                buffer.write_all(b"\t").map_err(to_pg_error)?;
-
-                // Generate and format random labels
-                let labels = generate_random_labels(max_label, num_labels, normal, &vector_data);
-                let labels_str = format!(
-                    "{{{}}}",
-                    labels
-                        .iter()
-                        .map(|x| x.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",")
-                );
-                buffer
-                    .write_all(labels_str.as_bytes())
-                    .map_err(to_pg_error)?;
-            }
-
-            // Write newline
-            buffer.write_all(b"\n").map_err(to_pg_error)?;
-
-            if let Some(pb) = &progress_bar {
-                pb.lock().unwrap().inc(1);
-            }
-        }
-
-        // Send this batch to the sink
-        sink.as_mut().feed(Bytes::from(buffer)).await?;
-
-        // Move to the next batch
-        current_idx = batch_end;
-    }
-
-    // Write the end-of-copy marker
-    let mut end_marker = Vec::new();
-    end_marker.write_all(b"\\.").map_err(to_pg_error)?;
-    end_marker.write_all(b"\n").map_err(to_pg_error)?;
-    sink.as_mut().feed(Bytes::from(end_marker)).await?;
-
-    // Finish the COPY operation
-    sink.as_mut().close().await?;
-
-    // Check if we should abort due to Ctrl+C
-    if SHOULD_ABORT.load(Ordering::SeqCst) {
-        println!("Aborting transaction due to user interrupt...");
-        transaction.rollback().await?;
+        // Mark that we no longer have an active transaction
         ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
-        return Err(PgError::__private_api_timeout());
+
+        // Move to the next chunk
+        current_idx = chunk_end;
+
+        // Print progress for chunk completion
+        println!(
+            "Completed chunk: {}/{} vectors",
+            current_idx - start_idx,
+            total_vectors
+        );
     }
-
-    // Commit the transaction
-    transaction.commit().await?;
-
-    // Mark that we no longer have an active transaction
-    ACTIVE_TRANSACTIONS.store(false, Ordering::SeqCst);
 
     Ok(())
 }
@@ -1680,12 +1704,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 vectors_to_load, vector_dim
             );
 
-            // Read the vectors from the HDF5 file
-            let vectors_data: Vec<f32> = dataset.read_raw::<f32>()?;
-            let vectors = Array::from_shape_vec((total_vectors, vector_dim), vectors_data)?
-                .slice(s![0..vectors_to_load, ..])
-                .to_owned();
-
             // Connect to PostgreSQL
             let mut client = connect_to_postgres(&cli.connection_string).await?;
 
@@ -1714,6 +1732,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             let start_time = Instant::now();
 
+            // Define chunk size for HDF5 reading (1M vectors)
+            const HDF5_CHUNK_SIZE: usize = 1_000_000;
+
             if *parallel > 1 {
                 // Parallel loading with multiple connections
                 let vectors_per_connection = vectors_to_load / *parallel;
@@ -1729,7 +1750,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let connection_string = cli.connection_string.clone();
                     let table_name = table_name.clone();
-                    let vectors_clone = vectors.clone();
+                    let file_path = file_path.clone();
+                    let dataset_name = dataset_name.clone();
                     let pb_clone = progress_bar.clone();
                     let max_label = *max_label;
                     let num_labels = *num_labels;
@@ -1737,19 +1759,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let handle = task::spawn(async move {
                         let mut client = connect_to_postgres(&connection_string).await.unwrap();
+                        let h5_file = File::open(&file_path).unwrap();
+                        let dataset = h5_file.dataset(&dataset_name).unwrap();
 
-                        load_vectors(
-                            &mut client,
-                            &table_name,
-                            &vectors_clone,
-                            start_idx,
-                            end_idx,
-                            Some(pb_clone),
-                            max_label,
-                            num_labels,
-                            normal,
-                        )
-                        .await
+                        // Process vectors in chunks
+                        let mut current_idx = start_idx;
+                        while current_idx < end_idx {
+                            let chunk_end = std::cmp::min(current_idx + HDF5_CHUNK_SIZE, end_idx);
+
+                            // Read only the current chunk from HDF5 using hyperslab selection
+                            let hyperslab = Hyperslab::new((
+                                current_idx..(current_idx + chunk_end - current_idx),
+                                0..vector_dim
+                            ));
+                            let selection = Selection::new(hyperslab);
+                            let vectors = match dataset.read_slice::<f32, Selection, Ix2>(selection) {
+                                Ok(arr) => {
+                                    // Convert to the correct ndarray version
+                                    let data = arr.into_raw_vec();
+                                    Array2::from_shape_vec((chunk_end - current_idx, vector_dim), data).unwrap()
+                                },
+                                Err(e) => {
+                                    eprintln!("Error reading HDF5 data: {}", e);
+                                    return;
+                                }
+                            };
+
+                            if let Err(e) = load_vectors(
+                                &mut client,
+                                &table_name,
+                                &vectors,
+                                0,
+                                chunk_end - current_idx,
+                                Some(pb_clone.clone()),
+                                max_label,
+                                num_labels,
+                                normal,
+                            ).await {
+                                eprintln!("Error loading vectors: {}", e);
+                                return;
+                            }
+
+                            current_idx = chunk_end;
+                        }
                     });
 
                     handles.push(handle);
@@ -1759,18 +1811,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 join_all(handles).await;
             } else {
                 // Single connection loading
-                load_vectors(
-                    &mut client,
-                    &table_name,
-                    &vectors,
-                    0,
-                    vectors_to_load,
-                    Some(progress_bar.clone()),
-                    *max_label,
-                    *num_labels,
-                    *normal,
-                )
-                .await?;
+                let mut current_idx = 0;
+                while current_idx < vectors_to_load {
+                    let chunk_end = std::cmp::min(current_idx + HDF5_CHUNK_SIZE, vectors_to_load);
+
+                    // Read only the current chunk from HDF5 using hyperslab selection
+                    let hyperslab = Hyperslab::new((
+                        current_idx..(current_idx + chunk_end - current_idx),
+                        0..vector_dim
+                    ));
+                    let selection = Selection::new(hyperslab);
+                    let vectors = match dataset.read_slice::<f32, Selection, Ix2>(selection) {
+                        Ok(arr) => {
+                            // Convert to the correct ndarray version
+                            let data = arr.into_raw_vec();
+                            Array2::from_shape_vec((chunk_end - current_idx, vector_dim), data).unwrap()
+                        },
+                        Err(e) => {
+                            eprintln!("Error reading HDF5 data: {}", e);
+                            return Err(e.into());
+                        }
+                    };
+
+                    load_vectors(
+                        &mut client,
+                        &table_name,
+                        &vectors,
+                        0,
+                        chunk_end - current_idx,
+                        Some(progress_bar.clone()),
+                        *max_label,
+                        *num_labels,
+                        *normal,
+                    )
+                    .await?;
+
+                    current_idx = chunk_end;
+                }
             }
 
             let duration = start_time.elapsed();
@@ -2033,7 +2110,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // Create expected results with distances
                         if let Some(ref distances) = ground_truth_distances {
                             // Use distances from the HDF5 file
-                            let distances_row = distances.row(i);
+                            let distances_row = distances.row(i as usize);
                             let distances_slice = distances_row.as_slice().unwrap();
                             expected_ids
                                 .iter()
