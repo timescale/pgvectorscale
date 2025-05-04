@@ -1409,7 +1409,16 @@ async fn get_ann_benchmark_datasets() -> Result<Vec<DatasetInfo>, Box<dyn std::e
             test_size: 5000,
             neighbors: 100,
             distance: "cosine".to_string(),
-            url: "s3://vector-datasets/10M/cohere-wikipedia-22-12-1M-euclidean.hdf5".to_string(),
+            url: "s3://vector-datasets/10M/cohere-wikipedia-22-12-10M-euclidean.hdf5".to_string(),
+        },
+        DatasetInfo {
+            name: "cohere-wikipedia-22-12-50M-angular".to_string(),
+            dimensions: 768,
+            train_size: 10000000,
+            test_size: 5000,
+            neighbors: 100,
+            distance: "cosine".to_string(),
+            url: "s3://vector-datasets/10M/cohere-wikipedia-22-12-50M-euclidean.hdf5".to_string(),
         },
     ];
 
