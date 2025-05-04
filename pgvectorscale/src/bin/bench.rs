@@ -941,15 +941,23 @@ async fn load_vectors(
 
             // Process each vector in this batch
             for i in batch_start..batch_end {
-                let vector = vectors.row(i);
+                // Calculate the local index within the current chunk
+                let local_idx = i - batch_start;
+                let vector = vectors.row(local_idx);
                 let vector_data = vector.as_slice().unwrap();
 
                 // Format the vector as a PostgreSQL array string
                 let vector_str = format_vector_for_postgres(vector_data);
 
+                // Calculate the actual ID from the HDF5 file position
+                let actual_id = current_idx + i;
+                if actual_id == 0 {
+                    println!("Debug: Writing first vector with ID={}", actual_id);
+                }
+
                 // Write the id (use the actual index from the HDF5 file)
                 buffer
-                    .write_all((i + start_idx).to_string().as_bytes())
+                    .write_all(actual_id.to_string().as_bytes())
                     .map_err(to_pg_error)?;
 
                 // Write tab separator
@@ -1769,7 +1777,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                             // Read only the current chunk from HDF5 using hyperslab selection
                             let hyperslab = Hyperslab::new((
-                                current_idx..(current_idx + chunk_end - current_idx),
+                                current_idx..chunk_end,
                                 0..vector_dim
                             ));
                             let selection = Selection::new(hyperslab);
@@ -1789,8 +1797,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 &mut client,
                                 &table_name,
                                 &vectors,
-                                0,
-                                chunk_end - current_idx,
+                                current_idx,  // Pass the actual start index
+                                chunk_end,    // Pass the actual end index
                                 Some(pb_clone.clone()),
                                 max_label,
                                 num_labels,
@@ -1817,7 +1825,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     // Read only the current chunk from HDF5 using hyperslab selection
                     let hyperslab = Hyperslab::new((
-                        current_idx..(current_idx + chunk_end - current_idx),
+                        current_idx..chunk_end,
                         0..vector_dim
                     ));
                     let selection = Selection::new(hyperslab);
@@ -1837,8 +1845,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &mut client,
                         &table_name,
                         &vectors,
-                        0,
-                        chunk_end - current_idx,
+                        current_idx,  // Pass the actual start index
+                        chunk_end,    // Pass the actual end index
                         Some(progress_bar.clone()),
                         *max_label,
                         *num_labels,
