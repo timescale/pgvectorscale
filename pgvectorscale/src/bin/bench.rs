@@ -947,9 +947,9 @@ async fn load_vectors(
                 // Format the vector as a PostgreSQL array string
                 let vector_str = format_vector_for_postgres(vector_data);
 
-                // Write the id
+                // Write the id (use the actual index from the HDF5 file)
                 buffer
-                    .write_all(i.to_string().as_bytes())
+                    .write_all((i + start_idx).to_string().as_bytes())
                     .map_err(to_pg_error)?;
 
                 // Write tab separator
@@ -1776,7 +1776,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             let vectors = match dataset.read_slice::<f32, Selection, Ix2>(selection) {
                                 Ok(arr) => {
                                     // Convert to the correct ndarray version
-                                    let data = arr.into_raw_vec();
+                                    let (data, _) = arr.into_raw_vec_and_offset();
                                     Array2::from_shape_vec((chunk_end - current_idx, vector_dim), data).unwrap()
                                 },
                                 Err(e) => {
@@ -1824,7 +1824,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let vectors = match dataset.read_slice::<f32, Selection, Ix2>(selection) {
                         Ok(arr) => {
                             // Convert to the correct ndarray version
-                            let data = arr.into_raw_vec();
+                            let (data, _) = arr.into_raw_vec_and_offset();
                             Array2::from_shape_vec((chunk_end - current_idx, vector_dim), data).unwrap()
                         },
                         Err(e) => {
