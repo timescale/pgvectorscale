@@ -9,9 +9,9 @@ use std::fmt::Debug;
 use std::pin::Pin;
 
 use crate::access_method::{
+    graph::neighbor_with_distance::NeighborWithDistance,
     labels::{ArchivedLabelSet, LabelSet},
     meta_page::MetaPage,
-    neighbor_with_distance::NeighborWithDistance,
     sbq::SbqVectorElement,
     stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite},
     storage::{ArchivedData, NodeVacuum},

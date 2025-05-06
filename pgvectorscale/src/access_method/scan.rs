@@ -4,7 +4,7 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
+        graph::neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
         sbq::storage::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},

@@ -6,8 +6,8 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
+use crate::access_method::graph::neighbor_with_distance::NeighborWithDistance;
 use crate::access_method::meta_page::MetaPage;
-use crate::access_method::neighbor_with_distance::NeighborWithDistance;
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::access_method::storage::{ArchivedData, NodeVacuum};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};

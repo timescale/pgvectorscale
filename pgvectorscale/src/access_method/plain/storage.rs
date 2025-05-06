@@ -3,11 +3,11 @@ use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 use crate::{
     access_method::{
         distance::DistanceFn,
+        graph::neighbor_store::GraphNeighborStore,
+        graph::neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
         graph::{ListSearchNeighbor, ListSearchResult},
-        graph_neighbor_store::GraphNeighborStore,
         labels::{LabelSet, LabeledVector},
         meta_page::MetaPage,
-        neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
         node::{ReadableNode, WriteableNode},
         pg_vector::PgVector,
         stats::{

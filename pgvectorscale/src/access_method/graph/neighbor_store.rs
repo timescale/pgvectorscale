@@ -2,12 +2,11 @@ use std::collections::BTreeMap;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::labels::LabelSet;
-use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
-
-use super::meta_page::MetaPage;
-use super::neighbor_with_distance::*;
-use super::storage::Storage;
+use crate::access_method::graph::neighbor_with_distance::*;
+use crate::access_method::labels::LabelSet;
+use crate::access_method::meta_page::MetaPage;
+use crate::access_method::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
+use crate::access_method::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres

@@ -6,7 +6,7 @@ mod tests;
 
 use super::{
     distance::distance_xor_optimized,
-    graph_neighbor_store::GraphNeighborStore,
+    graph::neighbor_store::GraphNeighborStore,
     labels::LabeledVector,
     stats::{StatsDistanceComparison, StatsNodeRead, StatsNodeWrite},
     storage::NodeDistanceMeasure,

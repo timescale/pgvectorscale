@@ -5,8 +5,8 @@ use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr};
 use pgrx::*;
 
 use crate::access_method::distance::DistanceType;
+use crate::access_method::graph::neighbor_store::GraphNeighborStore;
 use crate::access_method::graph::Graph;
-use crate::access_method::graph_neighbor_store::GraphNeighborStore;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
@@ -18,7 +18,7 @@ use crate::util::*;
 
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
-use super::graph_neighbor_store::BuilderNeighborCache;
+use super::graph::neighbor_store::BuilderNeighborCache;
 use super::labels::LabeledVector;
 use super::sbq::storage::SbqSpeedupStorage;
 
