@@ -17,7 +17,6 @@ pub mod pg_vector;
 mod plain_node;
 mod plain_storage;
 mod sbq;
-mod sbq_node;
 mod scan;
 mod start_nodes;
 pub mod stats;

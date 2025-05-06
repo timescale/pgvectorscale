@@ -20,7 +20,7 @@ use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
 use super::graph_neighbor_store::BuilderNeighborCache;
 use super::labels::LabeledVector;
-use super::sbq::SbqSpeedupStorage;
+use super::sbq::storage::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
 

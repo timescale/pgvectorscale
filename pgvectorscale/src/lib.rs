@@ -1,3 +1,4 @@
+#![allow(unexpected_cfgs)]
 use pgrx::prelude::*;
 
 pgrx::pg_module_magic!();

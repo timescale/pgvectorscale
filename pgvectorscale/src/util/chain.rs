@@ -212,6 +212,7 @@ mod tests {
 
     #[pg_test]
     #[allow(clippy::needless_range_loop)]
+    #[allow(clippy::manual_slice_fill)]
     fn test_chain_tape() {
         let mut rstats = InsertStats::default();
         let mut wstats = InsertStats::default();

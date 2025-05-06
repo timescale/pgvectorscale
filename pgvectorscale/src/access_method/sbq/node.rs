@@ -8,12 +8,13 @@ use rkyv::{vec::ArchivedVec, Archive, Deserialize, Serialize};
 use std::fmt::Debug;
 use std::pin::Pin;
 
-use super::labels::{ArchivedLabelSet, LabelSet};
-use super::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite};
-use super::storage::NodeVacuum;
-use super::{
-    meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance, sbq::SbqVectorElement,
-    storage::ArchivedData,
+use crate::access_method::{
+    labels::{ArchivedLabelSet, LabelSet},
+    meta_page::MetaPage,
+    neighbor_with_distance::NeighborWithDistance,
+    sbq::SbqVectorElement,
+    stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite},
+    storage::{ArchivedData, NodeVacuum},
 };
 
 /// A node in the SBQ index

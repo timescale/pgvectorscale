@@ -8,8 +8,8 @@ use crate::{
         meta_page::MetaPage,
         plain_node::ArchivedPlainNode,
         plain_storage::PlainStorage,
-        sbq::SbqSpeedupStorage,
-        sbq_node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
+        sbq::node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
+        sbq::storage::SbqSpeedupStorage,
     },
     util::{
         page::WritablePage,
