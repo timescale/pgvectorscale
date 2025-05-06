@@ -24,7 +24,7 @@ use super::sbq::storage::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
 
-use super::plain_storage::PlainStorage;
+use super::plain::storage::PlainStorage;
 use super::storage::{Storage, StorageType};
 
 enum StorageBuildState<'a, 'b, 'c, 'd> {
@@ -269,7 +269,7 @@ fn do_heap_scan(
     let storage = meta_page.get_storage_type();
 
     let graph = Graph::new(
-        GraphNeighborStore::Builder(BuilderNeighborCache::new()),
+        GraphNeighborStore::Builder(BuilderNeighborCache::default()),
         &mut meta_page,
     );
     let mut write_stats = WriteStats::new();

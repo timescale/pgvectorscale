@@ -1,25 +1,30 @@
-use super::{
-    distance::DistanceFn,
-    graph::{ListSearchNeighbor, ListSearchResult},
-    graph_neighbor_store::GraphNeighborStore,
-    labels::{LabelSet, LabeledVector},
-    neighbor_with_distance::DistanceWithTieBreak,
-    pg_vector::PgVector,
-    plain_node::{ArchivedPlainNode, PlainNode, ReadablePlainNode},
-    stats::{
-        GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-        StatsNodeRead, StatsNodeWrite, WriteStats,
-    },
-    storage::{ArchivedData, NodeDistanceMeasure, Storage},
-    storage_common::get_index_vector_attribute,
-};
-
 use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 
-use super::{meta_page::MetaPage, neighbor_with_distance::NeighborWithDistance};
-use crate::access_method::node::{ReadableNode, WriteableNode};
-use crate::util::{
-    page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
+use crate::{
+    access_method::{
+        distance::DistanceFn,
+        graph::{ListSearchNeighbor, ListSearchResult},
+        graph_neighbor_store::GraphNeighborStore,
+        labels::{LabelSet, LabeledVector},
+        meta_page::MetaPage,
+        neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
+        node::{ReadableNode, WriteableNode},
+        pg_vector::PgVector,
+        stats::{
+            GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
+            StatsNodeRead, StatsNodeWrite, WriteStats,
+        },
+        storage::{ArchivedData, NodeDistanceMeasure, Storage},
+        storage_common::get_index_vector_attribute,
+    },
+    util::{
+        page::PageType, table_slot::TableSlot, tape::Tape, HeapPointer, IndexPointer, ItemPointer,
+    },
+};
+
+use super::{
+    node::{ArchivedPlainNode, PlainNode},
+    IndexFullDistanceMeasure, PlainDistanceMeasure,
 };
 
 pub struct PlainStorage<'a> {
@@ -67,72 +72,6 @@ impl<'a> PlainStorage<'a> {
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
         }
-    }
-}
-
-pub enum PlainDistanceMeasure {
-    Full(LabeledVector),
-}
-
-impl PlainDistanceMeasure {
-    pub fn calculate_distance<S: StatsDistanceComparison>(
-        distance_fn: DistanceFn,
-        query: &[f32],
-        vector: &[f32],
-        stats: &mut S,
-    ) -> f32 {
-        assert!(!vector.is_empty());
-        assert!(vector.len() == query.len());
-        stats.record_full_distance_comparison();
-        (distance_fn)(query, vector)
-    }
-}
-
-/* This is only applicable to plain, so keep here not in storage_common */
-pub struct IndexFullDistanceMeasure<'a> {
-    readable_node: ReadablePlainNode<'a>,
-    storage: &'a PlainStorage<'a>,
-}
-
-impl<'a> IndexFullDistanceMeasure<'a> {
-    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
-        storage: &'a PlainStorage<'a>,
-        index_pointer: IndexPointer,
-        stats: &mut T,
-    ) -> Self {
-        let rn = unsafe { PlainNode::read(storage.index, index_pointer, stats) };
-        Self {
-            readable_node: rn,
-            storage,
-        }
-    }
-
-    pub unsafe fn with_readable_node(
-        storage: &'a PlainStorage<'a>,
-        readable_node: ReadablePlainNode<'a>,
-    ) -> Self {
-        Self {
-            readable_node,
-            storage,
-        }
-    }
-}
-
-impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
-    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
-        &self,
-        index_pointer: IndexPointer,
-        stats: &mut T,
-    ) -> f32 {
-        let rn1 = PlainNode::read(self.storage.index, index_pointer, stats);
-        let rn2 = &self.readable_node;
-        let node1 = rn1.get_archived_node();
-        let node2 = rn2.get_archived_node();
-        assert!(!node1.vector.is_empty());
-        assert!(node1.vector.len() == node2.vector.len());
-        let vec1 = node1.vector.as_slice();
-        let vec2 = node2.vector.as_slice();
-        (self.storage.get_distance_function())(vec1, vec2)
     }
 }
 
@@ -191,7 +130,7 @@ impl Storage for PlainStorage<'_> {
         index_pointer
     }
 
-    fn start_training(&mut self, _meta_page: &super::meta_page::MetaPage) {}
+    fn start_training(&mut self, _meta_page: &MetaPage) {}
 
     fn add_sample(&mut self, _sample: &[f32]) {}
 
@@ -378,144 +317,5 @@ impl Storage for PlainStorage<'_> {
         _stats: &mut S,
     ) -> Option<LabelSet> {
         None
-    }
-}
-
-#[cfg(any(test, feature = "pg_test"))]
-#[pgrx::pg_schema]
-mod tests {
-
-    use pgrx::*;
-
-    use crate::access_method::distance::DistanceType;
-
-    #[pg_test]
-    unsafe fn test_plain_storage_index_creation_many_neighbors() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "num_neighbors=38, storage_layout = plain",
-            "plain_many_neighbors",
-            1536,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_index_creation_few_neighbors() -> spi::Result<()> {
-        //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "num_neighbors=10, storage_layout = plain",
-            "plain_few_neighbors",
-            1536,
-        )?;
-        Ok(())
-    }
-
-    #[test]
-    fn test_plain_storage_delete_vacuum_plain() {
-        crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(
-            "num_neighbors = 38, storage_layout = plain",
-        );
-    }
-
-    #[test]
-    fn test_plain_storage_delete_vacuum_full() {
-        crate::access_method::vacuum::tests::test_delete_vacuum_full_scaffold(
-            "num_neighbors = 38, storage_layout = plain",
-        );
-    }
-
-    #[test]
-    fn test_plain_storage_update_with_null() {
-        crate::access_method::vacuum::tests::test_update_with_null_scaffold(
-            "num_neighbors = 38, storage_layout = plain",
-        );
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_empty_table_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_empty_table_insert_scaffold(
-            "num_neighbors=38, storage_layout = plain",
-        )
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_insert_empty_insert() -> spi::Result<()> {
-        crate::access_method::build::tests::test_insert_empty_insert_scaffold(
-            "num_neighbors=38, storage_layout = plain",
-        )
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_num_dimensions_cosine() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::Cosine,
-            "num_neighbors=38, storage_layout = plain, num_dimensions=768",
-            "plain_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_num_dimensions_l2() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::L2,
-            "num_neighbors=38, storage_layout = plain, num_dimensions=768",
-            "plain_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    #[should_panic]
-    unsafe fn test_plain_storage_num_dimensions_ip() -> spi::Result<()> {
-        // Should panic because combination of inner product and plain storage
-        // is not supported.
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
-            DistanceType::InnerProduct,
-            "num_neighbors=38, storage_layout = plain, num_dimensions=768",
-            "plain_num_dimensions",
-            3072,
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_index_updates_cosine() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::Cosine,
-            "storage_layout = plain, num_neighbors=30",
-            50,
-            "plain",
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    unsafe fn test_plain_storage_index_updates_l2() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::L2,
-            "storage_layout = plain, num_neighbors=30",
-            50,
-            "plain",
-        )?;
-        Ok(())
-    }
-
-    #[pg_test]
-    #[should_panic]
-    unsafe fn test_plain_storage_index_updates_ip() -> spi::Result<()> {
-        // Should panic because combination of inner product and plain storage
-        // is not supported.
-        crate::access_method::build::tests::test_index_updates(
-            DistanceType::InnerProduct,
-            "storage_layout = plain, num_neighbors=30",
-            50,
-            "plain",
-        )?;
-        Ok(())
     }
 }

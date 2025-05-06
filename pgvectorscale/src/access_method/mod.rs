@@ -4,6 +4,7 @@ use pgrx::*;
 mod build;
 mod cost_estimate;
 mod debugging;
+pub mod distance;
 mod graph;
 mod graph_neighbor_store;
 pub mod guc;
@@ -14,8 +15,7 @@ mod neighbor_with_distance;
 mod node;
 pub mod options;
 pub mod pg_vector;
-mod plain_node;
-mod plain_storage;
+pub mod plain;
 mod sbq;
 mod scan;
 mod start_nodes;
@@ -24,12 +24,6 @@ mod storage;
 mod storage_common;
 mod upgrade_test;
 mod vacuum;
-
-pub mod distance;
-#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
-mod distance_aarch64;
-#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-mod distance_x86;
 
 /// Access method support function numbers
 pub const DISKANN_DISTANCE_TYPE_PROC: u16 = 1;

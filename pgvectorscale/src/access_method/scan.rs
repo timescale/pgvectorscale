@@ -14,7 +14,10 @@ use super::{
     distance::DistanceFn,
     graph::{Graph, ListSearchResult},
     labels::LabelSetView,
-    plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
+    plain::{
+        storage::{PlainStorage, PlainStorageLsnPrivateData},
+        PlainDistanceMeasure,
+    },
     sbq::{
         quantize::SbqQuantizer, storage::SbqSpeedupStorageLsnPrivateData, SbqMeans,
         SbqSearchDistanceMeasure,

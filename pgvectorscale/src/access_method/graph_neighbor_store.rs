@@ -14,6 +14,7 @@ use super::storage::Storage;
 /// pages every time you change the neighbors. Instead you change the neighbors in memory
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
+#[derive(Default)]
 pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk
     //use a btree to provide ordering on the item pointers in iter().
@@ -22,12 +23,6 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
-    pub fn new() -> Self {
-        Self {
-            neighbor_map: BTreeMap::new(),
-        }
-    }
-
     pub fn iter(
         &self,
     ) -> impl Iterator<
