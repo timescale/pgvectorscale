@@ -338,6 +338,7 @@ macro_rules! distance_l2_simd_body {
         // the width of a vector type is provided as a constant
         // so the compiler is free to optimize it more.
         // S::VF32_WIDTH is a constant, 4 when using SSE, 8 when using AVX2, etc
+        #[allow(clippy::assign_op_pattern)]
         while x.len() >= S::VF32_WIDTH * 4 {
             //load data from your vec into an SIMD value
             accum0 = accum0
