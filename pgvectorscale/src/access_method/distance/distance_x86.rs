@@ -20,13 +20,13 @@ compile_error!(
 
 simdeez::simd_runtime_generate!(
     pub fn distance_l2_x86(x: &[f32], y: &[f32]) -> f32 {
-        super::distance::distance_l2_simd_body!(x, y)
+        super::distance_l2_simd_body!(x, y)
     }
 );
 
 simdeez::simd_runtime_generate!(
     pub fn inner_product_x86(x: &[f32], y: &[f32]) -> f32 {
-        super::distance::inner_product_simd_body!(x, y)
+        super::inner_product_simd_body!(x, y)
     }
 );
 
