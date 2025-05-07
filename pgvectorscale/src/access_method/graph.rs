@@ -335,6 +335,15 @@ impl<'a> Graph<'a> {
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
 
+        // check graph consistency
+        // let reachable = self.debug_count_reachable_nodes(storage, &mut InsertStats::new());
+        // if reachable != 1000 {
+        //     pgrx::error!(
+        //         "Graph is inconsistent, only {} nodes are reachable",
+        //         reachable
+        //     );
+        // }
+
         ListSearchResult::new(
             start_nodes,
             dm,
@@ -377,6 +386,9 @@ impl<'a> Graph<'a> {
     ///
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
+    ///
+    /// TODO: this is the old implementation. We should use the new one instead.
+    #[allow(dead_code)]
     pub fn prune_neighbors<S: Storage>(
         &self,
         labels: Option<&LabelSet>,

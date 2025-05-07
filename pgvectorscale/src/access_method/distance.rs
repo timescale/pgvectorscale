@@ -1,12 +1,50 @@
 use pgrx::pg_extern;
+use std::fmt;
+
+#[cfg(feature = "cli")]
+use clap::ValueEnum;
 
 pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum DistanceType {
     Cosine = 0,
     L2 = 1,
     InnerProduct = 2,
+}
+
+#[cfg(feature = "cli")]
+impl ValueEnum for DistanceType {
+    fn value_variants<'a>() -> &'a [Self] {
+        &[
+            DistanceType::Cosine,
+            DistanceType::L2,
+            DistanceType::InnerProduct,
+        ]
+    }
+
+    fn to_possible_value(&self) -> Option<clap::builder::PossibleValue> {
+        Some(match self {
+            DistanceType::Cosine => {
+                clap::builder::PossibleValue::new("cosine").help("Cosine distance (1 - cos(θ))")
+            }
+            DistanceType::L2 => {
+                clap::builder::PossibleValue::new("l2").help("Euclidean distance (L2 norm)")
+            }
+            DistanceType::InnerProduct => clap::builder::PossibleValue::new("inner_product")
+                .help("Inner product (-dot product)"),
+        })
+    }
+}
+
+impl fmt::Display for DistanceType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DistanceType::Cosine => write!(f, "cosine"),
+            DistanceType::L2 => write!(f, "l2"),
+            DistanceType::InnerProduct => write!(f, "inner_product"),
+        }
+    }
 }
 
 impl DistanceType {
@@ -335,18 +373,14 @@ macro_rules! distance_l2_simd_body {
         // S::VF32_WIDTH is a constant, 4 when using SSE, 8 when using AVX2, etc
         while x.len() >= S::VF32_WIDTH * 4 {
             //load data from your vec into an SIMD value
-            accum0 = accum0
-                + ((S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0]))
-                    * (S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0])));
-            accum1 = accum1
-                + ((S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1]))
-                    * (S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1])));
-            accum2 = accum2
-                + ((S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2]))
-                    * (S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2])));
-            accum3 = accum3
-                + ((S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3]))
-                    * (S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3])));
+            accum0 += ((S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0]))
+                * (S::loadu_ps(&x[S::VF32_WIDTH * 0]) - S::loadu_ps(&y[S::VF32_WIDTH * 0])));
+            accum1 += ((S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1]))
+                * (S::loadu_ps(&x[S::VF32_WIDTH * 1]) - S::loadu_ps(&y[S::VF32_WIDTH * 1])));
+            accum2 += ((S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2]))
+                * (S::loadu_ps(&x[S::VF32_WIDTH * 2]) - S::loadu_ps(&y[S::VF32_WIDTH * 2])));
+            accum3 += ((S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3]))
+                * (S::loadu_ps(&x[S::VF32_WIDTH * 3]) - S::loadu_ps(&y[S::VF32_WIDTH * 3])));
 
             // Move each slice to the next position
             x = &x[S::VF32_WIDTH * 4..];

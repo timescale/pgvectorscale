@@ -52,6 +52,14 @@ impl BuilderNeighborCache {
         }
     }
 
+    /// Get the labels for the neighbors of a node
+    #[allow(dead_code)]
+    pub fn get_labels(&self, neighbors_of: ItemPointer) -> Option<&LabelSet> {
+        self.neighbor_map
+            .get(&neighbors_of)
+            .and_then(|(v1, _)| v1.as_ref())
+    }
+
     pub fn get_neighbors_with_full_vector_distances(
         &self,
         neighbors_of: ItemPointer,
