@@ -1,3 +1,7 @@
+pub mod neighbor_store;
+pub mod neighbor_with_distance;
+pub mod start_nodes;
+
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::{cmp::Ordering, collections::HashSet};
@@ -7,13 +11,13 @@ use pgrx::PgRelation;
 use crate::access_method::storage::NodeDistanceMeasure;
 use crate::util::{HeapPointer, IndexPointer, ItemPointer};
 
-use super::graph_neighbor_store::GraphNeighborStore;
 use super::labels::{LabelSet, LabelSetView, LabeledVector};
 use super::meta_page::MetaPage;
-use super::neighbor_with_distance::{Distance, DistanceWithTieBreak, NeighborWithDistance};
-use super::start_nodes::StartNodes;
 use super::stats::{GreedySearchStats, InsertStats, PruneNeighborStats, StatsNodeVisit};
 use super::storage::Storage;
+use neighbor_store::GraphNeighborStore;
+use neighbor_with_distance::{Distance, DistanceWithTieBreak, NeighborWithDistance};
+use start_nodes::StartNodes;
 
 pub struct ListSearchNeighbor<PD> {
     pub index_pointer: IndexPointer,

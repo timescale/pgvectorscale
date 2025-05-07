@@ -20,13 +20,13 @@ compile_error!(
 
 simdeez::simd_runtime_generate!(
     pub fn distance_l2_x86(x: &[f32], y: &[f32]) -> f32 {
-        super::distance::distance_l2_simd_body!(x, y)
+        super::distance_l2_simd_body!(x, y)
     }
 );
 
 simdeez::simd_runtime_generate!(
     pub fn inner_product_x86(x: &[f32], y: &[f32]) -> f32 {
-        super::distance::inner_product_simd_body!(x, y)
+        super::inner_product_simd_body!(x, y)
     }
 );
 
@@ -50,13 +50,13 @@ mod tests {
 
         assert!(
             (unsafe { super::distance_cosine_x86_avx2(&r, &l) }
-                - super::super::distance::distance_cosine_unoptimized(&r, &l))
+                - super::super::distance_cosine_unoptimized(&r, &l))
             .abs()
                 < 0.000001
         );
         assert!(
             (unsafe { super::distance_l2_x86_avx2(&r, &l) }
-                - super::super::distance::distance_l2_unoptimized(&r, &l))
+                - super::super::distance_l2_unoptimized(&r, &l))
             .abs()
                 < 0.000001
         );

@@ -9,9 +9,9 @@ use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
-use super::start_nodes::StartNodes;
 use super::storage::StorageType;
 use super::storage_common::get_num_index_attributes;
+use crate::access_method::graph::start_nodes::StartNodes;
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::stats::WriteStats;

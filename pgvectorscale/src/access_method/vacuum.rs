@@ -6,10 +6,10 @@ use pgrx::{
 use crate::{
     access_method::{
         meta_page::MetaPage,
-        plain_node::ArchivedPlainNode,
-        plain_storage::PlainStorage,
-        sbq::SbqSpeedupStorage,
-        sbq_node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
+        plain::node::ArchivedPlainNode,
+        plain::storage::PlainStorage,
+        sbq::node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
+        sbq::storage::SbqSpeedupStorage,
     },
     util::{
         page::WritablePage,

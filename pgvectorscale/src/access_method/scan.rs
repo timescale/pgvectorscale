@@ -4,8 +4,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
-        sbq::SbqSpeedupStorage,
+        graph::neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
+        sbq::storage::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},
 };
@@ -14,8 +14,14 @@ use super::{
     distance::DistanceFn,
     graph::{Graph, ListSearchResult},
     labels::LabelSetView,
-    plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
-    sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
+    plain::{
+        storage::{PlainStorage, PlainStorageLsnPrivateData},
+        PlainDistanceMeasure,
+    },
+    sbq::{
+        quantize::SbqQuantizer, storage::SbqSpeedupStorageLsnPrivateData, SbqMeans,
+        SbqSearchDistanceMeasure,
+    },
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };

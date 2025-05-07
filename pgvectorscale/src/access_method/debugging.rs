@@ -4,10 +4,9 @@ use std::collections::HashMap;
 
 use pgrx::PgRelation;
 
-use crate::access_method::node::ReadableNode;
 use crate::util::ItemPointer;
 
-use super::{plain_node::PlainNode, stats::GreedySearchStats};
+use super::{node::ReadableNode, plain::node::PlainNode, stats::GreedySearchStats};
 
 #[allow(dead_code)]
 pub fn print_graph_from_disk(index: &PgRelation, init_id: ItemPointer) {

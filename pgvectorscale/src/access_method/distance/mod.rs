@@ -1,3 +1,8 @@
+#[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
+mod distance_aarch64;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+mod distance_x86;
+
 use pgrx::pg_extern;
 
 pub type DistanceFn = fn(&[f32], &[f32]) -> f32;
@@ -84,12 +89,12 @@ pub fn distance_l2(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     //note safety is guraranteed by compile_error above
     unsafe {
-        return super::distance_x86::distance_l2_x86_avx2(a, b);
+        return distance_x86::distance_l2_x86_avx2(a, b);
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     unsafe {
-        return super::distance_aarch64::distance_l2_aarch64_neon(a, b);
+        return distance_aarch64::distance_l2_aarch64_neon(a, b);
     }
 
     #[allow(unreachable_code)]
@@ -170,12 +175,12 @@ pub fn distance_l2_optimized_for_few_dimensions(a: &[f32], b: &[f32]) -> f32 {
 pub fn distance_inner_product(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     unsafe {
-        return -super::distance_x86::inner_product_x86_avx2(a, b);
+        return -distance_x86::inner_product_x86_avx2(a, b);
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     unsafe {
-        return -super::distance_aarch64::inner_product_aarch64_neon(a, b);
+        return -distance_aarch64::inner_product_aarch64_neon(a, b);
     }
 
     #[allow(unreachable_code)]
@@ -189,12 +194,12 @@ pub fn distance_cosine(a: &[f32], b: &[f32]) -> f32 {
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     //note safety is guraranteed by compile_error above
     unsafe {
-        return super::distance_x86::distance_cosine_x86_avx2(a, b);
+        return distance_x86::distance_cosine_x86_avx2(a, b);
     }
 
     #[cfg(any(target_arch = "arm", target_arch = "aarch64"))]
     unsafe {
-        return super::distance_aarch64::distance_cosine_aarch64_neon(a, b);
+        return distance_aarch64::distance_cosine_aarch64_neon(a, b);
     }
 
     #[allow(unreachable_code)]
@@ -333,6 +338,7 @@ macro_rules! distance_l2_simd_body {
         // the width of a vector type is provided as a constant
         // so the compiler is free to optimize it more.
         // S::VF32_WIDTH is a constant, 4 when using SSE, 8 when using AVX2, etc
+        #[allow(clippy::assign_op_pattern)]
         while x.len() >= S::VF32_WIDTH * 4 {
             //load data from your vec into an SIMD value
             accum0 = accum0

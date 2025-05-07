@@ -1,3 +1,5 @@
+mod filtering_tests;
+
 use super::{meta_page::MetaPage, pg_vector::PgVector};
 use pgrx::{
     pg_sys::{Datum, ScanKeyData},

@@ -2,18 +2,18 @@ use std::collections::BTreeMap;
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::labels::LabelSet;
-use super::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
-
-use super::meta_page::MetaPage;
-use super::neighbor_with_distance::*;
-use super::storage::Storage;
+use crate::access_method::graph::neighbor_with_distance::*;
+use crate::access_method::labels::LabelSet;
+use crate::access_method::meta_page::MetaPage;
+use crate::access_method::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
+use crate::access_method::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
 /// The idea is that during the index build, you don't want to update the actual Postgres
 /// pages every time you change the neighbors. Instead you change the neighbors in memory
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
+#[derive(Default)]
 pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk
     //use a btree to provide ordering on the item pointers in iter().
@@ -22,12 +22,6 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
-    pub fn new() -> Self {
-        Self {
-            neighbor_map: BTreeMap::new(),
-        }
-    }
-
     pub fn iter(
         &self,
     ) -> impl Iterator<
