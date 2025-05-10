@@ -67,7 +67,7 @@ impl TSVScanState {
 
         let store_type = match storage {
             StorageType::Plain => {
-                let stats = QuantizerStats::new();
+                let stats = QuantizerStats::default();
                 let bq =
                     PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
                 let it =
@@ -75,7 +75,7 @@ impl TSVScanState {
                 StorageState::Plain(it)
             }
             StorageType::SbqCompression => {
-                let mut stats = QuantizerStats::new();
+                let mut stats = QuantizerStats::default();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
                 let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
                 let it =

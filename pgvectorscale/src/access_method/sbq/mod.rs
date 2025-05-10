@@ -8,7 +8,7 @@ use super::{
     distance::distance_xor_optimized,
     graph::neighbor_store::GraphNeighborStore,
     labels::LabeledVector,
-    stats::{StatsDistanceComparison, StatsNodeRead, StatsNodeWrite},
+    stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite},
     storage::NodeDistanceMeasure,
 };
 
@@ -137,52 +137,24 @@ impl SbqMeans {
 }
 
 pub struct SbqSearchDistanceMeasure {
-    quantized_vector: Vec<SbqVectorElement>,
+    vec: Vec<SbqVectorElement>,
     query: LabeledVector,
 }
 
 impl SbqSearchDistanceMeasure {
-    pub fn new(quantizer: &SbqQuantizer, query: LabeledVector) -> SbqSearchDistanceMeasure {
-        SbqSearchDistanceMeasure {
-            quantized_vector: quantizer.quantize(query.vec().to_index_slice()),
-            query,
-        }
+    pub fn new(quantizer: &SbqQuantizer, query: LabeledVector) -> Self {
+        let vec = quantizer.quantize(query.vec().to_index_slice());
+        Self { vec, query }
     }
 
     pub fn calculate_bq_distance<S: StatsDistanceComparison>(
         &self,
         bq_vector: &[SbqVectorElement],
-        gns: &GraphNeighborStore,
+        _gns: &GraphNeighborStore,
         stats: &mut S,
     ) -> f32 {
-        assert!(!bq_vector.is_empty());
         stats.record_quantized_distance_comparison();
-        let (a, b) = match gns {
-            GraphNeighborStore::Disk => {
-                debug_assert!(
-                    self.quantized_vector.len() == bq_vector.len(),
-                    "self.quantized_vector.len()={} bq_vector.len()={}",
-                    self.quantized_vector.len(),
-                    bq_vector.len()
-                );
-                (self.quantized_vector.as_slice(), bq_vector)
-            }
-            GraphNeighborStore::Builder(_b) => {
-                debug_assert!(
-                    self.quantized_vector.len() == bq_vector.len(),
-                    "self.quantized_vector.len()={} bq_vector.len()={}",
-                    self.quantized_vector.len(),
-                    bq_vector.len()
-                );
-                (self.quantized_vector.as_slice(), bq_vector)
-            }
-        };
-
-        let count_ones = distance_xor_optimized(a, b);
-        //dot product is LOWER the more xors that lead to 1 becaues that means a negative times a positive = negative component
-        //but the distance is 1 - dot product, so the more count_ones the higher the distance.
-        // one other check for distance(a,a), xor=0, count_ones=0, distance=0
-        count_ones as f32
+        distance_xor_optimized(bq_vector, &self.vec) as f32
     }
 }
 
@@ -192,27 +164,26 @@ pub struct SbqNodeDistanceMeasure<'a> {
 }
 
 impl<'a> SbqNodeDistanceMeasure<'a> {
-    pub unsafe fn with_index_pointer<T: StatsNodeRead>(
+    pub unsafe fn with_index_pointer<T: StatsNodeRead + StatsNodeWrite + StatsNodeModify>(
         storage: &'a SbqSpeedupStorage<'a>,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
-        let cache = &mut storage.qv_cache.borrow_mut();
-        let vec = cache.get(index_pointer, storage, stats);
-        Self {
-            vec: vec.to_vec(),
-            storage,
-        }
+        let mut cache = storage.cache().borrow_mut();
+        let vec = cache.get(index_pointer, storage, stats).to_vec();
+        Self { vec, storage }
     }
 }
 
 impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
-    unsafe fn get_distance<T: StatsNodeRead + StatsDistanceComparison>(
+    unsafe fn get_distance<
+        T: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> f32 {
-        let cache = &mut self.storage.qv_cache.borrow_mut();
+        let mut cache = self.storage.cache().borrow_mut();
         let vec1 = cache.get(index_pointer, self.storage, stats);
         distance_xor_optimized(vec1, self.vec.as_slice()) as f32
     }

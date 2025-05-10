@@ -5,7 +5,9 @@ use crate::util::{IndexPointer, ItemPointer};
 use crate::access_method::graph::neighbor_with_distance::*;
 use crate::access_method::labels::LabelSet;
 use crate::access_method::meta_page::MetaPage;
-use crate::access_method::stats::{StatsDistanceComparison, StatsNodeModify, StatsNodeRead};
+use crate::access_method::stats::{
+    StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
+};
 use crate::access_method::storage::Storage;
 
 /// A builderGraph is a graph that keep the neighbors in-memory in the neighbor_map below
@@ -82,7 +84,7 @@ pub enum GraphNeighborStore {
 impl GraphNeighborStore {
     pub fn get_neighbors_with_full_vector_distances<
         S: Storage,
-        T: StatsNodeRead + StatsDistanceComparison,
+        T: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
     >(
         &self,
         neighbors_of: ItemPointer,

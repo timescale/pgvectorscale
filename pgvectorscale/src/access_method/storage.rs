@@ -19,7 +19,9 @@ use super::{
 
 /// NodeDistanceMeasure keeps the state to make distance comparisons between two nodes.
 pub trait NodeDistanceMeasure {
-    unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
+    unsafe fn get_distance<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -72,7 +74,7 @@ pub trait Storage {
         stats: &mut S,
     );
 
-    unsafe fn get_node_distance_measure<'a, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'a, S: StatsNodeRead + StatsNodeWrite + StatsNodeModify>(
         &'a self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -118,7 +120,9 @@ pub trait Storage {
     where
         Self: Sized;
 
-    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
+    fn get_neighbors_with_distances_from_disk<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,

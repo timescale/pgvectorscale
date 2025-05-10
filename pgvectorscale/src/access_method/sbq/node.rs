@@ -257,41 +257,6 @@ impl Debug for ArchivedSbqNode<'_> {
     }
 }
 
-impl Debug for ArchivedClassicSbqNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ArchivedClassicSbqNode")
-            .field(
-                "heap_item_pointer.block_number",
-                &self.heap_item_pointer.block_number,
-            )
-            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
-            .field("bq_vector", &self.bq_vector)
-            .field(
-                "neighbor_index_pointers.len()",
-                &self.neighbor_index_pointers.len(),
-            )
-            .finish()
-    }
-}
-
-impl Debug for ArchivedLabeledSbqNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ArchivedLabeledSbqNode")
-            .field(
-                "heap_item_pointer.block_number",
-                &self.heap_item_pointer.block_number,
-            )
-            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
-            .field("bq_vector", &self.bq_vector)
-            .field(
-                "neighbor_index_pointers.len()",
-                &self.neighbor_index_pointers.len(),
-            )
-            .field("labels", &self.labels)
-            .finish()
-    }
-}
-
 impl ArchivedSbqNode<'_> {
     pub fn num_neighbors(&self) -> usize {
         match self {
@@ -342,6 +307,59 @@ impl ArchivedSbqNode<'_> {
             ArchivedSbqNode::Classic(_) => None,
             ArchivedSbqNode::Labeled(node) => Some(&node.labels),
         }
+    }
+}
+
+impl ArchivedData for ArchivedMutSbqNode<'_> {
+    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+        self.iter_neighbors().collect()
+    }
+
+    fn is_deleted(&self) -> bool {
+        self.get_heap_item_pointer().offset == InvalidOffsetNumber
+    }
+
+    fn get_heap_item_pointer(&self) -> HeapPointer {
+        let hip = match self {
+            ArchivedMutSbqNode::Classic(node) => &node.heap_item_pointer,
+            ArchivedMutSbqNode::Labeled(node) => &node.heap_item_pointer,
+        };
+        hip.deserialize_item_pointer()
+    }
+}
+
+impl Debug for ArchivedClassicSbqNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivedClassicSbqNode")
+            .field(
+                "heap_item_pointer.block_number",
+                &self.heap_item_pointer.block_number,
+            )
+            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
+            .field("bq_vector", &self.bq_vector)
+            .field(
+                "neighbor_index_pointers.len()",
+                &self.neighbor_index_pointers.len(),
+            )
+            .finish()
+    }
+}
+
+impl Debug for ArchivedLabeledSbqNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ArchivedLabeledSbqNode")
+            .field(
+                "heap_item_pointer.block_number",
+                &self.heap_item_pointer.block_number,
+            )
+            .field("heap_item_pointer.offset", &self.heap_item_pointer.offset)
+            .field("bq_vector", &self.bq_vector)
+            .field(
+                "neighbor_index_pointers.len()",
+                &self.neighbor_index_pointers.len(),
+            )
+            .field("labels", &self.labels)
+            .finish()
     }
 }
 
@@ -402,22 +420,33 @@ impl<'a> ArchivedMutSbqNode<'a> {
             .take(self.num_neighbors())
             .map(|ip| ip.deserialize_item_pointer())
     }
-}
 
-impl ArchivedData for ArchivedMutSbqNode<'_> {
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
-        self.iter_neighbors().collect()
-    }
-
-    fn is_deleted(&self) -> bool {
-        self.get_heap_item_pointer().offset == InvalidOffsetNumber
-    }
-
-    fn get_heap_item_pointer(&self) -> HeapPointer {
-        let hip = match self {
-            ArchivedMutSbqNode::Classic(node) => &node.heap_item_pointer,
-            ArchivedMutSbqNode::Labeled(node) => &node.heap_item_pointer,
-        };
-        hip.deserialize_item_pointer()
+    pub fn set_bq_vector(&mut self, vector: &[SbqVectorElement]) {
+        match self {
+            ArchivedMutSbqNode::Classic(node) => {
+                let bq_vector = unsafe { node.as_mut().map_unchecked_mut(|s| &mut s.bq_vector) };
+                let len = bq_vector.len();
+                let ptr = bq_vector.as_ptr() as *mut u64;
+                for (i, &val) in vector.iter().enumerate() {
+                    if i < len {
+                        unsafe {
+                            std::ptr::write(ptr.add(i), val);
+                        }
+                    }
+                }
+            }
+            ArchivedMutSbqNode::Labeled(node) => {
+                let bq_vector = unsafe { node.as_mut().map_unchecked_mut(|s| &mut s.bq_vector) };
+                let len = bq_vector.len();
+                let ptr = bq_vector.as_ptr() as *mut u64;
+                for (i, &val) in vector.iter().enumerate() {
+                    if i < len {
+                        unsafe {
+                            std::ptr::write(ptr.add(i), val);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

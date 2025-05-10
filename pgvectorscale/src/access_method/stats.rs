@@ -26,33 +26,15 @@ pub trait StatsNodeVisit {
     fn record_candidate(&mut self);
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PruneNeighborStats {
     pub calls: usize,
     pub distance_comparisons: usize,
     pub node_reads: usize,
     pub node_modify: usize,
+    pub node_writes: usize,
     pub num_neighbors_before_prune: usize,
     pub num_neighbors_after_prune: usize,
-}
-
-impl Default for PruneNeighborStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl PruneNeighborStats {
-    pub fn new() -> Self {
-        PruneNeighborStats {
-            calls: 0,
-            distance_comparisons: 0,
-            node_reads: 0,
-            node_modify: 0,
-            num_neighbors_before_prune: 0,
-            num_neighbors_after_prune: 0,
-        }
-    }
 }
 
 impl StatsDistanceComparison for PruneNeighborStats {
@@ -77,36 +59,26 @@ impl StatsNodeModify for PruneNeighborStats {
     }
 }
 
-#[derive(Debug)]
+impl StatsNodeWrite for PruneNeighborStats {
+    fn record_write(&mut self) {
+        self.node_writes += 1;
+    }
+}
+
+#[derive(Debug, Default)]
 pub struct GreedySearchStats {
     calls: usize,
     full_distance_comparisons: usize,
     node_reads: usize,
+    node_writes: usize,
+    node_modify: usize,
     node_heap_reads: usize,
     quantized_distance_comparisons: usize,
     visited_nodes: usize,
     candidate_nodes: usize,
 }
 
-impl Default for GreedySearchStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl GreedySearchStats {
-    pub fn new() -> Self {
-        GreedySearchStats {
-            calls: 0,
-            full_distance_comparisons: 0,
-            node_reads: 0,
-            node_heap_reads: 0,
-            quantized_distance_comparisons: 0,
-            visited_nodes: 0,
-            candidate_nodes: 0,
-        }
-    }
-
     pub fn combine(&mut self, other: &Self) {
         self.calls += other.calls;
         self.full_distance_comparisons += other.full_distance_comparisons;
@@ -164,6 +136,18 @@ impl StatsHeapNodeRead for GreedySearchStats {
     }
 }
 
+impl StatsNodeWrite for GreedySearchStats {
+    fn record_write(&mut self) {
+        self.node_writes += 1;
+    }
+}
+
+impl StatsNodeModify for GreedySearchStats {
+    fn record_modify(&mut self) {
+        self.node_modify += 1;
+    }
+}
+
 impl StatsDistanceComparison for GreedySearchStats {
     fn record_full_distance_comparison(&mut self) {
         self.full_distance_comparisons += 1;
@@ -184,25 +168,10 @@ impl StatsNodeVisit for GreedySearchStats {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct QuantizerStats {
     pub node_reads: usize,
     pub node_writes: usize,
-}
-
-impl Default for QuantizerStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl QuantizerStats {
-    pub fn new() -> Self {
-        QuantizerStats {
-            node_reads: 0,
-            node_writes: 0,
-        }
-    }
 }
 
 impl StatsNodeRead for QuantizerStats {
@@ -217,7 +186,7 @@ impl StatsNodeWrite for QuantizerStats {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct InsertStats {
     pub prune_neighbor_stats: PruneNeighborStats,
     pub greedy_search_stats: GreedySearchStats,
@@ -225,25 +194,6 @@ pub struct InsertStats {
     pub node_reads: usize,
     pub node_modify: usize,
     pub node_writes: usize,
-}
-
-impl Default for InsertStats {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl InsertStats {
-    pub fn new() -> Self {
-        InsertStats {
-            prune_neighbor_stats: PruneNeighborStats::new(),
-            greedy_search_stats: GreedySearchStats::new(),
-            quantizer_stats: QuantizerStats::new(),
-            node_reads: 0,
-            node_modify: 0,
-            node_writes: 0,
-        }
-    }
 }
 
 impl StatsNodeRead for InsertStats {
@@ -264,6 +214,7 @@ impl StatsNodeWrite for InsertStats {
     }
 }
 
+#[derive(Debug)]
 pub struct WriteStats {
     pub started: Instant,
     pub num_nodes: usize,
@@ -276,20 +227,14 @@ pub struct WriteStats {
 
 impl Default for WriteStats {
     fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl WriteStats {
-    pub fn new() -> Self {
         Self {
             started: Instant::now(),
             num_nodes: 0,
-            prune_stats: PruneNeighborStats::new(),
-            num_neighbors: 0,
             nodes_read: 0,
             nodes_modified: 0,
             nodes_written: 0,
+            prune_stats: PruneNeighborStats::default(),
+            num_neighbors: 0,
         }
     }
 }

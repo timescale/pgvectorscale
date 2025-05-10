@@ -149,7 +149,7 @@ impl Storage for PlainStorage<'_> {
         node.commit();
     }
 
-    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead + StatsNodeWrite>(
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -191,7 +191,9 @@ impl Storage for PlainStorage<'_> {
             }
         }
     }
-    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
+    fn get_neighbors_with_distances_from_disk<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         neighbors_of: ItemPointer,
         result: &mut Vec<NeighborWithDistance>,

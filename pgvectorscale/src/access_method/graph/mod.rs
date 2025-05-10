@@ -88,7 +88,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             inserted: HashSet::new(),
             sdm: None,
             tie_break_item_pointer: None,
-            stats: GreedySearchStats::new(),
+            stats: GreedySearchStats::default(),
         }
     }
 
@@ -107,7 +107,7 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
             visited: Vec::with_capacity(search_list_size * 2),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
-            stats: GreedySearchStats::new(),
+            stats: GreedySearchStats::default(),
             sdm: Some(sdm),
         };
         res.stats.record_call();

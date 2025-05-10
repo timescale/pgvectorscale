@@ -51,7 +51,7 @@ impl<'a> BuildState<'a> {
             tape,
             graph,
             started: Instant::now(),
-            stats: InsertStats::new(),
+            stats: InsertStats::default(),
         }
     }
 }
@@ -184,7 +184,7 @@ unsafe fn aminsert_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();
-    let mut stats = InsertStats::new();
+    let mut stats = InsertStats::default();
 
     match &mut storage {
         StorageType::Plain => {
@@ -272,7 +272,7 @@ fn do_heap_scan(
         GraphNeighborStore::Builder(BuilderNeighborCache::default()),
         &mut meta_page,
     );
-    let mut write_stats = WriteStats::new();
+    let mut write_stats = WriteStats::default();
     match storage {
         StorageType::Plain => {
             let mut plain = PlainStorage::new_for_build(
