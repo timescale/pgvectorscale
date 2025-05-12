@@ -15,6 +15,8 @@ use crate::access_method::storage::Storage;
 /// pages every time you change the neighbors. Instead you change the neighbors in memory
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
+///
+/// TODO make an LRU also for the neighbors
 #[derive(Default)]
 pub struct BuilderNeighborCache {
     //maps node's pointer to the representation on disk

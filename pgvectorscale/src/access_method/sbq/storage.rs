@@ -41,6 +41,14 @@ pub struct SbqSpeedupStorage<'a> {
 }
 
 impl<'a> SbqSpeedupStorage<'a> {
+    fn cache_size(meta_page: &MetaPage) -> usize {
+        let memory_budget = unsafe { pgrx::pg_sys::maintenance_work_mem as usize };
+        let sbq_vec_len = meta_page.get_num_dimensions() as usize
+            * meta_page.get_bq_num_bits_per_dimension() as usize
+            / 64;
+        memory_budget / QuantizedVectorCache::entry_size(sbq_vec_len)
+    }
+
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
@@ -52,7 +60,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
             has_labels: meta_page.has_labels(),
         }
     }
@@ -77,7 +85,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
             has_labels: meta_page.has_labels(),
         }
     }
@@ -95,7 +103,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(1000)),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
             has_labels: meta_page.has_labels(),
         }
     }
@@ -363,8 +371,15 @@ impl Storage for SbqSpeedupStorage<'_> {
         }
     }
 
-    /* get_lsn and visit_lsn are different because the distance
-    comparisons for SBQ get the vector from different places */
+    /// The distance comparison implementations differ between get_lsn and visit_lsn
+    /// because they handle vectors from different sources:
+    ///
+    /// - get_lsn (create_lsn_for_start_node): Gets vectors directly from the node
+    ///   being read, used for the initial search node
+    ///
+    /// - visit_lsn: Handles vectors differently based on storage location:
+    ///   - For disk storage: Gets vectors directly from nodes
+    ///   - For builder storage: Uses a cache to access quantized vectors
     fn create_lsn_for_start_node(
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
