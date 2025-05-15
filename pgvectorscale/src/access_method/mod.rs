@@ -83,6 +83,11 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
 
     amroutine.ambuildphasename = Some(build::ambuildphasename);
 
+    #[cfg(feature = "pg17")]
+    {
+        amroutine.amcanbuildparallel = true;
+    }
+
     amroutine.into_pg_boxed()
 }
 
