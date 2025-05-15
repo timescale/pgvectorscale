@@ -68,7 +68,6 @@ pub trait Storage {
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
@@ -96,7 +95,7 @@ pub trait Storage {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
         no_filter: bool,
     ) where
         Self: Sized;
@@ -107,7 +106,7 @@ pub trait Storage {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
     ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>>
     where
         Self: Sized;
@@ -125,13 +124,11 @@ pub trait Storage {
     >(
         &self,
         neighbors_of: ItemPointer,
-        result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
-    );
+    ) -> Vec<NeighborWithDistance>;
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,

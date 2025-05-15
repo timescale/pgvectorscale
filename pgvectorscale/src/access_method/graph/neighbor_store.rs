@@ -1,10 +1,11 @@
-use std::collections::BTreeMap;
+use std::num::NonZero;
+
+use lru::LruCache;
 
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
 use crate::access_method::labels::LabelSet;
-use crate::access_method::meta_page::MetaPage;
 use crate::access_method::stats::{
     StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
 };
@@ -16,65 +17,97 @@ use crate::access_method::storage::Storage;
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
 ///
-/// TODO make an LRU also for the neighbors
-#[derive(Default)]
+pub struct NeighborCacheEntry {
+    pub labels: Option<LabelSet>,
+    pub neighbors: Vec<NeighborWithDistance>,
+}
+
+impl NeighborCacheEntry {
+    pub fn new(labels: Option<LabelSet>, neighbors: Vec<NeighborWithDistance>) -> Self {
+        Self { labels, neighbors }
+    }
+}
+
 pub struct BuilderNeighborCache {
-    //maps node's pointer to the representation on disk
-    //use a btree to provide ordering on the item pointers in iter().
-    //this ensures the write in finalize_node_at_end_of_build() is ordered, not random.
-    neighbor_map: BTreeMap<ItemPointer, (Option<LabelSet>, Vec<NeighborWithDistance>)>,
+    /// Map of node pointer to neighbor cache entry
+    neighbor_map: LruCache<ItemPointer, NeighborCacheEntry>,
+    /// Maximum number of neighbors per node during the build phase
+    num_neighbors: u32,
 }
 
 impl BuilderNeighborCache {
-    pub fn iter(
-        &self,
-    ) -> impl Iterator<
-        Item = (
-            &ItemPointer,
-            (Option<&LabelSet>, &Vec<NeighborWithDistance>),
-        ),
-    > {
-        self.neighbor_map
-            .iter()
-            .map(|(k, (v1, v2))| (k, (v1.as_ref(), v2)))
-    }
-
-    pub fn get_neighbors(&self, neighbors_of: ItemPointer) -> Vec<IndexPointer> {
-        let neighbors = self.neighbor_map.get(&neighbors_of);
-        match neighbors {
-            Some((_, n)) => n
-                .iter()
-                .map(|n| n.get_index_pointer_to_neighbor())
-                .collect(),
-            None => vec![],
+    pub fn new(capacity: usize, num_neighbors: u32) -> Self {
+        Self {
+            neighbor_map: LruCache::new(NonZero::new(capacity).unwrap()),
+            num_neighbors,
         }
     }
 
-    pub fn get_neighbors_with_full_vector_distances(
-        &self,
+    /// Convert cache to a sorted vector of neighbors
+    pub fn drain_sorted(&mut self) -> Vec<(ItemPointer, NeighborCacheEntry)> {
+        let neighbor_map = std::mem::replace(
+            &mut self.neighbor_map,
+            LruCache::new(NonZero::new(1).unwrap()),
+        );
+        let mut vec = neighbor_map.into_iter().collect::<Vec<_>>();
+        vec.sort_by_key(|(key, _)| *key);
+        vec
+    }
+
+    pub fn get_neighbors<
+        S: Storage,
+        T: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
+        &mut self,
         neighbors_of: ItemPointer,
-        result: &mut Vec<NeighborWithDistance>,
-    ) {
-        let neighbors = self.neighbor_map.get(&neighbors_of);
-        if let Some((_, n)) = neighbors {
-            for nwd in n {
-                result.push(nwd.clone());
-            }
-        }
+        storage: &S,
+        stats: &mut T,
+    ) -> Vec<IndexPointer> {
+        let neighbors = self.get_neighbors_with_full_vector_distances(neighbors_of, storage, stats);
+        neighbors
+            .iter()
+            .map(|n| n.get_index_pointer_to_neighbor())
+            .collect()
     }
 
-    pub fn set_neighbors(
+    pub fn get_neighbors_with_full_vector_distances<
+        S: Storage,
+        T: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
+        &mut self,
+        neighbors_of: ItemPointer,
+        storage: &S,
+        stats: &mut T,
+    ) -> Vec<NeighborWithDistance> {
+        let neighbors = self.neighbor_map.get(&neighbors_of);
+        if let Some(entry) = neighbors {
+            return entry.neighbors.clone();
+        }
+        let neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+
+        self.set_neighbors(neighbors_of, None, neighbors.clone(), storage, stats);
+        neighbors
+    }
+
+    pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(
         &mut self,
         neighbors_of: ItemPointer,
         labels: Option<LabelSet>,
         new_neighbors: Vec<NeighborWithDistance>,
+        storage: &S,
+        stats: &mut T,
     ) {
-        self.neighbor_map
-            .insert(neighbors_of, (labels, new_neighbors));
+        let evictee = self
+            .neighbor_map
+            .push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
+        if let Some((key, value)) = evictee {
+            // write to disk
+            storage.set_neighbors_on_disk(key, value.neighbors.as_slice(), stats);
+        }
     }
 
-    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
-        meta_page.get_max_neighbors_during_build()
+    pub fn get_num_neighbors(&self) -> u32 {
+        self.num_neighbors
     }
 }
 
@@ -88,46 +121,43 @@ impl GraphNeighborStore {
         S: Storage,
         T: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
     >(
-        &self,
+        &mut self,
         neighbors_of: ItemPointer,
         storage: &S,
-        result: &mut Vec<NeighborWithDistance>,
         stats: &mut T,
-    ) {
+    ) -> Vec<NeighborWithDistance> {
         match self {
             GraphNeighborStore::Builder(b) => {
-                b.get_neighbors_with_full_vector_distances(neighbors_of, result)
+                b.get_neighbors_with_full_vector_distances(neighbors_of, storage, stats)
             }
             GraphNeighborStore::Disk => {
-                storage.get_neighbors_with_distances_from_disk(neighbors_of, result, stats)
+                storage.get_neighbors_with_distances_from_disk(neighbors_of, stats)
             }
-        };
+        }
     }
 
     pub fn set_neighbors<S: Storage, T: StatsNodeModify + StatsNodeRead>(
         &mut self,
         storage: &S,
-        meta_page: &MetaPage,
         neighbors_of: ItemPointer,
         labels: Option<LabelSet>,
         new_neighbors: Vec<NeighborWithDistance>,
         stats: &mut T,
     ) {
         match self {
-            GraphNeighborStore::Builder(b) => b.set_neighbors(neighbors_of, labels, new_neighbors),
-            GraphNeighborStore::Disk => storage.set_neighbors_on_disk(
-                meta_page,
-                neighbors_of,
-                new_neighbors.as_slice(),
-                stats,
-            ),
+            GraphNeighborStore::Builder(b) => {
+                b.set_neighbors(neighbors_of, labels, new_neighbors, storage, stats)
+            }
+            GraphNeighborStore::Disk => {
+                storage.set_neighbors_on_disk(neighbors_of, new_neighbors.as_slice(), stats)
+            }
         }
     }
 
-    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
+    pub fn get_num_neighbors(&self, default: u32) -> u32 {
         match self {
-            GraphNeighborStore::Builder(b) => b.max_neighbors(meta_page),
-            GraphNeighborStore::Disk => meta_page.get_num_neighbors() as _,
+            GraphNeighborStore::Builder(b) => b.get_num_neighbors(),
+            GraphNeighborStore::Disk => default,
         }
     }
 }

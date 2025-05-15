@@ -377,7 +377,7 @@ impl<'a> ArchivedMutSbqNode<'a> {
         }
     }
 
-    pub fn set_neighbors(&'a mut self, neighbors: &[NeighborWithDistance], meta_page: &MetaPage) {
+    pub fn set_neighbors(&'a mut self, neighbors: &[NeighborWithDistance], num_neighbors: u32) {
         let mut neighbor_index_pointer = self.neighbor_index_pointer();
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = neighbor_index_pointer.as_mut().index_pin(i);
@@ -387,7 +387,7 @@ impl<'a> ArchivedMutSbqNode<'a> {
             a_index_pointer.offset = ip.offset;
         }
         //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
+        if neighbors.len() < num_neighbors as _ {
             let mut past_last_index_pointers = neighbor_index_pointer.index_pin(neighbors.len());
             past_last_index_pointers.block_number = InvalidBlockNumber;
             past_last_index_pointers.offset = InvalidOffsetNumber;

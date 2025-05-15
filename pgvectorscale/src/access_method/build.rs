@@ -188,11 +188,7 @@ unsafe fn aminsert_internal(
 
     match &mut storage {
         StorageType::Plain => {
-            let plain = PlainStorage::load_for_insert(
-                &index_relation,
-                &heap_relation,
-                meta_page.get_distance_function(),
-            );
+            let plain = PlainStorage::load_for_insert(&index_relation, &heap_relation, &meta_page);
             assert!(vec.labels().is_none());
             insert_storage(
                 &plain,
@@ -269,17 +265,17 @@ fn do_heap_scan(
     let storage = meta_page.get_storage_type();
 
     let graph = Graph::new(
-        GraphNeighborStore::Builder(BuilderNeighborCache::default()),
+        GraphNeighborStore::Builder(BuilderNeighborCache::new(
+            10000,
+            meta_page.get_num_neighbors(),
+        )), // TODO
         &mut meta_page,
     );
     let mut write_stats = WriteStats::default();
     match storage {
         StorageType::Plain => {
-            let mut plain = PlainStorage::new_for_build(
-                index_relation,
-                heap_relation,
-                graph.get_meta_page().get_distance_function(),
-            );
+            let mut plain =
+                PlainStorage::new_for_build(index_relation, heap_relation, graph.get_meta_page());
             plain.start_training(graph.get_meta_page());
             let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, graph, page_type);
@@ -364,29 +360,28 @@ fn finalize_index_build<S: Storage>(
     mut write_stats: WriteStats,
 ) -> usize {
     match state.graph.get_neighbor_store() {
-        GraphNeighborStore::Builder(builder) => {
-            for (&index_pointer, (labels, neighbors)) in builder.iter() {
+        GraphNeighborStore::Builder(ref mut builder) => {
+            for (index_pointer, entry) in builder.drain_sorted() {
                 write_stats.num_nodes += 1;
                 let prune_neighbors;
-                let neighbors =
-                    if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
-                        //OPT: get rid of this clone
-                        prune_neighbors = state.graph.prune_neighbors(
-                            labels,
-                            neighbors.clone(),
-                            storage,
-                            &mut write_stats.prune_stats,
-                        );
-                        &prune_neighbors
-                    } else {
-                        neighbors
-                    };
+                let neighbors = if entry.neighbors.len()
+                    > state.graph.get_meta_page().get_num_neighbors() as _
+                {
+                    prune_neighbors = state.graph.prune_neighbors(
+                        entry.labels.as_ref(),
+                        entry.neighbors,
+                        storage,
+                        &mut write_stats.prune_stats,
+                    );
+                    prune_neighbors
+                } else {
+                    entry.neighbors
+                };
                 write_stats.num_neighbors += neighbors.len();
 
                 storage.finalize_node_at_end_of_build(
-                    state.graph.get_meta_page(),
                     index_pointer,
-                    neighbors,
+                    neighbors.as_slice(),
                     &mut write_stats,
                 );
             }

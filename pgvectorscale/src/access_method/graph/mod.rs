@@ -97,11 +97,11 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         sdm: S::QueryDistanceMeasure,
         tie_break_item_pointer: Option<ItemPointer>,
         search_list_size: usize,
-        meta_page: &MetaPage,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
         storage: &S,
+        num_neighbors: u32,
     ) -> Self {
-        let neigbors = meta_page.get_num_neighbors() as usize;
+        let neigbors = num_neighbors as usize;
         let mut res = Self {
             tie_break_item_pointer,
             candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
@@ -194,8 +194,8 @@ impl<'a> Graph<'a> {
         }
     }
 
-    pub fn get_neighbor_store(&self) -> &GraphNeighborStore {
-        &self.neighbor_store
+    pub fn get_neighbor_store(&mut self) -> &mut GraphNeighborStore {
+        &mut self.neighbor_store
     }
 
     pub fn get_start_nodes(&self) -> Option<&StartNodes> {
@@ -210,16 +210,9 @@ impl<'a> Graph<'a> {
         additional_neighbors: Vec<NeighborWithDistance>,
         stats: &mut PruneNeighborStats,
     ) -> (bool, Vec<NeighborWithDistance>) {
-        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
-            self.neighbor_store.max_neighbors(self.get_meta_page()) + additional_neighbors.len(),
-        );
-        self.neighbor_store
-            .get_neighbors_with_full_vector_distances(
-                neighbors_of,
-                storage,
-                &mut candidates,
-                stats,
-            );
+        let mut candidates = self
+            .neighbor_store
+            .get_neighbors_with_full_vector_distances(neighbors_of, storage, stats);
 
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
@@ -240,23 +233,26 @@ impl<'a> Graph<'a> {
             candidates.remove(index);
         }
 
-        let (pruned, new_neighbors) =
-            if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(labels, candidates, storage, stats);
-                (true, new_list)
-            } else {
-                (false, candidates)
-            };
+        let (pruned, new_neighbors) = if candidates.len() > self.get_num_neighbors() as _ {
+            let new_list = self.prune_neighbors(labels, candidates, storage, stats);
+            (true, new_list)
+        } else {
+            (false, candidates)
+        };
 
         self.neighbor_store.set_neighbors(
             storage,
-            self.meta_page,
             neighbors_of,
             labels.cloned(),
             new_neighbors.clone(),
             stats,
         );
         (pruned, new_neighbors)
+    }
+
+    fn get_num_neighbors(&self) -> u32 {
+        self.neighbor_store
+            .get_num_neighbors(self.meta_page.get_num_neighbors())
     }
 
     pub fn get_meta_page(&self) -> &MetaPage {
@@ -281,7 +277,7 @@ impl<'a> Graph<'a> {
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     #[allow(clippy::mutable_key_type)]
     fn greedy_search_for_build<S: Storage>(
-        &self,
+        &mut self,
         index_pointer: IndexPointer,
         query: LabeledVector,
         no_filter: bool,
@@ -302,14 +298,15 @@ impl<'a> Graph<'a> {
 
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
+        let num_neighbors = self.get_num_neighbors();
         let mut l = ListSearchResult::new(
             start_nodes,
             dm,
             Some(index_pointer),
             search_list_size,
-            self.meta_page,
             self.get_neighbor_store(),
             storage,
+            num_neighbors,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
         self.greedy_search_iterate(
@@ -326,7 +323,7 @@ impl<'a> Graph<'a> {
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
     /// the next elements.
     pub fn greedy_search_streaming_init<S: Storage>(
-        &self,
+        &mut self,
         query: LabeledVector,
         search_list_size: usize,
         storage: &S,
@@ -338,21 +335,21 @@ impl<'a> Graph<'a> {
         }
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
-
+        let num_neighbors = self.get_num_neighbors();
         ListSearchResult::new(
             start_nodes,
             dm,
             None,
             search_list_size,
-            self.meta_page,
             self.get_neighbor_store(),
             storage,
+            num_neighbors,
         )
     }
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     pub fn greedy_search_iterate<S: Storage>(
-        &self,
+        &mut self,
         lsr: &mut ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
         visit_n_closest: usize,
         no_filter: bool,
@@ -372,7 +369,12 @@ impl<'a> Graph<'a> {
                 }
             }
             lsr.stats.record_visit();
-            storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store, no_filter);
+            storage.visit_lsn(
+                lsr,
+                list_search_entry_idx,
+                &mut self.neighbor_store,
+                no_filter,
+            );
         }
     }
 
@@ -408,9 +410,9 @@ impl<'a> Graph<'a> {
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
+        while alpha <= max_alpha && results.len() < self.get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
+                if results.len() >= self.get_num_neighbors() as _ {
                     return results;
                 }
 
@@ -501,12 +503,9 @@ impl<'a> Graph<'a> {
                 let start_nodes = StartNodes::new(index_pointer);
                 self.neighbor_store.set_neighbors(
                     storage,
-                    self.meta_page,
                     index_pointer,
                     vec.labels().cloned(),
-                    Vec::<NeighborWithDistance>::with_capacity(
-                        self.neighbor_store.max_neighbors(self.meta_page) as _,
-                    ),
+                    Vec::<NeighborWithDistance>::with_capacity(self.get_num_neighbors() as _),
                     stats,
                 );
 
@@ -531,7 +530,7 @@ impl<'a> Graph<'a> {
     /// Check that all nodes of the graph are reachable from the start node(s)
     #[allow(dead_code)]
     pub fn debug_count_reachable_nodes<S: Storage>(
-        &self,
+        &mut self,
         storage: &S,
         stats: &mut InsertStats,
     ) -> usize {
@@ -543,12 +542,11 @@ impl<'a> Graph<'a> {
                     continue;
                 }
                 visited.insert(node);
-                let mut neighbors = vec![];
-                self.neighbor_store
+                let neighbors = self
+                    .neighbor_store
                     .get_neighbors_with_full_vector_distances(
                         node,
                         storage,
-                        &mut neighbors,
                         &mut stats.greedy_search_stats,
                     );
                 for neighbor in neighbors {
@@ -568,7 +566,11 @@ impl<'a> Graph<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn debug_print_graph<S: Storage>(&self, storage: &S, stats: &mut InsertStats) -> String {
+    pub fn debug_print_graph<S: Storage>(
+        &mut self,
+        storage: &S,
+        stats: &mut InsertStats,
+    ) -> String {
         let mut buf = String::new();
         buf.push_str(
             r#"
@@ -596,12 +598,11 @@ digraph G {
                     continue;
                 }
                 visited.insert(node);
-                let mut neighbors = vec![];
-                self.neighbor_store
+                let neighbors = self
+                    .neighbor_store
                     .get_neighbors_with_full_vector_distances(
                         node,
                         storage,
-                        &mut neighbors,
                         &mut stats.greedy_search_stats,
                     );
                 // Read node and get its labels
