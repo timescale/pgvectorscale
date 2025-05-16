@@ -97,9 +97,9 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         sdm: S::QueryDistanceMeasure,
         tie_break_item_pointer: Option<ItemPointer>,
         search_list_size: usize,
+        num_neighbors: u32,
         gns: &mut GraphNeighborStore,
         storage: &S,
-        num_neighbors: u32,
     ) -> Self {
         let neigbors = num_neighbors as usize;
         let mut res = Self {
@@ -301,9 +301,9 @@ impl<'a> Graph<'a> {
             dm,
             Some(index_pointer),
             search_list_size,
+            num_neighbors,
             self.get_neighbor_store(),
             storage,
-            num_neighbors,
         );
         let mut visited_nodes = HashSet::with_capacity(search_list_size);
         self.greedy_search_iterate(
@@ -338,9 +338,9 @@ impl<'a> Graph<'a> {
             dm,
             None,
             search_list_size,
+            num_neighbors,
             self.get_neighbor_store(),
             storage,
-            num_neighbors,
         )
     }
 

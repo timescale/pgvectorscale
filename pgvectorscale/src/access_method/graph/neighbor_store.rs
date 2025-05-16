@@ -2,11 +2,11 @@ use std::num::NonZero;
 
 use lru::LruCache;
 
-use crate::access_method::meta_page::MetaPage;
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
 use crate::access_method::labels::LabelSet;
+use crate::access_method::meta_page::MetaPage;
 use crate::access_method::stats::{
     StatsDistanceComparison, StatsNodeModify, StatsNodeRead, StatsNodeWrite,
 };
