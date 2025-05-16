@@ -2,6 +2,7 @@ use std::num::NonZero;
 
 use lru::LruCache;
 
+use crate::access_method::meta_page::MetaPage;
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
@@ -28,9 +29,9 @@ impl NeighborCacheEntry {
     }
 
     /// Estimate of the size of an entry in the cache in bytes.
-    pub fn size(num_neighbors: u32, has_labels: bool) -> usize {
+    pub fn size(num_neighbors: usize, has_labels: bool) -> usize {
         std::mem::size_of::<Self>()
-            + num_neighbors as usize * std::mem::size_of::<NeighborWithDistance>()
+            + num_neighbors * std::mem::size_of::<NeighborWithDistance>()
             + if has_labels {
                 std::mem::size_of::<LabelSet>() + 4
             } else {
@@ -42,18 +43,15 @@ impl NeighborCacheEntry {
 pub struct BuilderNeighborCache {
     /// Map of node pointer to neighbor cache entry
     neighbor_map: LruCache<ItemPointer, NeighborCacheEntry>,
-    /// Maximum number of neighbors per node during the build phase
-    num_neighbors: u32,
 }
 
 impl BuilderNeighborCache {
-    pub fn new(memory_budget: f64, num_neighbors: u32, has_labels: bool) -> Self {
+    pub fn new(memory_budget: f64, num_neighbors: usize, has_labels: bool) -> Self {
         let total_memory = unsafe { pgrx::pg_sys::maintenance_work_mem as f64 };
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
         let capacity = memory_budget / NeighborCacheEntry::size(num_neighbors, has_labels);
         Self {
             neighbor_map: LruCache::new(NonZero::new(capacity).unwrap()),
-            num_neighbors,
         }
     }
 
@@ -119,10 +117,6 @@ impl BuilderNeighborCache {
             storage.set_neighbors_on_disk(key, value.neighbors.as_slice(), stats);
         }
     }
-
-    pub fn get_num_neighbors(&self) -> u32 {
-        self.num_neighbors
-    }
 }
 
 pub enum GraphNeighborStore {
@@ -168,10 +162,7 @@ impl GraphNeighborStore {
         }
     }
 
-    pub fn get_num_neighbors(&self, default: u32) -> u32 {
-        match self {
-            GraphNeighborStore::Builder(b) => b.get_num_neighbors(),
-            GraphNeighborStore::Disk => default,
-        }
+    pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
+        meta_page.get_max_neighbors_during_build()
     }
 }

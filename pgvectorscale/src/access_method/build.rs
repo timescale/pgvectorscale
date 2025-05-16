@@ -258,8 +258,8 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
 
 /// The fraction of maintenance_work_mem that should be used for various large data
 /// structures.  Intentionally does not add up to 1.0 to allow some slop space.
-pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.7;
-pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.2;
+pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.85;
+pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.05;
 
 fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,

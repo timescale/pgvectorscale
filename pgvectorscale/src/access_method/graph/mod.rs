@@ -234,12 +234,13 @@ impl<'a> Graph<'a> {
             candidates.remove(index);
         }
 
-        let (pruned, new_neighbors) = if candidates.len() > self.get_num_neighbors() as _ {
-            let new_list = self.prune_neighbors(labels, candidates, storage, stats);
-            (true, new_list)
-        } else {
-            (false, candidates)
-        };
+        let (pruned, new_neighbors) =
+            if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
+                let new_list = self.prune_neighbors(labels, candidates, storage, stats);
+                (true, new_list)
+            } else {
+                (false, candidates)
+            };
 
         self.neighbor_store.set_neighbors(
             storage,
@@ -249,12 +250,6 @@ impl<'a> Graph<'a> {
             stats,
         );
         (pruned, new_neighbors)
-    }
-
-    fn get_num_neighbors(&self) -> u32 {
-        self.meta_page.get_num_neighbors()
-        // self.neighbor_store
-        //     .get_num_neighbors(self.meta_page.get_num_neighbors())
     }
 
     pub fn get_meta_page(&self) -> &MetaPage {
@@ -300,7 +295,7 @@ impl<'a> Graph<'a> {
 
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
-        let num_neighbors = self.get_num_neighbors();
+        let num_neighbors = self.meta_page.get_num_neighbors();
         let mut l = ListSearchResult::new(
             start_nodes,
             dm,
@@ -337,7 +332,7 @@ impl<'a> Graph<'a> {
         }
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
-        let num_neighbors = self.get_num_neighbors();
+        let num_neighbors = self.meta_page.get_num_neighbors();
         ListSearchResult::new(
             start_nodes,
             dm,
@@ -412,9 +407,9 @@ impl<'a> Graph<'a> {
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.meta_page.get_num_neighbors() as _ {
+        while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.get_num_neighbors() as _ {
+                if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
                     return results;
                 }
 
@@ -507,7 +502,9 @@ impl<'a> Graph<'a> {
                     storage,
                     index_pointer,
                     vec.labels().cloned(),
-                    Vec::<NeighborWithDistance>::with_capacity(self.get_num_neighbors() as _),
+                    Vec::<NeighborWithDistance>::with_capacity(
+                        self.neighbor_store.max_neighbors(self.meta_page) as _,
+                    ),
                     stats,
                 );
 
