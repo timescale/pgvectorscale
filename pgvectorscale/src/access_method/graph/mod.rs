@@ -223,6 +223,7 @@ impl<'a> Graph<'a> {
                 candidates.push(n);
             }
         }
+
         //remove myself
         if !hash.insert(neighbors_of) {
             //prevent self-loops
@@ -251,8 +252,9 @@ impl<'a> Graph<'a> {
     }
 
     fn get_num_neighbors(&self) -> u32 {
-        self.neighbor_store
-            .get_num_neighbors(self.meta_page.get_num_neighbors())
+        self.meta_page.get_num_neighbors()
+        // self.neighbor_store
+        //     .get_num_neighbors(self.meta_page.get_num_neighbors())
     }
 
     pub fn get_meta_page(&self) -> &MetaPage {
@@ -410,7 +412,7 @@ impl<'a> Graph<'a> {
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.get_num_neighbors() as _ {
+        while alpha <= max_alpha && results.len() < self.meta_page.get_num_neighbors() as _ {
             for (i, neighbor) in candidates.iter().enumerate() {
                 if results.len() >= self.get_num_neighbors() as _ {
                     return results;
@@ -707,7 +709,6 @@ digraph G {
                 cnt_contains += 1;
             }
         }
-
         if neighbor_list_len > 0 && cnt_contains == 0 {
             // In tests this should be a hard error.  (There is no guarantee that it
             // cannot happen, but it is very unlikely.)

@@ -4,10 +4,13 @@ use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 
 use crate::{
     access_method::{
+        build::QUANTIZED_VECTOR_CACHE_SIZE,
         distance::{distance_xor_optimized, DistanceFn},
-        graph::neighbor_store::GraphNeighborStore,
-        graph::neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
-        graph::{ListSearchNeighbor, ListSearchResult},
+        graph::{
+            neighbor_store::GraphNeighborStore,
+            neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
+            ListSearchNeighbor, ListSearchResult,
+        },
         labels::{LabelSet, LabelSetView, LabeledVector},
         meta_page::MetaPage,
         pg_vector::PgVector,
@@ -42,12 +45,9 @@ pub struct SbqSpeedupStorage<'a> {
 }
 
 impl<'a> SbqSpeedupStorage<'a> {
-    fn cache_size(meta_page: &MetaPage) -> usize {
-        let memory_budget = unsafe { pgrx::pg_sys::maintenance_work_mem as usize };
-        let sbq_vec_len = meta_page.get_num_dimensions() as usize
-            * meta_page.get_bq_num_bits_per_dimension() as usize
-            / 64;
-        memory_budget / QuantizedVectorCache::entry_size(sbq_vec_len)
+    fn sbq_vec_len(meta_page: &MetaPage) -> usize {
+        meta_page.get_num_dimensions() as usize * meta_page.get_bq_num_bits_per_dimension() as usize
+            / 64
     }
 
     pub fn new_for_build(
@@ -61,7 +61,10 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(
+                QUANTIZED_VECTOR_CACHE_SIZE,
+                Self::sbq_vec_len(meta_page),
+            )),
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }
@@ -87,7 +90,10 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(
+                QUANTIZED_VECTOR_CACHE_SIZE,
+                Self::sbq_vec_len(meta_page),
+            )),
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }
@@ -106,7 +112,10 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(Self::cache_size(meta_page))),
+            qv_cache: RefCell::new(QuantizedVectorCache::new(
+                QUANTIZED_VECTOR_CACHE_SIZE,
+                Self::sbq_vec_len(meta_page),
+            )),
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }

@@ -26,6 +26,17 @@ impl NeighborCacheEntry {
     pub fn new(labels: Option<LabelSet>, neighbors: Vec<NeighborWithDistance>) -> Self {
         Self { labels, neighbors }
     }
+
+    /// Estimate of the size of an entry in the cache in bytes.
+    pub fn size(num_neighbors: u32, has_labels: bool) -> usize {
+        std::mem::size_of::<Self>()
+            + num_neighbors as usize * std::mem::size_of::<NeighborWithDistance>()
+            + if has_labels {
+                std::mem::size_of::<LabelSet>() + 4
+            } else {
+                0
+            }
+    }
 }
 
 pub struct BuilderNeighborCache {
@@ -36,7 +47,10 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
-    pub fn new(capacity: usize, num_neighbors: u32) -> Self {
+    pub fn new(memory_budget: f64, num_neighbors: u32, has_labels: bool) -> Self {
+        let total_memory = unsafe { pgrx::pg_sys::maintenance_work_mem as f64 };
+        let memory_budget = (total_memory * memory_budget).ceil() as usize;
+        let capacity = memory_budget / NeighborCacheEntry::size(num_neighbors, has_labels);
         Self {
             neighbor_map: LruCache::new(NonZero::new(capacity).unwrap()),
             num_neighbors,

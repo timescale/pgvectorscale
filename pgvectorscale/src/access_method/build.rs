@@ -256,6 +256,11 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
+/// The fraction of maintenance_work_mem that should be used for various large data
+/// structures.  Intentionally does not add up to 1.0 to allow some slop space.
+pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.7;
+pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.2;
+
 fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &PgRelation,
@@ -266,9 +271,10 @@ fn do_heap_scan(
 
     let graph = Graph::new(
         GraphNeighborStore::Builder(BuilderNeighborCache::new(
-            10000,
-            meta_page.get_num_neighbors(),
-        )), // TODO
+            BUILDER_NEIGHBOR_CACHE_SIZE,
+            meta_page.get_max_neighbors_during_build(),
+            meta_page.has_labels(),
+        )),
         &mut meta_page,
     );
     let mut write_stats = WriteStats::default();
@@ -359,6 +365,12 @@ fn finalize_index_build<S: Storage>(
     index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
+    notice!(
+        "Graph has {} reachable nodes",
+        state
+            .graph
+            .debug_count_reachable_nodes(storage, &mut InsertStats::default())
+    );
     match state.graph.get_neighbor_store() {
         GraphNeighborStore::Builder(ref mut builder) => {
             for (index_pointer, entry) in builder.drain_sorted() {

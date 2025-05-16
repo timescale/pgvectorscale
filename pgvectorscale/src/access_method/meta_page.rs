@@ -250,8 +250,8 @@ impl MetaPage {
         StorageType::from_u8(self.storage_type)
     }
 
-    pub fn get_max_neighbors_during_build(&self) -> usize {
-        ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as usize
+    pub fn get_max_neighbors_during_build(&self) -> u32 {
+        ((self.get_num_neighbors() as f64) * GRAPH_SLACK_FACTOR).ceil() as u32
     }
 
     pub fn has_labels(&self) -> bool {

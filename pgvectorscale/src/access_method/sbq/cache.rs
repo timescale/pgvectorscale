@@ -16,13 +16,17 @@ pub struct QuantizedVectorCache {
 }
 
 impl QuantizedVectorCache {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(memory_budget: f64, sbq_vec_len: usize) -> Self {
+        let total_memory = unsafe { pgrx::pg_sys::maintenance_work_mem as f64 };
+        let memory_budget = (total_memory * memory_budget).ceil() as usize;
+        let capacity = memory_budget / Self::entry_size(sbq_vec_len);
         Self {
             cache: LruCache::new(NonZero::new(capacity).unwrap()),
             warned_full: false,
         }
     }
 
+    /// Estimate of the size of an entry in the cache in bytes.
     pub fn entry_size(sbq_vec_len: usize) -> usize {
         std::mem::size_of::<ItemPointer>()
             + std::mem::size_of::<Vec<SbqVectorElement>>()

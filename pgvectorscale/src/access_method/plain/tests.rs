@@ -22,7 +22,7 @@ mod tests {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             DistanceType::Cosine,
-            "num_neighbors=10, storage_layout = plain",
+            "num_neighbors=20, storage_layout = plain",
             "plain_few_neighbors",
             1536,
         )?;
