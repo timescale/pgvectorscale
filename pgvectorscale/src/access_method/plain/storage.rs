@@ -3,16 +3,18 @@ use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 use crate::{
     access_method::{
         distance::DistanceFn,
-        graph::neighbor_store::GraphNeighborStore,
-        graph::neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
-        graph::{ListSearchNeighbor, ListSearchResult},
+        graph::{
+            neighbor_store::GraphNeighborStore,
+            neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
+            ListSearchNeighbor, ListSearchResult,
+        },
         labels::{LabelSet, LabeledVector},
         meta_page::MetaPage,
         node::{ReadableNode, WriteableNode},
         pg_vector::PgVector,
         stats::{
-            GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-            StatsNodeRead, StatsNodeWrite, WriteStats,
+            GreedySearchStats, PruneNeighborStats, StatsDistanceComparison, StatsHeapNodeRead,
+            StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats,
         },
         storage::{ArchivedData, NodeDistanceMeasure, Storage},
         storage_common::get_index_vector_attribute,
@@ -86,12 +88,12 @@ pub struct PlainStorageLsnPrivateData {
 }
 
 impl PlainStorageLsnPrivateData {
-    pub fn new<S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify>(
+    pub fn new(
         index_pointer_to_node: IndexPointer,
         node: &ArchivedPlainNode,
         gns: &mut GraphNeighborStore,
         storage: &PlainStorage,
-        stats: &mut S,
+        stats: &mut PruneNeighborStats,
     ) -> Self {
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         let neighbors = match gns {
@@ -250,7 +252,7 @@ impl Storage for PlainStorage<'_> {
         Some(ListSearchNeighbor::new(
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
-            PlainStorageLsnPrivateData::new(index_pointer, node, gns, self, &mut lsr.stats),
+            PlainStorageLsnPrivateData::new(index_pointer, node, gns, self, &mut lsr.prune_stats),
             None,
         ))
     }
@@ -293,7 +295,7 @@ impl Storage for PlainStorage<'_> {
                     node_neighbor,
                     gns,
                     self,
-                    &mut lsr.stats,
+                    &mut lsr.prune_stats,
                 ),
                 None,
             );

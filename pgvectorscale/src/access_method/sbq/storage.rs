@@ -202,7 +202,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                 let neighbors = b.get_neighbors_with_full_vector_distances(
                     lsn_index_pointer,
                     self,
-                    &mut lsr.stats,
+                    &mut lsr.prune_stats,
                 );
                 for neighbor in neighbors.iter() {
                     let neighbor_index_pointer = neighbor.get_index_pointer_to_neighbor();

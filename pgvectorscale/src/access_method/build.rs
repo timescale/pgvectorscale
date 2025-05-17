@@ -272,8 +272,7 @@ fn do_heap_scan(
     let graph = Graph::new(
         GraphNeighborStore::Builder(BuilderNeighborCache::new(
             BUILDER_NEIGHBOR_CACHE_SIZE,
-            meta_page.get_max_neighbors_during_build(),
-            meta_page.has_labels(),
+            &meta_page,
         )),
         &mut meta_page,
     );
@@ -297,7 +296,7 @@ fn do_heap_scan(
                 );
             }
 
-            finalize_index_build(&mut plain, &mut bs, index_relation, write_stats)
+            finalize_index_build(&mut plain, bs, index_relation, write_stats)
         }
         StorageType::SbqCompression => {
             let mut bq = SbqSpeedupStorage::new_for_build(
@@ -354,56 +353,51 @@ fn do_heap_scan(
                 );
             }
 
-            finalize_index_build(&mut bq, &mut bs, index_relation, write_stats)
+            finalize_index_build(&mut bq, bs, index_relation, write_stats)
         }
     }
 }
 
 fn finalize_index_build<S: Storage>(
     storage: &mut S,
-    state: &mut BuildState,
+    mut state: BuildState,
     index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
     notice!(
         "Graph has {} reachable nodes",
-        state
-            .graph
-            .debug_count_reachable_nodes(storage, &mut InsertStats::default())
+        state.graph.debug_count_reachable_nodes(storage)
     );
-    match state.graph.get_neighbor_store() {
-        GraphNeighborStore::Builder(ref mut builder) => {
-            for (index_pointer, entry) in builder.drain_sorted() {
-                write_stats.num_nodes += 1;
-                let prune_neighbors;
-                let neighbors = if entry.neighbors.len()
-                    > state.graph.get_meta_page().get_num_neighbors() as _
-                {
-                    prune_neighbors = state.graph.prune_neighbors(
-                        entry.labels.as_ref(),
-                        entry.neighbors,
-                        storage,
-                        &mut write_stats.prune_stats,
-                    );
-                    prune_neighbors
-                } else {
-                    entry.neighbors
-                };
-                write_stats.num_neighbors += neighbors.len();
+    let BuildState { graph, ntuples, .. } = state;
+    let (neighbor_store, meta_page) = graph.into_parts();
+    let cache_entries = neighbor_store.into_sorted();
 
-                storage.finalize_node_at_end_of_build(
-                    index_pointer,
-                    neighbors.as_slice(),
-                    &mut write_stats,
-                );
-            }
-            unsafe {
-                state.graph.get_meta_page().store(index_relation, false);
-            }
-        }
-        GraphNeighborStore::Disk => {
-            panic!("Should not be using the disk neighbor store during build");
-        }
+    for (index_pointer, entry) in cache_entries {
+        write_stats.num_nodes += 1;
+        let prune_neighbors;
+        let neighbors = if entry.neighbors.len() > meta_page.get_num_neighbors() as _ {
+            prune_neighbors = Graph::prune_neighbors(
+                meta_page.get_max_alpha(),
+                meta_page.get_num_neighbors() as _,
+                entry.labels.as_ref(),
+                entry.neighbors,
+                storage,
+                &mut write_stats.prune_stats,
+            );
+            prune_neighbors
+        } else {
+            entry.neighbors
+        };
+        write_stats.num_neighbors += neighbors.len();
+
+        storage.finalize_node_at_end_of_build(
+            index_pointer,
+            neighbors.as_slice(),
+            &mut write_stats,
+        );
+    }
+    unsafe {
+        meta_page.store(index_relation, false);
     }
 
     debug1!("write done");
@@ -428,7 +422,6 @@ fn finalize_index_build<S: Storage>(
             write_stats.prune_stats.calls
         );
     }
-    let ntuples = state.ntuples;
 
     warning!("Indexed {} tuples", ntuples);
 
