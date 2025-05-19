@@ -28,6 +28,18 @@ mod tests {
         Ok(())
     }
 
+    #[pg_test]
+    unsafe fn test_bq_compressed_storage_index_creation_low_memory() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold_bounded_memory(
+            DistanceType::Cosine,
+            "num_neighbors=10, storage_layout = memory_optimized",
+            "bq_compressed_low_memory",
+            1536,
+            Some(256),
+        )?;
+        Ok(())
+    }
+
     #[test]
     fn test_bq_compressed_storage_delete_vacuum_plain() {
         crate::access_method::vacuum::tests::test_delete_vacuum_plain_scaffold(

@@ -597,13 +597,39 @@ pub mod tests {
         name: &str,
         vector_dimensions: usize,
     ) -> spi::Result<()> {
+        test_index_creation_and_accuracy_scaffold_bounded_memory(
+            distance_type,
+            index_options,
+            name,
+            vector_dimensions,
+            None,
+        )
+    }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_index_creation_and_accuracy_scaffold_bounded_memory(
+        distance_type: DistanceType,
+        index_options: &str,
+        name: &str,
+        vector_dimensions: usize,
+        maintenance_work_mem_kb: Option<usize>,
+    ) -> spi::Result<()> {
         let operator = distance_type.get_operator();
         let operator_class = distance_type.get_operator_class();
         let table_name = format!("test_data_icaa_{}", name);
+        let maintenance_work_mem_clause =
+            if let Some(maintenance_work_mem_kb) = maintenance_work_mem_kb {
+                format!("SET maintenance_work_mem = {};", maintenance_work_mem_kb)
+            } else {
+                "".to_string()
+            };
+
         Spi::run(&format!(
             "CREATE TABLE {table_name} (
                 embedding vector ({vector_dimensions})
             );
+
+            {maintenance_work_mem_clause}
 
             select setseed(0.5);
            -- generate 300 vectors

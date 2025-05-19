@@ -123,7 +123,7 @@ You can install pgvectorscale from source and install it in an existing PostgreS
 
 ### Enable pgvectorscale in a Timescale Cloud service
 
-Note: the instructions below are for Timescale's standard compute instance. For production vector workloads, we’re offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
+Note: the instructions below are for Timescale's standard compute instance. For production vector workloads, we're offering **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
 
 To enable pgvectorscale:
 
@@ -311,6 +311,14 @@ We suggest setting the index build-time paramers for major changes to index oper
  We expect most people to tune the query-time parameters (if any) and leave the index build time parameters set to default.
 
 ### StreamingDiskANN index build-time parameters
+
+The StreamingDiskANN index build process can be memory-intensive. You may need to increase the `maintenance_work_mem` parameter to improve build performance. For example:
+
+```sql
+SET maintenance_work_mem = '2GB';
+```
+
+This parameter controls the maximum amount of memory to be used by maintenance operations, including index builds. The default value is typically 64MB, which may be too low for building StreamingDiskANN indexes on large datasets.
 
 These parameters can be set when an index is created.
 
