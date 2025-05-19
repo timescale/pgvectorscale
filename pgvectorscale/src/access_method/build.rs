@@ -256,10 +256,14 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
-/// The fraction of maintenance_work_mem that should be used for various large data
-/// structures.  Intentionally does not add up to 1.0 to allow some slop space.
-pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.85;
-pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.05;
+/// The fraction of maintenance_work_mem that should be used for various large in-memory
+/// data structures.  Intentionally does not add up to 1.0 to allow some slop space.
+pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.8;
+pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.1;
+
+pub fn maintenance_work_mem_bytes() -> usize {
+    unsafe { pg_sys::maintenance_work_mem as usize * 1024 }
+}
 
 fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
@@ -360,14 +364,10 @@ fn do_heap_scan(
 
 fn finalize_index_build<S: Storage>(
     storage: &mut S,
-    mut state: BuildState,
+    state: BuildState,
     index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
-    notice!(
-        "Graph has {} reachable nodes",
-        state.graph.debug_count_reachable_nodes(storage)
-    );
     let BuildState { graph, ntuples, .. } = state;
     let (neighbor_store, meta_page) = graph.into_parts();
     let cache_entries = neighbor_store.into_sorted();
@@ -401,7 +401,6 @@ fn finalize_index_build<S: Storage>(
     }
 
     debug1!("write done");
-    assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)

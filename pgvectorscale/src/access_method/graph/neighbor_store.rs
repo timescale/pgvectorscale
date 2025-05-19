@@ -3,6 +3,7 @@ use std::num::NonZero;
 
 use lru::LruCache;
 
+use crate::access_method::build::maintenance_work_mem_bytes;
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
@@ -50,10 +51,18 @@ pub struct BuilderNeighborCache {
 
 impl BuilderNeighborCache {
     pub fn new(memory_budget: f64, meta_page: &MetaPage) -> Self {
-        let total_memory = unsafe { pgrx::pg_sys::maintenance_work_mem as f64 };
+        let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
         let capacity = memory_budget
             / NeighborCacheEntry::size(meta_page.get_num_neighbors() as _, meta_page.has_labels());
+
+        pgrx::debug1!(
+            "BuilderNeighborCache::new capacity: {} memory_budget: {} total_memory: {}",
+            capacity,
+            memory_budget,
+            total_memory
+        );
+
         Self {
             neighbor_map: RefCell::new(LruCache::new(NonZero::new(capacity).unwrap())),
             num_neighbors: meta_page.get_num_neighbors() as _,
@@ -166,7 +175,10 @@ impl GraphNeighborStore {
     }
 
     pub fn max_neighbors(&self, meta_page: &MetaPage) -> usize {
-        meta_page.get_max_neighbors_during_build()
+        match self {
+            GraphNeighborStore::Builder(_) => meta_page.get_max_neighbors_during_build(),
+            GraphNeighborStore::Disk => meta_page.get_num_neighbors() as _,
+        }
     }
 
     pub fn into_sorted(self) -> Vec<(ItemPointer, NeighborCacheEntry)> {

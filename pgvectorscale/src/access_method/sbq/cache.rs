@@ -4,7 +4,10 @@ use lru::LruCache;
 use pgrx::warning;
 
 use crate::{
-    access_method::stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite},
+    access_method::{
+        build::maintenance_work_mem_bytes,
+        stats::{StatsNodeModify, StatsNodeRead, StatsNodeWrite},
+    },
     util::{IndexPointer, ItemPointer},
 };
 
@@ -17,9 +20,17 @@ pub struct QuantizedVectorCache {
 
 impl QuantizedVectorCache {
     pub fn new(memory_budget: f64, sbq_vec_len: usize) -> Self {
-        let total_memory = unsafe { pgrx::pg_sys::maintenance_work_mem as f64 };
+        let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
         let capacity = memory_budget / Self::entry_size(sbq_vec_len);
+
+        pgrx::debug1!(
+            "QuantizedVectorCache::new capacity: {} memory_budget: {} total_memory: {}",
+            capacity,
+            memory_budget,
+            total_memory
+        );
+
         Self {
             cache: LruCache::new(NonZero::new(capacity).unwrap()),
             warned_full: false,
