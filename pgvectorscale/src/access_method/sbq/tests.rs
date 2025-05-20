@@ -35,7 +35,7 @@ mod tests {
             "num_neighbors=10, storage_layout = memory_optimized",
             "bq_compressed_low_memory",
             1536,
-            Some(256),
+            Some(1024),
         )?;
         Ok(())
     }

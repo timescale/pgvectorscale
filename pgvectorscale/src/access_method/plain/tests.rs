@@ -24,7 +24,7 @@ mod tests {
             "num_neighbors=10, storage_layout = plain",
             "plain_many_neighbors",
             1536,
-            Some(128),
+            Some(1024),
         )?;
         Ok(())
     }
