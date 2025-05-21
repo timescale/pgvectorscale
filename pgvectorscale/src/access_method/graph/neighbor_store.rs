@@ -1,10 +1,8 @@
 use std::cell::RefCell;
 use std::num::NonZero;
 
-use lru::LruCache;
-use pgrx::warning;
-
 use crate::access_method::build::maintenance_work_mem_bytes;
+use crate::util::lru::LruCacheWithStats;
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
@@ -45,10 +43,9 @@ impl NeighborCacheEntry {
 
 pub struct BuilderNeighborCache {
     /// Map of node pointer to neighbor cache entry
-    neighbor_map: RefCell<LruCache<ItemPointer, NeighborCacheEntry>>,
+    neighbor_map: RefCell<LruCacheWithStats<ItemPointer, NeighborCacheEntry>>,
     num_neighbors: usize,
     max_alpha: f64,
-    warned_full: RefCell<bool>,
 }
 
 impl BuilderNeighborCache {
@@ -66,16 +63,18 @@ impl BuilderNeighborCache {
         );
 
         Self {
-            neighbor_map: RefCell::new(LruCache::new(NonZero::new(capacity).unwrap())),
+            neighbor_map: RefCell::new(LruCacheWithStats::new(
+                NonZero::new(capacity).unwrap(),
+                "Builder neighbor cache",
+            )),
             num_neighbors: meta_page.get_num_neighbors() as _,
             max_alpha: meta_page.get_max_alpha(),
-            warned_full: RefCell::new(false),
         }
     }
 
     /// Convert cache to a sorted vector of neighbors
     fn into_sorted(self) -> Vec<(ItemPointer, NeighborCacheEntry)> {
-        let neighbor_map = self.neighbor_map.into_inner();
+        let (neighbor_map, _) = self.neighbor_map.into_inner().into_parts();
         let mut vec = neighbor_map.into_iter().collect::<Vec<_>>();
         vec.sort_by_key(|(key, _)| *key);
         vec
@@ -124,13 +123,6 @@ impl BuilderNeighborCache {
         let evictee =
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
-            if !*self.warned_full.borrow() {
-                warning!(
-                    "Vector neighbor cache is full after processing {} vectors, consider increasing maintenance_work_mem",
-                    neighbor_map.len()
-                );
-                *self.warned_full.borrow_mut() = true;
-            }
             let new_neighbors = Graph::prune_neighbors(
                 self.max_alpha,
                 self.num_neighbors,

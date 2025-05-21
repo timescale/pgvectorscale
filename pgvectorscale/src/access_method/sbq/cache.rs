@@ -1,7 +1,6 @@
 use std::num::NonZero;
 
-use lru::LruCache;
-use pgrx::warning;
+use crate::util::lru::LruCacheWithStats;
 
 use crate::{
     access_method::{
@@ -14,8 +13,7 @@ use crate::{
 use super::{node::SbqNode, SbqSpeedupStorage, SbqVectorElement};
 
 pub struct QuantizedVectorCache {
-    cache: LruCache<ItemPointer, Vec<SbqVectorElement>>,
-    warned_full: bool,
+    cache: LruCacheWithStats<ItemPointer, Vec<SbqVectorElement>>,
 }
 
 impl QuantizedVectorCache {
@@ -32,8 +30,10 @@ impl QuantizedVectorCache {
         );
 
         Self {
-            cache: LruCache::new(NonZero::new(capacity).unwrap()),
-            warned_full: false,
+            cache: LruCacheWithStats::new(
+                NonZero::new(capacity).unwrap(),
+                "Quanitized vector cache",
+            ),
         }
     }
 
@@ -61,13 +61,6 @@ impl QuantizedVectorCache {
             // Insert into cache and handle evicted item
             let evicted = self.cache.push(index_pointer, vector);
             if let Some((evicted_pointer, evicted_vector)) = evicted {
-                if !self.warned_full {
-                    warning!(
-                        "Quantized vector cache is full after processing {} vectors, consider increasing maintenance_work_mem",
-                        self.cache.len()
-                    );
-                    self.warned_full = true;
-                }
                 storage.write_quantized_vector(evicted_pointer, evicted_vector.as_slice(), stats);
             }
         }
