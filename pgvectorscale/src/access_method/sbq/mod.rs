@@ -169,7 +169,7 @@ impl<'a> SbqNodeDistanceMeasure<'a> {
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
-        let mut cache = storage.cache().borrow_mut();
+        let mut cache = storage.cache().as_ref().unwrap().borrow_mut();
         let vec = cache.get(index_pointer, storage, stats).to_vec();
         Self { vec, storage }
     }
@@ -183,7 +183,7 @@ impl NodeDistanceMeasure for SbqNodeDistanceMeasure<'_> {
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> f32 {
-        let mut cache = self.storage.cache().borrow_mut();
+        let mut cache = self.storage.cache().as_ref().unwrap().borrow_mut();
         let vec1 = cache.get(index_pointer, self.storage, stats);
         distance_xor_optimized(vec1, self.vec.as_slice()) as f32
     }

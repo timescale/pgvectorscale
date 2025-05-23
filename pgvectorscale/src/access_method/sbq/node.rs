@@ -420,33 +420,4 @@ impl<'a> ArchivedMutSbqNode<'a> {
             .take(self.num_neighbors())
             .map(|ip| ip.deserialize_item_pointer())
     }
-
-    pub fn set_bq_vector(&mut self, vector: &[SbqVectorElement]) {
-        match self {
-            ArchivedMutSbqNode::Classic(node) => {
-                let bq_vector = unsafe { node.as_mut().map_unchecked_mut(|s| &mut s.bq_vector) };
-                let len = bq_vector.len();
-                let ptr = bq_vector.as_ptr() as *mut u64;
-                for (i, &val) in vector.iter().enumerate() {
-                    if i < len {
-                        unsafe {
-                            std::ptr::write(ptr.add(i), val);
-                        }
-                    }
-                }
-            }
-            ArchivedMutSbqNode::Labeled(node) => {
-                let bq_vector = unsafe { node.as_mut().map_unchecked_mut(|s| &mut s.bq_vector) };
-                let len = bq_vector.len();
-                let ptr = bq_vector.as_ptr() as *mut u64;
-                for (i, &val) in vector.iter().enumerate() {
-                    if i < len {
-                        unsafe {
-                            std::ptr::write(ptr.add(i), val);
-                        }
-                    }
-                }
-            }
-        }
-    }
 }

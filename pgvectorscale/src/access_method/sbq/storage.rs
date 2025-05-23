@@ -30,7 +30,7 @@ use super::{
     cache::QuantizedVectorCache,
     node::{ArchivedSbqNode, SbqNode},
     quantize::SbqQuantizer,
-    SbqMeans, SbqNodeDistanceMeasure, SbqSearchDistanceMeasure, SbqVectorElement,
+    SbqMeans, SbqNodeDistanceMeasure, SbqSearchDistanceMeasure,
 };
 
 pub struct SbqSpeedupStorage<'a> {
@@ -39,7 +39,7 @@ pub struct SbqSpeedupStorage<'a> {
     quantizer: SbqQuantizer,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
-    qv_cache: RefCell<QuantizedVectorCache>,
+    qv_cache: Option<RefCell<QuantizedVectorCache>>,
     has_labels: bool,
     num_neighbors: u32,
 }
@@ -61,10 +61,11 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: SbqQuantizer::new(meta_page),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(
+            qv_cache: Some(RefCell::new(QuantizedVectorCache::new(
                 QUANTIZED_VECTOR_CACHE_SIZE,
                 Self::sbq_vec_len(meta_page),
-            )),
+                meta_page.get_num_neighbors() as usize,
+            ))),
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }
@@ -90,10 +91,11 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: Self::load_quantizer(index_relation, meta_page, stats),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(
+            qv_cache: Some(RefCell::new(QuantizedVectorCache::new(
                 QUANTIZED_VECTOR_CACHE_SIZE,
                 Self::sbq_vec_len(meta_page),
-            )),
+                meta_page.get_num_neighbors() as usize,
+            ))),
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }
@@ -112,10 +114,7 @@ impl<'a> SbqSpeedupStorage<'a> {
             quantizer: quantizer.clone(),
             heap_rel: heap_relation,
             heap_attr: get_index_vector_attribute(index_relation),
-            qv_cache: RefCell::new(QuantizedVectorCache::new(
-                QUANTIZED_VECTOR_CACHE_SIZE,
-                Self::sbq_vec_len(meta_page),
-            )),
+            qv_cache: None,
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
         }
@@ -218,7 +217,7 @@ impl<'a> SbqSpeedupStorage<'a> {
                         }
                     }
 
-                    let mut cache = self.qv_cache.borrow_mut();
+                    let mut cache = self.qv_cache.as_ref().unwrap().borrow_mut();
                     let bq_vector = cache.get(neighbor_index_pointer, self, &mut lsr.stats);
                     let distance = lsr
                         .sdm
@@ -239,21 +238,8 @@ impl<'a> SbqSpeedupStorage<'a> {
         }
     }
 
-    pub fn write_quantized_vector<S: StatsNodeWrite + StatsNodeModify>(
-        &self,
-        index_pointer: IndexPointer,
-        vector: &[SbqVectorElement],
-        stats: &mut S,
-    ) {
-        let mut node =
-            unsafe { SbqNode::modify(self.index, index_pointer, self.has_labels, stats) };
-        let mut archived = node.get_archived_node();
-        archived.set_bq_vector(vector);
-        node.commit();
-    }
-
-    pub fn cache(&self) -> &RefCell<QuantizedVectorCache> {
-        &self.qv_cache
+    pub fn cache(&self) -> Option<&RefCell<QuantizedVectorCache>> {
+        self.qv_cache.as_ref()
     }
 }
 
@@ -309,12 +295,13 @@ impl Storage for SbqSpeedupStorage<'_> {
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
+        let mut cache = self.qv_cache.as_ref().unwrap().borrow_mut();
+        /* It's important to preload cache with all the items since you can run into deadlocks
+        if you try to fetch a quantized vector while holding the SbqNode::modify lock */
         let iter = neighbors
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
-
-        let mut cache = self.qv_cache.borrow_mut();
         cache.preload(iter, self, stats);
 
         let mut node =
@@ -454,12 +441,14 @@ impl Storage for SbqSpeedupStorage<'_> {
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
+        let mut cache = self.cache().as_ref().unwrap().borrow_mut();
+
+        /* It's important to preload cache with all the items since you can run into deadlocks
+        if you try to fetch a quantized vector while holding the SbqNode::modify lock */
         let iter = neighbors
             .iter()
             .map(|n| n.get_index_pointer_to_neighbor())
             .chain(once(index_pointer));
-
-        let mut cache = self.cache().borrow_mut();
         cache.preload(iter, self, stats);
 
         let mut node =

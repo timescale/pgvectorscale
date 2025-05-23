@@ -257,9 +257,9 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
 }
 
 /// The fraction of maintenance_work_mem that should be used for various large in-memory
-/// data structures.  Intentionally does not add up to 1.0 to allow some slop space.
+/// data structures.
 pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.8;
-pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.1;
+pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.2;
 
 pub fn maintenance_work_mem_bytes() -> usize {
     unsafe { pg_sys::maintenance_work_mem as usize * 1024 }
@@ -413,16 +413,8 @@ fn finalize_index_build<S: Storage>(
             write_stats.num_neighbors / write_stats.num_nodes
         );
     }
-    if write_stats.prune_stats.calls > 0 {
-        debug1!(
-            "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
-            write_stats.prune_stats.num_neighbors_before_prune / write_stats.prune_stats.calls,
-            write_stats.prune_stats.num_neighbors_after_prune / write_stats.prune_stats.calls,
-            write_stats.prune_stats.calls
-        );
-    }
 
-    warning!("Indexed {} tuples", ntuples);
+    notice!("Indexed {} tuples", ntuples);
 
     ntuples
 }
@@ -624,7 +616,7 @@ pub mod tests {
                 "".to_string()
             };
 
-        Spi::run(&format!(
+        let sql = format!(
             "CREATE TABLE {table_name} (
                 embedding vector ({vector_dimensions})
             );
@@ -657,7 +649,10 @@ pub mod tests {
                 embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, {vector_dimensions}));"))?;
+            FROM generate_series(1, {vector_dimensions}));");
+        println!("{}", sql);
+        Spi::run(&sql)?;
+        // assert!(false);
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(
             &format!("SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
@@ -1215,48 +1210,66 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_high_dimension_index() -> spi::Result<()> {
-        let index_options = "num_neighbors=10, search_list_size=10";
-        let expected_cnt = 1000;
-
         for dimensions in [4000, 8000, 12000, 16000] {
-            Spi::run(&format!(
-                "CREATE TABLE test_data (
-                    id int,
-                    embedding vector ({dimensions})
-                );
-
-                CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
-
-                select setseed(0.5);
-            -- generate {expected_cnt} vectors
-                INSERT INTO test_data (id, embedding)
-                SELECT
-                    *
-                FROM (
-                    SELECT
-                        i % {expected_cnt},
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                    FROM
-                        generate_series(1, {dimensions} * {expected_cnt}) i
-                    GROUP BY
-                        i % {expected_cnt}) g;
-
-                SET enable_seqscan = 0;
-                -- perform index scans on the vectors
-                SELECT
-                    *
-                FROM
-                    test_data
-                ORDER BY
-                    embedding <=> (
-                        SELECT
-                            ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                FROM generate_series(1, {dimensions}));"))?;
-
-            verify_index_accuracy(expected_cnt, dimensions)?;
-
-            Spi::run("DROP TABLE test_data CASCADE;")?;
+            test_sized_index_scaffold(
+                "num_neighbors=10, search_list_size=10",
+                dimensions,
+                1000,
+                None,
+            )?;
         }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_sized_index_scaffold(
+        index_options: &str,
+        dimensions: usize,
+        vector_count: usize,
+        maintenance_work_mem_kb: Option<usize>,
+    ) -> spi::Result<()> {
+        let maintenance_work_mem_kb = maintenance_work_mem_kb.unwrap_or(64 * 1024);
+        Spi::run(&format!(
+            "
+            CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimensions})
+            );
+
+            select setseed(0.5);
+
+            -- generate {vector_count} vectors
+            INSERT INTO test_data (id, embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    i % {vector_count},
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, {dimensions} * {vector_count}) i
+                GROUP BY
+                    i % {vector_count}) g;
+
+            SET enable_seqscan = 0;
+
+            SET maintenance_work_mem = {maintenance_work_mem_kb};
+            CREATE INDEX ON test_data USING diskann (embedding) WITH ({index_options});
+
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimensions}));"))?;
+
+        verify_index_accuracy(vector_count as i64, dimensions)?;
+
+        Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
     }
 

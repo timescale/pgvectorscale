@@ -1,3 +1,4 @@
+use std::backtrace::Backtrace;
 use std::num::NonZero;
 
 use crate::util::lru::LruCacheWithStats;
@@ -17,23 +18,13 @@ pub struct QuantizedVectorCache {
 }
 
 impl QuantizedVectorCache {
-    pub fn new(memory_budget: f64, sbq_vec_len: usize) -> Self {
+    pub fn new(memory_budget: f64, sbq_vec_len: usize, min_capacity: usize) -> Self {
         let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
-        let capacity = memory_budget / Self::entry_size(sbq_vec_len);
-
-        pgrx::debug1!(
-            "QuantizedVectorCache::new capacity: {} memory_budget: {} total_memory: {}",
-            capacity,
-            memory_budget,
-            total_memory
-        );
+        let capacity = std::cmp::max(memory_budget / Self::entry_size(sbq_vec_len), min_capacity);
 
         Self {
-            cache: LruCacheWithStats::new(
-                NonZero::new(capacity).unwrap(),
-                "Quanitized vector cache",
-            ),
+            cache: LruCacheWithStats::new(NonZero::new(capacity).unwrap(), "Quantized vector"),
         }
     }
 
@@ -59,10 +50,7 @@ impl QuantizedVectorCache {
             let vector = node.get_archived_node().get_bq_vector().to_vec();
 
             // Insert into cache and handle evicted item
-            let evicted = self.cache.push(index_pointer, vector);
-            if let Some((evicted_pointer, evicted_vector)) = evicted {
-                storage.write_quantized_vector(evicted_pointer, evicted_vector.as_slice(), stats);
-            }
+            self.cache.push(index_pointer, vector);
         }
 
         self.cache.get(&index_pointer).unwrap()
@@ -82,6 +70,20 @@ impl QuantizedVectorCache {
                 let vector = node.get_archived_node().get_bq_vector().to_vec();
                 self.cache.push(item_pointer, vector);
             }
+        }
+    }
+}
+
+impl Drop for QuantizedVectorCache {
+    fn drop(&mut self) {
+        println!(
+            "Quantized vector cache teardown: capacity {}, stats: {:?}",
+            self.cache.cap(),
+            self.cache.stats()
+        );
+        if self.cache.stats().inserts == 0 {
+            let bt = Backtrace::capture();
+            println!("{}", bt);
         }
     }
 }

@@ -55,17 +55,10 @@ impl BuilderNeighborCache {
         let capacity = memory_budget
             / NeighborCacheEntry::size(meta_page.get_num_neighbors() as _, meta_page.has_labels());
 
-        pgrx::debug1!(
-            "BuilderNeighborCache::new capacity: {} memory_budget: {} total_memory: {}",
-            capacity,
-            memory_budget,
-            total_memory
-        );
-
         Self {
             neighbor_map: RefCell::new(LruCacheWithStats::new(
                 NonZero::new(capacity).unwrap(),
-                "Builder neighbor cache",
+                "Builder neighbor",
             )),
             num_neighbors: meta_page.get_num_neighbors() as _,
             max_alpha: meta_page.get_max_alpha(),
@@ -74,7 +67,12 @@ impl BuilderNeighborCache {
 
     /// Convert cache to a sorted vector of neighbors
     fn into_sorted(self) -> Vec<(ItemPointer, NeighborCacheEntry)> {
-        let (neighbor_map, _) = self.neighbor_map.into_inner().into_parts();
+        let (neighbor_map, stats) = self.neighbor_map.into_inner().into_parts();
+        println!(
+            "Builder neighbor cache teardown: capacity {}, stats: {:?}",
+            neighbor_map.cap(),
+            stats
+        );
         let mut vec = neighbor_map.into_iter().collect::<Vec<_>>();
         vec.sort_by_key(|(key, _)| *key);
         vec

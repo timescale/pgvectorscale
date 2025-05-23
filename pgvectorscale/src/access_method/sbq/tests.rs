@@ -30,11 +30,10 @@ mod tests {
 
     #[pg_test]
     unsafe fn test_bq_compressed_storage_index_creation_low_memory() -> spi::Result<()> {
-        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold_bounded_memory(
-            DistanceType::Cosine,
-            "num_neighbors=10, storage_layout = memory_optimized",
-            "bq_compressed_low_memory",
+        crate::access_method::build::tests::test_sized_index_scaffold(
+            "num_neighbors=40, storage_layout = memory_optimized",
             1536,
+            2000,
             Some(1024),
         )?;
         Ok(())
