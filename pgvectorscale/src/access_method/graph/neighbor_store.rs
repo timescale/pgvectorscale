@@ -1,6 +1,8 @@
 use std::cell::RefCell;
 use std::num::NonZero;
 
+use pgrx::debug1;
+
 use crate::access_method::build::maintenance_work_mem_bytes;
 use crate::util::lru::LruCacheWithStats;
 use crate::util::{IndexPointer, ItemPointer};
@@ -68,7 +70,7 @@ impl BuilderNeighborCache {
     /// Convert cache to a sorted vector of neighbors
     fn into_sorted(self) -> Vec<(ItemPointer, NeighborCacheEntry)> {
         let (neighbor_map, stats) = self.neighbor_map.into_inner().into_parts();
-        println!(
+        debug1!(
             "Builder neighbor cache teardown: capacity {}, stats: {:?}",
             neighbor_map.cap(),
             stats

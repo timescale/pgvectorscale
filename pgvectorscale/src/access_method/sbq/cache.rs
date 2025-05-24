@@ -1,5 +1,6 @@
-use std::backtrace::Backtrace;
 use std::num::NonZero;
+
+use pgrx::debug1;
 
 use crate::util::lru::LruCacheWithStats;
 
@@ -76,14 +77,10 @@ impl QuantizedVectorCache {
 
 impl Drop for QuantizedVectorCache {
     fn drop(&mut self) {
-        println!(
+        debug1!(
             "Quantized vector cache teardown: capacity {}, stats: {:?}",
             self.cache.cap(),
             self.cache.stats()
         );
-        if self.cache.stats().inserts == 0 {
-            let bt = Backtrace::capture();
-            println!("{}", bt);
-        }
     }
 }
