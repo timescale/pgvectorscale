@@ -1212,7 +1212,7 @@ pub mod tests {
     pub unsafe fn test_high_dimension_index() -> spi::Result<()> {
         for dimensions in [4000, 8000, 12000, 16000] {
             test_sized_index_scaffold(
-                "num_neighbors=10, search_list_size=10",
+                "num_neighbors=20, search_list_size=10",
                 dimensions,
                 1000,
                 None,
