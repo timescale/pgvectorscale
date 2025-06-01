@@ -36,7 +36,8 @@ impl NeighborCacheEntry {
         std::mem::size_of::<Self>()
             + num_neighbors * std::mem::size_of::<NeighborWithDistance>()
             + if has_labels {
-                std::mem::size_of::<LabelSet>() + 4
+                // Heuristic: assume around 4 labels per vector, or 8 bytes of payload
+                8
             } else {
                 0
             }
@@ -115,11 +116,12 @@ impl BuilderNeighborCache {
         &self,
         neighbors_of: ItemPointer,
         labels: Option<LabelSet>,
-        new_neighbors: Vec<NeighborWithDistance>,
+        mut new_neighbors: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
     ) {
         let mut neighbor_map = self.neighbor_map.borrow_mut();
+        new_neighbors.shrink_to_fit();
         let evictee =
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
