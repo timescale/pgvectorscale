@@ -16,7 +16,7 @@ use crate::{
         pg_vector::PgVector,
         stats::{
             GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-            StatsNodeRead, StatsNodeWrite, WriteStats,
+            StatsNodeRead, StatsNodeWrite,
         },
         storage::Storage,
         storage_common::get_index_vector_attribute,
@@ -50,15 +50,17 @@ impl<'a> SbqSpeedupStorage<'a> {
             / 64
     }
 
-    pub fn new_for_build(
+    pub unsafe fn new_for_build<S: StatsNodeRead>(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
         meta_page: &MetaPage,
+        stats: &mut S,
     ) -> Self {
+        let quantizer = SbqMeans::load(index, meta_page, stats);
         Self {
             index,
             distance_fn: meta_page.get_distance_function(),
-            quantizer: SbqQuantizer::new(meta_page),
+            quantizer,
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
             qv_cache: Some(RefCell::new(QuantizedVectorCache::new(
@@ -117,17 +119,6 @@ impl<'a> SbqSpeedupStorage<'a> {
             qv_cache: None,
             has_labels: meta_page.has_labels(),
             num_neighbors: meta_page.get_num_neighbors(),
-        }
-    }
-
-    fn write_quantizer_metadata<S: StatsNodeWrite + StatsNodeModify>(
-        &self,
-        meta_page: &mut MetaPage,
-        stats: &mut S,
-    ) {
-        if self.quantizer.use_mean {
-            let index_pointer = unsafe { SbqMeans::store(self.index, &self.quantizer, stats) };
-            meta_page.set_quantizer_metadata_pointer(index_pointer);
         }
     }
 
@@ -274,19 +265,6 @@ impl Storage for SbqSpeedupStorage<'_> {
 
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
-    }
-
-    fn start_training(&mut self, meta_page: &MetaPage) {
-        self.quantizer.start_training(meta_page);
-    }
-
-    fn add_sample(&mut self, sample: &[f32]) {
-        self.quantizer.add_sample(sample);
-    }
-
-    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats) {
-        self.quantizer.finish_training();
-        self.write_quantizer_metadata(meta_page, stats);
     }
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(

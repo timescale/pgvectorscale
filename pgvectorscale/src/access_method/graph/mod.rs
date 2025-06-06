@@ -269,10 +269,6 @@ impl<'a> Graph<'a> {
         self.meta_page
     }
 
-    pub fn get_meta_page_mut(&mut self) -> &mut MetaPage {
-        self.meta_page
-    }
-
     /// greedy search looks for the closest neighbors to a query vector
     /// You may think that this needs the "K" parameter but it does not,
     /// instead it uses a search_list_size parameter (>K).

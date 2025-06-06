@@ -20,12 +20,19 @@ use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
 use super::graph::neighbor_store::BuilderNeighborCache;
 use super::labels::LabeledVector;
+use super::sbq::quantize::SbqQuantizer;
 use super::sbq::storage::SbqSpeedupStorage;
 
 use super::meta_page::MetaPage;
 
 use super::plain::storage::PlainStorage;
+use super::sbq::SbqMeans;
 use super::storage::{Storage, StorageType};
+
+struct SbqTrainState<'a, 'b> {
+    quantizer: &'a mut SbqQuantizer,
+    meta_page: &'b MetaPage,
+}
 
 enum StorageBuildState<'a, 'b, 'c, 'd> {
     SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d>),
@@ -97,7 +104,7 @@ pub extern "C" fn ambuild(
         error!("Inner product distance type is not supported with plain storage");
     }
 
-    let meta_page =
+    let mut meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
     if meta_page.get_num_dimensions_to_index() == 0 {
@@ -121,7 +128,14 @@ pub extern "C" fn ambuild(
         error!("Labeled filtering is not supported with plain storage");
     }
 
-    let ntuples = do_heap_scan(index_info, &heap_relation, &index_relation, meta_page);
+    let write_stats = train_quantizer(index_info, &heap_relation, &index_relation, &mut meta_page);
+    let ntuples = do_heap_scan(
+        index_info,
+        &heap_relation,
+        &index_relation,
+        meta_page,
+        write_stats,
+    );
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
     result.heap_tuples = ntuples as f64;
@@ -265,12 +279,59 @@ pub fn maintenance_work_mem_bytes() -> usize {
     unsafe { pg_sys::maintenance_work_mem as usize * 1024 }
 }
 
+fn train_quantizer(
+    index_info: *mut pg_sys::IndexInfo,
+    heap_relation: &PgRelation,
+    index_relation: &PgRelation,
+    meta_page: &mut MetaPage,
+) -> WriteStats {
+    let mut write_stats = WriteStats::default();
+    let storage = meta_page.get_storage_type();
+    match storage {
+        StorageType::Plain => {}
+        StorageType::SbqCompression => {
+            unsafe {
+                pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
+            }
+            let mut quantizer = SbqQuantizer::new(&meta_page);
+            quantizer.start_training(meta_page);
+
+            let mut state = SbqTrainState {
+                quantizer: &mut quantizer,
+                meta_page: &meta_page,
+            };
+
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback_bq_train),
+                    &mut state,
+                );
+            }
+            quantizer.finish_training();
+            if quantizer.use_mean {
+                let index_pointer =
+                    unsafe { SbqMeans::store(index_relation, &quantizer, &mut write_stats) };
+                meta_page.set_quantizer_metadata_pointer(index_pointer);
+            }
+        }
+    }
+    write_stats
+}
+
 fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &PgRelation,
     index_relation: &PgRelation,
     mut meta_page: MetaPage,
+    mut write_stats: WriteStats,
 ) -> usize {
+    unsafe {
+        pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_BUILDING_GRAPH);
+    }
+
     let storage = meta_page.get_storage_type();
 
     let graph = Graph::new(
@@ -280,12 +341,11 @@ fn do_heap_scan(
         )),
         &mut meta_page,
     );
-    let mut write_stats = WriteStats::default();
+
     match storage {
         StorageType::Plain => {
             let mut plain =
                 PlainStorage::new_for_build(index_relation, heap_relation, graph.get_meta_page());
-            plain.start_training(graph.get_meta_page());
             let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, graph, page_type);
             let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
@@ -303,41 +363,17 @@ fn do_heap_scan(
             finalize_index_build(&mut plain, bs, index_relation, write_stats)
         }
         StorageType::SbqCompression => {
-            let mut bq = SbqSpeedupStorage::new_for_build(
-                index_relation,
-                heap_relation,
-                graph.get_meta_page(),
-            );
+            let mut bq = unsafe {
+                SbqSpeedupStorage::new_for_build(
+                    index_relation,
+                    heap_relation,
+                    graph.get_meta_page(),
+                    &mut write_stats,
+                )
+            };
 
             let page_type = SbqSpeedupStorage::page_type();
-
-            unsafe {
-                pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
-            }
-
-            bq.start_training(graph.get_meta_page());
-
             let mut bs = BuildState::new(index_relation, graph, page_type);
-            let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
-
-            unsafe {
-                pg_sys::IndexBuildHeapScan(
-                    heap_relation.as_ptr(),
-                    index_relation.as_ptr(),
-                    index_info,
-                    Some(build_callback_bq_train),
-                    &mut state,
-                );
-            }
-            bq.finish_training(bs.graph.get_meta_page_mut(), &mut write_stats);
-
-            unsafe {
-                pgstat_progress_update_param(
-                    PROGRESS_CREATE_IDX_SUBPHASE,
-                    BUILD_PHASE_BUILDING_GRAPH,
-                );
-            }
-
             let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
 
             unsafe {
@@ -428,24 +464,10 @@ unsafe extern "C" fn build_callback_bq_train(
     _tuple_is_alive: bool,
     state: *mut std::os::raw::c_void,
 ) {
-    let state = (state as *mut StorageBuildState).as_mut().unwrap();
-    match state {
-        StorageBuildState::SbqSpeedup(bq, state) => {
-            let vec = PgVector::from_pg_parts(
-                values,
-                isnull,
-                0,
-                state.graph.get_meta_page(),
-                true,
-                false,
-            );
-            if let Some(vec) = vec {
-                bq.add_sample(vec.to_index_slice());
-            }
-        }
-        StorageBuildState::Plain(_, _) => {
-            panic!("Should not be training with plain storage");
-        }
+    let state = (state as *mut SbqTrainState).as_mut().unwrap();
+    let vec = PgVector::from_pg_parts(values, isnull, 0, state.meta_page, true, false);
+    if let Some(vec) = vec {
+        state.quantizer.add_sample(vec.to_index_slice());
     }
 }
 

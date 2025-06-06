@@ -14,7 +14,7 @@ use crate::{
         pg_vector::PgVector,
         stats::{
             GreedySearchStats, PruneNeighborStats, StatsDistanceComparison, StatsHeapNodeRead,
-            StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats,
+            StatsNodeModify, StatsNodeRead, StatsNodeWrite,
         },
         storage::{ArchivedData, NodeDistanceMeasure, Storage},
         storage_common::get_index_vector_attribute,
@@ -139,12 +139,6 @@ impl Storage for PlainStorage<'_> {
         let index_pointer: IndexPointer = node.write(tape, stats);
         index_pointer
     }
-
-    fn start_training(&mut self, _meta_page: &MetaPage) {}
-
-    fn add_sample(&mut self, _sample: &[f32]) {}
-
-    fn finish_training(&mut self, _meta_page: &mut MetaPage, _stats: &mut WriteStats) {}
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
