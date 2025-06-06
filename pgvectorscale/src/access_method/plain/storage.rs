@@ -3,16 +3,18 @@ use pgrx::{pg_sys::AttrNumber, PgBox, PgRelation};
 use crate::{
     access_method::{
         distance::DistanceFn,
-        graph::neighbor_store::GraphNeighborStore,
-        graph::neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
-        graph::{ListSearchNeighbor, ListSearchResult},
+        graph::{
+            neighbor_store::GraphNeighborStore,
+            neighbor_with_distance::{DistanceWithTieBreak, NeighborWithDistance},
+            ListSearchNeighbor, ListSearchResult,
+        },
         labels::{LabelSet, LabeledVector},
         meta_page::MetaPage,
         node::{ReadableNode, WriteableNode},
         pg_vector::PgVector,
         stats::{
-            GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-            StatsNodeRead, StatsNodeWrite, WriteStats,
+            GreedySearchStats, PruneNeighborStats, StatsDistanceComparison, StatsHeapNodeRead,
+            StatsNodeModify, StatsNodeRead, StatsNodeWrite, WriteStats,
         },
         storage::{ArchivedData, NodeDistanceMeasure, Storage},
         storage_common::get_index_vector_attribute,
@@ -32,45 +34,49 @@ pub struct PlainStorage<'a> {
     pub distance_fn: DistanceFn,
     heap_rel: &'a PgRelation,
     heap_attr: AttrNumber,
+    num_neighbors: u32,
 }
 
 impl<'a> PlainStorage<'a> {
     pub fn new_for_build(
         index: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: DistanceFn,
+        meta_page: &MetaPage,
     ) -> PlainStorage<'a> {
         Self {
             index,
-            distance_fn,
+            distance_fn: meta_page.get_distance_function(),
             heap_rel,
             heap_attr: get_index_vector_attribute(index),
+            num_neighbors: meta_page.get_num_neighbors(),
         }
     }
 
     pub fn load_for_insert(
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: DistanceFn,
+        meta_page: &MetaPage,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn,
+            distance_fn: meta_page.get_distance_function(),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
+            num_neighbors: meta_page.get_num_neighbors(),
         }
     }
 
     pub fn load_for_search(
         index_relation: &'a PgRelation,
         heap_rel: &'a PgRelation,
-        distance_fn: DistanceFn,
+        meta_page: &MetaPage,
     ) -> PlainStorage<'a> {
         Self {
             index: index_relation,
-            distance_fn,
+            distance_fn: meta_page.get_distance_function(),
             heap_rel,
             heap_attr: get_index_vector_attribute(index_relation),
+            num_neighbors: meta_page.get_num_neighbors(),
         }
     }
 }
@@ -85,12 +91,16 @@ impl PlainStorageLsnPrivateData {
     pub fn new(
         index_pointer_to_node: IndexPointer,
         node: &ArchivedPlainNode,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
+        storage: &PlainStorage,
+        stats: &mut PruneNeighborStats,
     ) -> Self {
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         let neighbors = match gns {
             GraphNeighborStore::Disk => node.get_index_pointer_to_neighbors(),
-            GraphNeighborStore::Builder(b) => b.get_neighbors(index_pointer_to_node),
+            GraphNeighborStore::Builder(b) => {
+                b.get_neighbors(index_pointer_to_node, storage, stats)
+            }
         };
         Self {
             heap_pointer,
@@ -138,18 +148,19 @@ impl Storage for PlainStorage<'_> {
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
         let mut node = unsafe { PlainNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta);
+        archived
+            .as_mut()
+            .set_neighbors(neighbors, self.num_neighbors);
         node.commit();
     }
 
-    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'b, S: StatsNodeRead + StatsNodeWrite>(
         &'b self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -191,25 +202,26 @@ impl Storage for PlainStorage<'_> {
             }
         }
     }
-    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
+
+    fn get_neighbors_with_distances_from_disk<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         neighbors_of: ItemPointer,
-        result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
-    ) {
+    ) -> Vec<NeighborWithDistance> {
         let rn = unsafe { PlainNode::read(self.index, neighbors_of, stats) };
         // Copy neighbors before giving ownership of `rn`` to the distance state
         let neighbors: Vec<_> = rn.get_archived_node().iter_neighbors().collect();
         let dist_state = unsafe { IndexFullDistanceMeasure::with_readable_node(self, rn) };
-        for n in neighbors.into_iter() {
-            // TODO: we are reading node twice
-            let dist = unsafe { dist_state.get_distance(n, stats) };
-            result.push(NeighborWithDistance::new(
-                n,
-                DistanceWithTieBreak::new(dist, neighbors_of, n),
-                None,
-            ))
-        }
+        neighbors
+            .into_iter()
+            .map(|n| {
+                // TODO: we are reading node twice
+                let dist = unsafe { dist_state.get_distance(n, stats) };
+                NeighborWithDistance::new(n, DistanceWithTieBreak::new(dist, neighbors_of, n), None)
+            })
+            .collect()
     }
 
     /* get_lsn and visit_lsn are different because the distance
@@ -218,7 +230,7 @@ impl Storage for PlainStorage<'_> {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
     ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>> {
         if !lsr.prepare_insert(index_pointer) {
             // Node already processed, skip it
@@ -240,7 +252,7 @@ impl Storage for PlainStorage<'_> {
         Some(ListSearchNeighbor::new(
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
-            PlainStorageLsnPrivateData::new(index_pointer, node, gns),
+            PlainStorageLsnPrivateData::new(index_pointer, node, gns, self, &mut lsr.prune_stats),
             None,
         ))
     }
@@ -249,7 +261,7 @@ impl Storage for PlainStorage<'_> {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
         no_filter: bool,
     ) {
         assert!(no_filter, "Plain storage does not support label filters");
@@ -278,7 +290,13 @@ impl Storage for PlainStorage<'_> {
             let lsn = ListSearchNeighbor::new(
                 neighbor_index_pointer,
                 lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
-                PlainStorageLsnPrivateData::new(neighbor_index_pointer, node_neighbor, gns),
+                PlainStorageLsnPrivateData::new(
+                    neighbor_index_pointer,
+                    node_neighbor,
+                    gns,
+                    self,
+                    &mut lsr.prune_stats,
+                ),
                 None,
             );
 
@@ -296,14 +314,15 @@ impl Storage for PlainStorage<'_> {
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     ) {
         let mut node = unsafe { PlainNode::modify(self.index, index_pointer, stats) };
         let mut archived = node.get_archived_node();
-        archived.as_mut().set_neighbors(neighbors, meta);
+        archived
+            .as_mut()
+            .set_neighbors(neighbors, self.num_neighbors);
         node.commit();
     }
 

@@ -24,7 +24,7 @@ unsafe fn print_graph_from_disk_visitor(
     map: &mut HashMap<ItemPointer, Vec<f32>>,
     sb: &mut String,
 ) {
-    let mut stats = GreedySearchStats::new();
+    let mut stats = GreedySearchStats::default();
     let data_node = PlainNode::read(index, index_pointer, &mut stats);
     let node = data_node.get_archived_node();
     let v = node.vector.as_slice();

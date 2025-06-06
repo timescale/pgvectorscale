@@ -18,11 +18,23 @@ mod tests {
     }
 
     #[pg_test]
+    unsafe fn test_plain_storage_index_creation_low_memory() -> spi::Result<()> {
+        crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold_bounded_memory(
+            DistanceType::Cosine,
+            "num_neighbors=10, storage_layout = plain",
+            "plain_many_neighbors",
+            1536,
+            Some(1024),
+        )?;
+        Ok(())
+    }
+
+    #[pg_test]
     unsafe fn test_plain_storage_index_creation_few_neighbors() -> spi::Result<()> {
         //a test with few neighbors tests the case that nodes share a page, which has caused deadlocks in the past.
         crate::access_method::build::tests::test_index_creation_and_accuracy_scaffold(
             DistanceType::Cosine,
-            "num_neighbors=10, storage_layout = plain",
+            "num_neighbors=20, storage_layout = plain",
             "plain_few_neighbors",
             1536,
         )?;

@@ -365,7 +365,7 @@ impl MetaPage {
         assert!(header.magic_number == TSV_MAGIC_NUMBER);
         assert!(header.version == TSV_VERSION);
 
-        let mut stats = WriteStats::new();
+        let mut stats = WriteStats::default();
         let mut tape = if first_time {
             ChainTapeWriter::new(index, PageType::Meta, &mut stats)
         } else {
@@ -384,7 +384,7 @@ impl MetaPage {
     }
 
     unsafe fn load(index: &PgRelation) -> MetaPage {
-        let mut stats = WriteStats::new();
+        let mut stats = WriteStats::default();
         let mut tape = ChainItemReader::new(index, PageType::Meta, &mut stats);
 
         let mut buf: Vec<u8> = Vec::new();

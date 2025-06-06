@@ -51,7 +51,7 @@ impl<'a> BuildState<'a> {
             tape,
             graph,
             started: Instant::now(),
-            stats: InsertStats::new(),
+            stats: InsertStats::default(),
         }
     }
 }
@@ -184,15 +184,11 @@ unsafe fn aminsert_internal(
 
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();
-    let mut stats = InsertStats::new();
+    let mut stats = InsertStats::default();
 
     match &mut storage {
         StorageType::Plain => {
-            let plain = PlainStorage::load_for_insert(
-                &index_relation,
-                &heap_relation,
-                meta_page.get_distance_function(),
-            );
+            let plain = PlainStorage::load_for_insert(&index_relation, &heap_relation, &meta_page);
             assert!(vec.labels().is_none());
             insert_storage(
                 &plain,
@@ -260,6 +256,15 @@ pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
+/// The fraction of maintenance_work_mem that should be used for various large in-memory
+/// data structures.
+pub const BUILDER_NEIGHBOR_CACHE_SIZE: f64 = 0.8;
+pub const QUANTIZED_VECTOR_CACHE_SIZE: f64 = 0.2;
+
+pub fn maintenance_work_mem_bytes() -> usize {
+    unsafe { pg_sys::maintenance_work_mem as usize * 1024 }
+}
+
 fn do_heap_scan(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &PgRelation,
@@ -269,17 +274,17 @@ fn do_heap_scan(
     let storage = meta_page.get_storage_type();
 
     let graph = Graph::new(
-        GraphNeighborStore::Builder(BuilderNeighborCache::default()),
+        GraphNeighborStore::Builder(BuilderNeighborCache::new(
+            BUILDER_NEIGHBOR_CACHE_SIZE,
+            &meta_page,
+        )),
         &mut meta_page,
     );
-    let mut write_stats = WriteStats::new();
+    let mut write_stats = WriteStats::default();
     match storage {
         StorageType::Plain => {
-            let mut plain = PlainStorage::new_for_build(
-                index_relation,
-                heap_relation,
-                graph.get_meta_page().get_distance_function(),
-            );
+            let mut plain =
+                PlainStorage::new_for_build(index_relation, heap_relation, graph.get_meta_page());
             plain.start_training(graph.get_meta_page());
             let page_type = PlainStorage::page_type();
             let mut bs = BuildState::new(index_relation, graph, page_type);
@@ -295,7 +300,7 @@ fn do_heap_scan(
                 );
             }
 
-            finalize_index_build(&mut plain, &mut bs, index_relation, write_stats)
+            finalize_index_build(&mut plain, bs, index_relation, write_stats)
         }
         StorageType::SbqCompression => {
             let mut bq = SbqSpeedupStorage::new_for_build(
@@ -352,55 +357,50 @@ fn do_heap_scan(
                 );
             }
 
-            finalize_index_build(&mut bq, &mut bs, index_relation, write_stats)
+            finalize_index_build(&mut bq, bs, index_relation, write_stats)
         }
     }
 }
 
 fn finalize_index_build<S: Storage>(
     storage: &mut S,
-    state: &mut BuildState,
+    state: BuildState,
     index_relation: &PgRelation,
     mut write_stats: WriteStats,
 ) -> usize {
-    match state.graph.get_neighbor_store() {
-        GraphNeighborStore::Builder(builder) => {
-            for (&index_pointer, (labels, neighbors)) in builder.iter() {
-                write_stats.num_nodes += 1;
-                let prune_neighbors;
-                let neighbors =
-                    if neighbors.len() > state.graph.get_meta_page().get_num_neighbors() as _ {
-                        //OPT: get rid of this clone
-                        prune_neighbors = state.graph.prune_neighbors(
-                            labels,
-                            neighbors.clone(),
-                            storage,
-                            &mut write_stats.prune_stats,
-                        );
-                        &prune_neighbors
-                    } else {
-                        neighbors
-                    };
-                write_stats.num_neighbors += neighbors.len();
+    let BuildState { graph, ntuples, .. } = state;
+    let (neighbor_store, meta_page) = graph.into_parts();
+    let cache_entries = neighbor_store.into_sorted();
 
-                storage.finalize_node_at_end_of_build(
-                    state.graph.get_meta_page(),
-                    index_pointer,
-                    neighbors,
-                    &mut write_stats,
-                );
-            }
-            unsafe {
-                state.graph.get_meta_page().store(index_relation, false);
-            }
-        }
-        GraphNeighborStore::Disk => {
-            panic!("Should not be using the disk neighbor store during build");
-        }
+    for (index_pointer, entry) in cache_entries {
+        write_stats.num_nodes += 1;
+        let prune_neighbors;
+        let neighbors = if entry.neighbors.len() > meta_page.get_num_neighbors() as _ {
+            prune_neighbors = Graph::prune_neighbors(
+                meta_page.get_max_alpha(),
+                meta_page.get_num_neighbors() as _,
+                entry.labels.as_ref(),
+                entry.neighbors,
+                storage,
+                &mut write_stats.prune_stats,
+            );
+            prune_neighbors
+        } else {
+            entry.neighbors
+        };
+        write_stats.num_neighbors += neighbors.len();
+
+        storage.finalize_node_at_end_of_build(
+            index_pointer,
+            neighbors.as_slice(),
+            &mut write_stats,
+        );
+    }
+    unsafe {
+        meta_page.store(index_relation, false);
     }
 
     debug1!("write done");
-    assert_eq!(write_stats.num_nodes, state.ntuples);
 
     let writing_took = Instant::now()
         .duration_since(write_stats.started)
@@ -413,17 +413,8 @@ fn finalize_index_build<S: Storage>(
             write_stats.num_neighbors / write_stats.num_nodes
         );
     }
-    if write_stats.prune_stats.calls > 0 {
-        debug1!(
-            "When pruned for cleanup: avg neighbors before/after {}/{} of {} prunes",
-            write_stats.prune_stats.num_neighbors_before_prune / write_stats.prune_stats.calls,
-            write_stats.prune_stats.num_neighbors_after_prune / write_stats.prune_stats.calls,
-            write_stats.prune_stats.calls
-        );
-    }
-    let ntuples = state.ntuples;
 
-    warning!("Indexed {} tuples", ntuples);
+    notice!("Indexed {} tuples", ntuples);
 
     ntuples
 }
@@ -598,13 +589,39 @@ pub mod tests {
         name: &str,
         vector_dimensions: usize,
     ) -> spi::Result<()> {
+        test_index_creation_and_accuracy_scaffold_bounded_memory(
+            distance_type,
+            index_options,
+            name,
+            vector_dimensions,
+            None,
+        )
+    }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_index_creation_and_accuracy_scaffold_bounded_memory(
+        distance_type: DistanceType,
+        index_options: &str,
+        name: &str,
+        vector_dimensions: usize,
+        maintenance_work_mem_kb: Option<usize>,
+    ) -> spi::Result<()> {
         let operator = distance_type.get_operator();
         let operator_class = distance_type.get_operator_class();
         let table_name = format!("test_data_icaa_{}", name);
-        Spi::run(&format!(
+        let maintenance_work_mem_clause =
+            if let Some(maintenance_work_mem_kb) = maintenance_work_mem_kb {
+                format!("SET maintenance_work_mem = {};", maintenance_work_mem_kb)
+            } else {
+                "".to_string()
+            };
+
+        let sql = format!(
             "CREATE TABLE {table_name} (
                 embedding vector ({vector_dimensions})
             );
+
+            {maintenance_work_mem_clause}
 
             select setseed(0.5);
            -- generate 300 vectors
@@ -632,7 +649,10 @@ pub mod tests {
                 embedding {operator} (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-            FROM generate_series(1, {vector_dimensions}));"))?;
+            FROM generate_series(1, {vector_dimensions}));");
+        println!("{}", sql);
+        Spi::run(&sql)?;
+        // assert!(false);
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(
             &format!("SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
@@ -1190,48 +1210,66 @@ pub mod tests {
 
     #[pg_test]
     pub unsafe fn test_high_dimension_index() -> spi::Result<()> {
-        let index_options = "num_neighbors=10, search_list_size=10";
-        let expected_cnt = 1000;
-
         for dimensions in [4000, 8000, 12000, 16000] {
-            Spi::run(&format!(
-                "CREATE TABLE test_data (
-                    id int,
-                    embedding vector ({dimensions})
-                );
-
-                CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
-
-                select setseed(0.5);
-            -- generate {expected_cnt} vectors
-                INSERT INTO test_data (id, embedding)
-                SELECT
-                    *
-                FROM (
-                    SELECT
-                        i % {expected_cnt},
-                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                    FROM
-                        generate_series(1, {dimensions} * {expected_cnt}) i
-                    GROUP BY
-                        i % {expected_cnt}) g;
-
-                SET enable_seqscan = 0;
-                -- perform index scans on the vectors
-                SELECT
-                    *
-                FROM
-                    test_data
-                ORDER BY
-                    embedding <=> (
-                        SELECT
-                            ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
-                FROM generate_series(1, {dimensions}));"))?;
-
-            verify_index_accuracy(expected_cnt, dimensions)?;
-
-            Spi::run("DROP TABLE test_data CASCADE;")?;
+            test_sized_index_scaffold(
+                "num_neighbors=20, search_list_size=10",
+                dimensions,
+                1000,
+                None,
+            )?;
         }
+        Ok(())
+    }
+
+    #[cfg(any(test, feature = "pg_test"))]
+    pub unsafe fn test_sized_index_scaffold(
+        index_options: &str,
+        dimensions: usize,
+        vector_count: usize,
+        maintenance_work_mem_kb: Option<usize>,
+    ) -> spi::Result<()> {
+        let maintenance_work_mem_kb = maintenance_work_mem_kb.unwrap_or(64 * 1024);
+        Spi::run(&format!(
+            "
+            CREATE TABLE test_data (
+                id int,
+                embedding vector ({dimensions})
+            );
+
+            select setseed(0.5);
+
+            -- generate {vector_count} vectors
+            INSERT INTO test_data (id, embedding)
+            SELECT
+                *
+            FROM (
+                SELECT
+                    i % {vector_count},
+                    ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+                FROM
+                    generate_series(1, {dimensions} * {vector_count}) i
+                GROUP BY
+                    i % {vector_count}) g;
+
+            SET enable_seqscan = 0;
+
+            SET maintenance_work_mem = {maintenance_work_mem_kb};
+            CREATE INDEX ON test_data USING diskann (embedding) WITH ({index_options});
+
+            -- perform index scans on the vectors
+            SELECT
+                *
+            FROM
+                test_data
+            ORDER BY
+                embedding <=> (
+                    SELECT
+                        ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
+            FROM generate_series(1, {dimensions}));"))?;
+
+        verify_index_accuracy(vector_count as i64, dimensions)?;
+
+        Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
     }
 

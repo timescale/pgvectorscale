@@ -78,6 +78,7 @@ pub struct ListSearchResult<QDM, PD> {
     pub sdm: Option<QDM>,
     tie_break_item_pointer: Option<ItemPointer>, /* This records the item pointer of the query. It's used for tie-breaking when the distance = 0 */
     pub stats: GreedySearchStats,
+    pub prune_stats: PruneNeighborStats,
 }
 
 impl<QDM, PD> ListSearchResult<QDM, PD> {
@@ -88,7 +89,8 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
             inserted: HashSet::new(),
             sdm: None,
             tie_break_item_pointer: None,
-            stats: GreedySearchStats::new(),
+            stats: GreedySearchStats::default(),
+            prune_stats: PruneNeighborStats::default(),
         }
     }
 
@@ -97,18 +99,19 @@ impl<QDM, PD> ListSearchResult<QDM, PD> {
         sdm: S::QueryDistanceMeasure,
         tie_break_item_pointer: Option<ItemPointer>,
         search_list_size: usize,
-        meta_page: &MetaPage,
-        gns: &GraphNeighborStore,
+        num_neighbors: u32,
+        gns: &mut GraphNeighborStore,
         storage: &S,
     ) -> Self {
-        let neigbors = meta_page.get_num_neighbors() as usize;
+        let neigbors = num_neighbors as usize;
         let mut res = Self {
             tie_break_item_pointer,
             candidates: BinaryHeap::with_capacity(search_list_size * neigbors),
             visited: Vec::with_capacity(search_list_size * 2),
             inserted: HashSet::with_capacity(search_list_size * neigbors),
-            stats: GreedySearchStats::new(),
+            stats: GreedySearchStats::default(),
             sdm: Some(sdm),
+            prune_stats: PruneNeighborStats::default(),
         };
         res.stats.record_call();
         for index_pointer in start_nodes {
@@ -194,8 +197,12 @@ impl<'a> Graph<'a> {
         }
     }
 
-    pub fn get_neighbor_store(&self) -> &GraphNeighborStore {
-        &self.neighbor_store
+    pub fn into_parts(self) -> (GraphNeighborStore, &'a mut MetaPage) {
+        (self.neighbor_store, self.meta_page)
+    }
+
+    pub fn get_neighbor_store(&mut self) -> &mut GraphNeighborStore {
+        &mut self.neighbor_store
     }
 
     pub fn get_start_nodes(&self) -> Option<&StartNodes> {
@@ -210,16 +217,9 @@ impl<'a> Graph<'a> {
         additional_neighbors: Vec<NeighborWithDistance>,
         stats: &mut PruneNeighborStats,
     ) -> (bool, Vec<NeighborWithDistance>) {
-        let mut candidates = Vec::<NeighborWithDistance>::with_capacity(
-            self.neighbor_store.max_neighbors(self.get_meta_page()) + additional_neighbors.len(),
-        );
-        self.neighbor_store
-            .get_neighbors_with_full_vector_distances(
-                neighbors_of,
-                storage,
-                &mut candidates,
-                stats,
-            );
+        let mut candidates = self
+            .neighbor_store
+            .get_neighbors_with_full_vector_distances(neighbors_of, storage, stats);
 
         let mut hash: HashSet<ItemPointer> = candidates
             .iter()
@@ -242,7 +242,14 @@ impl<'a> Graph<'a> {
 
         let (pruned, new_neighbors) =
             if candidates.len() > self.neighbor_store.max_neighbors(self.get_meta_page()) {
-                let new_list = self.prune_neighbors(labels, candidates, storage, stats);
+                let new_list = Self::prune_neighbors(
+                    self.meta_page.get_max_alpha(),
+                    self.meta_page.get_num_neighbors() as _,
+                    labels,
+                    candidates,
+                    storage,
+                    stats,
+                );
                 (true, new_list)
             } else {
                 (false, candidates)
@@ -250,7 +257,6 @@ impl<'a> Graph<'a> {
 
         self.neighbor_store.set_neighbors(
             storage,
-            self.meta_page,
             neighbors_of,
             labels.cloned(),
             new_neighbors.clone(),
@@ -281,7 +287,7 @@ impl<'a> Graph<'a> {
     /// the returned ListSearchResult elements. It shouldn't be used with self.greedy_search_iterate
     #[allow(clippy::mutable_key_type)]
     fn greedy_search_for_build<S: Storage>(
-        &self,
+        &mut self,
         index_pointer: IndexPointer,
         query: LabeledVector,
         no_filter: bool,
@@ -302,12 +308,13 @@ impl<'a> Graph<'a> {
 
         let dm = storage.get_query_distance_measure(query);
         let search_list_size = self.meta_page.get_search_list_size_for_build() as usize;
+        let num_neighbors = self.meta_page.get_num_neighbors();
         let mut l = ListSearchResult::new(
             start_nodes,
             dm,
             Some(index_pointer),
             search_list_size,
-            self.meta_page,
+            num_neighbors,
             self.get_neighbor_store(),
             storage,
         );
@@ -326,7 +333,7 @@ impl<'a> Graph<'a> {
     /// Returns a ListSearchResult initialized for streaming. The output should be used with greedy_search_iterate to obtain
     /// the next elements.
     pub fn greedy_search_streaming_init<S: Storage>(
-        &self,
+        &mut self,
         query: LabeledVector,
         search_list_size: usize,
         storage: &S,
@@ -338,13 +345,13 @@ impl<'a> Graph<'a> {
         }
         let start_nodes = start_nodes.unwrap().get_for_node(query.labels());
         let dm = storage.get_query_distance_measure(query);
-
+        let num_neighbors = self.meta_page.get_num_neighbors();
         ListSearchResult::new(
             start_nodes,
             dm,
             None,
             search_list_size,
-            self.meta_page,
+            num_neighbors,
             self.get_neighbor_store(),
             storage,
         )
@@ -352,7 +359,7 @@ impl<'a> Graph<'a> {
 
     /// Advance the state of the lsr until the closest `visit_n_closest` elements have been visited.
     pub fn greedy_search_iterate<S: Storage>(
-        &self,
+        &mut self,
         lsr: &mut ListSearchResult<S::QueryDistanceMeasure, S::LSNPrivateData>,
         visit_n_closest: usize,
         no_filter: bool,
@@ -372,7 +379,12 @@ impl<'a> Graph<'a> {
                 }
             }
             lsr.stats.record_visit();
-            storage.visit_lsn(lsr, list_search_entry_idx, &self.neighbor_store, no_filter);
+            storage.visit_lsn(
+                lsr,
+                list_search_entry_idx,
+                &mut self.neighbor_store,
+                no_filter,
+            );
         }
     }
 
@@ -382,15 +394,14 @@ impl<'a> Graph<'a> {
     /// TODO: this is the ann-disk implementation. There may be better implementations
     /// if we save the factors or the distances and add incrementally. Not sure.
     pub fn prune_neighbors<S: Storage>(
-        &self,
+        max_alpha: f64,
+        num_neighbors: usize,
         labels: Option<&LabelSet>,
         mut candidates: Vec<NeighborWithDistance>,
         storage: &S,
         stats: &mut PruneNeighborStats,
     ) -> Vec<NeighborWithDistance> {
         stats.calls += 1;
-        //TODO make configurable?
-        let max_alpha = self.get_meta_page().get_max_alpha();
 
         stats.num_neighbors_before_prune += candidates.len();
         //TODO remove deleted nodes
@@ -399,18 +410,16 @@ impl<'a> Graph<'a> {
 
         //sort by distance
         candidates.sort();
-        let mut results = Vec::<NeighborWithDistance>::with_capacity(
-            self.get_meta_page().get_num_neighbors() as _,
-        );
+        let mut results = Vec::<NeighborWithDistance>::with_capacity(num_neighbors);
 
         let mut max_factors: Vec<f64> = vec![0.0; candidates.len()];
 
         let mut alpha = 1.0;
         //first we add nodes that "pass" a small alpha. Then, if there
         //is still room we loop again with a larger alpha.
-        while alpha <= max_alpha && results.len() < self.get_meta_page().get_num_neighbors() as _ {
+        while alpha <= max_alpha && results.len() < num_neighbors {
             for (i, neighbor) in candidates.iter().enumerate() {
-                if results.len() >= self.get_meta_page().get_num_neighbors() as _ {
+                if results.len() >= num_neighbors {
                     return results;
                 }
 
@@ -488,7 +497,7 @@ impl<'a> Graph<'a> {
         index_pointer: IndexPointer,
         vec: &LabeledVector,
         storage: &S,
-        stats: &mut InsertStats,
+        stats: &mut PruneNeighborStats,
     ) {
         match self.meta_page.get_start_nodes() {
             Some(start_nodes) => {
@@ -501,7 +510,6 @@ impl<'a> Graph<'a> {
                 let start_nodes = StartNodes::new(index_pointer);
                 self.neighbor_store.set_neighbors(
                     storage,
-                    self.meta_page,
                     index_pointer,
                     vec.labels().cloned(),
                     Vec::<NeighborWithDistance>::with_capacity(
@@ -530,11 +538,8 @@ impl<'a> Graph<'a> {
 
     /// Check that all nodes of the graph are reachable from the start node(s)
     #[allow(dead_code)]
-    pub fn debug_count_reachable_nodes<S: Storage>(
-        &self,
-        storage: &S,
-        stats: &mut InsertStats,
-    ) -> usize {
+    pub fn debug_count_reachable_nodes<S: Storage>(&mut self, storage: &S) -> usize {
+        let mut stats = PruneNeighborStats::default();
         if let Some(start_nodes) = self.meta_page.get_start_nodes() {
             let mut visited = HashSet::new();
             let mut to_visit = start_nodes.get_all_nodes();
@@ -543,14 +548,9 @@ impl<'a> Graph<'a> {
                     continue;
                 }
                 visited.insert(node);
-                let mut neighbors = vec![];
-                self.neighbor_store
-                    .get_neighbors_with_full_vector_distances(
-                        node,
-                        storage,
-                        &mut neighbors,
-                        &mut stats.greedy_search_stats,
-                    );
+                let neighbors = self
+                    .neighbor_store
+                    .get_neighbors_with_full_vector_distances(node, storage, &mut stats);
                 for neighbor in neighbors {
                     let ip = neighbor.get_index_pointer_to_neighbor();
                     to_visit.push(ip);
@@ -568,7 +568,8 @@ impl<'a> Graph<'a> {
     }
 
     #[allow(dead_code)]
-    pub fn debug_print_graph<S: Storage>(&self, storage: &S, stats: &mut InsertStats) -> String {
+    pub fn debug_print_graph<S: Storage>(&mut self, storage: &S) -> String {
+        let mut stats = PruneNeighborStats::default();
         let mut buf = String::new();
         buf.push_str(
             r#"
@@ -596,16 +597,11 @@ digraph G {
                     continue;
                 }
                 visited.insert(node);
-                let mut neighbors = vec![];
-                self.neighbor_store
-                    .get_neighbors_with_full_vector_distances(
-                        node,
-                        storage,
-                        &mut neighbors,
-                        &mut stats.greedy_search_stats,
-                    );
+                let neighbors = self
+                    .neighbor_store
+                    .get_neighbors_with_full_vector_distances(node, storage, &mut stats);
                 // Read node and get its labels
-                let labels = storage.get_labels(node, stats);
+                let labels = storage.get_labels(node, &mut stats);
                 // print node
                 buf.push_str(
                     format!(
@@ -651,7 +647,13 @@ digraph G {
         storage: &S,
         stats: &mut InsertStats,
     ) {
-        self.update_start_nodes(index, index_pointer, &vec, storage, stats);
+        self.update_start_nodes(
+            index,
+            index_pointer,
+            &vec,
+            storage,
+            &mut stats.prune_neighbor_stats,
+        );
 
         if vec.labels().is_some() {
             // Insert starting from label start nodes and apply label filtering
@@ -706,7 +708,6 @@ digraph G {
                 cnt_contains += 1;
             }
         }
-
         if neighbor_list_len > 0 && cnt_contains == 0 {
             // In tests this should be a hard error.  (There is no guarantee that it
             // cannot happen, but it is very unlikely.)
