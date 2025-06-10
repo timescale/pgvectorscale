@@ -13,7 +13,7 @@ use super::{
     meta_page::MetaPage,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-        StatsNodeRead, StatsNodeWrite, WriteStats,
+        StatsNodeRead, StatsNodeWrite,
     },
 };
 
@@ -61,10 +61,6 @@ pub trait Storage {
         tape: &mut Tape,
         stats: &mut S,
     ) -> ItemPointer;
-
-    fn start_training(&mut self, meta_page: &MetaPage);
-    fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats);
 
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
