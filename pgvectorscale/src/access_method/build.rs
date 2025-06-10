@@ -128,7 +128,8 @@ pub extern "C" fn ambuild(
         error!("Labeled filtering is not supported with plain storage");
     }
 
-    let write_stats = train_quantizer(index_info, &heap_relation, &index_relation, &mut meta_page);
+    let write_stats =
+        maybe_train_quantizer(index_info, &heap_relation, &index_relation, &mut meta_page);
     let ntuples = do_heap_scan(
         index_info,
         &heap_relation,
@@ -279,7 +280,7 @@ pub fn maintenance_work_mem_bytes() -> usize {
     unsafe { pg_sys::maintenance_work_mem as usize * 1024 }
 }
 
-fn train_quantizer(
+fn maybe_train_quantizer(
     index_info: *mut pg_sys::IndexInfo,
     heap_relation: &PgRelation,
     index_relation: &PgRelation,
