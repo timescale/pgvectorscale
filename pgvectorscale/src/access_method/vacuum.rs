@@ -10,6 +10,8 @@ use crate::{
         plain::storage::PlainStorage,
         sbq::node::{ArchivedClassicSbqNode, ArchivedLabeledSbqNode},
         sbq::storage::SbqSpeedupStorage,
+        sbq_disk::node::{ArchivedClassicSbqDiskNode, ArchivedLabeledSbqDiskNode},
+        sbq_disk::storage::SbqDiskSpeedupStorage,
     },
     util::{
         page::WritablePage,
@@ -56,6 +58,26 @@ pub extern "C" fn ambulkdelete(
             }
             false => {
                 bulk_delete_for_storage::<SbqSpeedupStorage, ArchivedClassicSbqNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+        },
+        StorageType::SbqDisk => match meta_page.has_labels() {
+            true => {
+                bulk_delete_for_storage::<SbqDiskSpeedupStorage, ArchivedLabeledSbqDiskNode>(
+                    &index_relation,
+                    nblocks,
+                    results,
+                    callback,
+                    callback_state,
+                );
+            }
+            false => {
+                bulk_delete_for_storage::<SbqDiskSpeedupStorage, ArchivedClassicSbqDiskNode>(
                     &index_relation,
                     nblocks,
                     results,

@@ -125,8 +125,8 @@ pub trait LabelSetView {
         let a = self.labels();
         let b = other.labels();
 
-        debug_assert!(a.is_sorted());
-        debug_assert!(b.is_sorted());
+        debug_assert!(a.windows(2).all(|w| w[0] <= w[1]));
+        debug_assert!(b.windows(2).all(|w| w[0] <= w[1]));
 
         let mut i = 0;
         let mut j = 0;

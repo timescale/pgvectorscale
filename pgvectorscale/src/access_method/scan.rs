@@ -6,6 +6,7 @@ use crate::{
     access_method::{
         graph::neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
         sbq::storage::SbqSpeedupStorage,
+        sbq_disk::storage::SbqDiskSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},
 };
@@ -22,6 +23,10 @@ use super::{
         quantize::SbqQuantizer, storage::SbqSpeedupStorageLsnPrivateData, SbqMeans,
         SbqSearchDistanceMeasure,
     },
+    sbq_disk::{
+        storage::SbqDiskSpeedupStorageLsnPrivateData, SbqDiskMeans,
+        SbqDiskSearchDistanceMeasure,
+    },
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -32,6 +37,10 @@ enum StorageState {
     SbqSpeedup(
         SbqQuantizer,
         TSVResponseIterator<SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData>,
+    ),
+    SbqDisk(
+        SbqQuantizer,
+        TSVResponseIterator<SbqDiskSearchDistanceMeasure, SbqDiskSpeedupStorageLsnPrivateData>,
     ),
     Plain(TSVResponseIterator<PlainDistanceMeasure, PlainStorageLsnPrivateData>),
 }
@@ -80,6 +89,14 @@ impl TSVScanState {
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::SbqSpeedup(quantizer, it)
+            }
+            StorageType::SbqDisk => {
+                let mut stats = QuantizerStats::default();
+                let quantizer = unsafe { SbqDiskMeans::load(index, &meta_page, &mut stats) };
+                let bq_disk = SbqDiskSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
+                let it =
+                    TSVResponseIterator::new(&bq_disk, index, query, search_list_size, meta_page, stats);
+                StorageState::SbqDisk(quantizer, it)
             }
         };
 
@@ -389,6 +406,16 @@ pub extern "C" fn amgettuple(
             let next = iter.next_with_resort(&scan, &indexrel, &bq);
             get_tuple(state, next, scan)
         }
+        StorageState::SbqDisk(quantizer, iter) => {
+            let bq_disk = SbqDiskSpeedupStorage::load_for_search(
+                &indexrel,
+                &heaprel,
+                quantizer,
+                &state.meta_page,
+            );
+            let next = iter.next_with_resort(&scan, &indexrel, &bq_disk);
+            get_tuple(state, next, scan)
+        }
         StorageState::Plain(iter) => {
             let storage = PlainStorage::load_for_search(&indexrel, &heaprel, &state.meta_page);
             let next = if state.meta_page.get_num_dimensions()
@@ -450,6 +477,7 @@ pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
         let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
         match &mut storage {
             StorageState::SbqSpeedup(_bq, iter) => end_scan::<SbqSpeedupStorage>(iter),
+            StorageState::SbqDisk(_bq_disk, iter) => end_scan::<SbqDiskSpeedupStorage>(iter),
             StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
         }
     }

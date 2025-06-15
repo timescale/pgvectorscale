@@ -144,6 +144,7 @@ pub enum StorageType {
     Plain = 0,
     // R.I.P. SbqSpeedup = 1,
     SbqCompression = 2,
+    SbqDisk = 3,
 }
 
 pub const DEFAULT_STORAGE_TYPE_STR: &str = "memory_optimized";
@@ -153,6 +154,7 @@ impl StorageType {
         match value {
             0 => StorageType::Plain,
             2 => StorageType::SbqCompression,
+            3 => StorageType::SbqDisk,
             _ => panic!("Invalid storage type"),
         }
     }
@@ -161,7 +163,8 @@ impl StorageType {
         match value.to_lowercase().as_str() {
             "plain" => StorageType::Plain,
             "bq_compression" | "memory_optimized" => StorageType::SbqCompression,
-            _ => panic!("Invalid storage type. Must be either 'plain' or 'memory_optimized'"),
+            "disk_optimized" => StorageType::SbqDisk,
+            _ => panic!("Invalid storage type. Must be 'plain', 'memory_optimized', or 'disk_optimized'"),
         }
     }
 }

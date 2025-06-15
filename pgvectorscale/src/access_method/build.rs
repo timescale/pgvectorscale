@@ -22,11 +22,13 @@ use super::graph::neighbor_store::BuilderNeighborCache;
 use super::labels::LabeledVector;
 use super::sbq::quantize::SbqQuantizer;
 use super::sbq::storage::SbqSpeedupStorage;
+use super::sbq_disk::storage::SbqDiskSpeedupStorage;
 
 use super::meta_page::MetaPage;
 
 use super::plain::storage::PlainStorage;
 use super::sbq::SbqMeans;
+use super::sbq_disk::SbqDiskMeans;
 use super::storage::{Storage, StorageType};
 
 struct SbqTrainState<'a, 'b> {
@@ -36,6 +38,7 @@ struct SbqTrainState<'a, 'b> {
 
 enum StorageBuildState<'a, 'b, 'c, 'd> {
     SbqSpeedup(&'a mut SbqSpeedupStorage<'b>, &'c mut BuildState<'d>),
+    SbqDisk(&'a mut SbqDiskSpeedupStorage<'b>, &'c mut BuildState<'d>),
     Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d>),
 }
 
@@ -232,6 +235,23 @@ unsafe fn aminsert_internal(
                 &mut stats,
             );
         }
+        StorageType::SbqDisk => {
+            let bq_disk = SbqDiskSpeedupStorage::load_for_insert(
+                &heap_relation,
+                &index_relation,
+                &meta_page,
+                &mut stats.quantizer_stats,
+            );
+            insert_storage(
+                &bq_disk,
+                &index_relation,
+                vec,
+                spare_vec,
+                heap_pointer,
+                &mut meta_page,
+                &mut stats,
+            );
+        }
     }
     false
 }
@@ -290,7 +310,7 @@ fn maybe_train_quantizer(
     let storage = meta_page.get_storage_type();
     match storage {
         StorageType::Plain => {}
-        StorageType::SbqCompression => {
+        StorageType::SbqCompression | StorageType::SbqDisk => {
             unsafe {
                 pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
             }
@@ -313,8 +333,13 @@ fn maybe_train_quantizer(
             }
             quantizer.finish_training();
             if quantizer.use_mean {
-                let index_pointer =
-                    unsafe { SbqMeans::store(index_relation, &quantizer, &mut write_stats) };
+                let index_pointer = match storage {
+                    StorageType::SbqCompression => 
+                        unsafe { SbqMeans::store(index_relation, &quantizer, &mut write_stats) },
+                    StorageType::SbqDisk => 
+                        unsafe { SbqDiskMeans::store(index_relation, &quantizer, &mut write_stats) },
+                    _ => unreachable!()
+                };
                 meta_page.set_quantizer_metadata_pointer(index_pointer);
             }
         }
@@ -395,6 +420,39 @@ fn do_heap_scan(
             }
 
             finalize_index_build(&mut bq, bs, index_relation, write_stats)
+        }
+        StorageType::SbqDisk => {
+            let mut bq_disk = unsafe {
+                SbqDiskSpeedupStorage::new_for_build(
+                    index_relation,
+                    heap_relation,
+                    graph.get_meta_page(),
+                    &mut write_stats,
+                )
+            };
+
+            let page_type = SbqDiskSpeedupStorage::page_type();
+            let mut bs = BuildState::new(index_relation, graph, page_type);
+            let mut state = StorageBuildState::SbqDisk(&mut bq_disk, &mut bs);
+
+            unsafe {
+                pg_sys::IndexBuildHeapScan(
+                    heap_relation.as_ptr(),
+                    index_relation.as_ptr(),
+                    index_info,
+                    Some(build_callback),
+                    &mut state,
+                );
+            }
+
+            unsafe {
+                pgstat_progress_update_param(
+                    PROGRESS_CREATE_IDX_SUBPHASE,
+                    BUILD_PHASE_FINALIZING_GRAPH,
+                );
+            }
+
+            finalize_index_build(&mut bq_disk, bs, index_relation, write_stats)
         }
     }
 }
@@ -498,6 +556,22 @@ unsafe extern "C" fn build_callback(
                     spare_vec,
                     state,
                     *bq,
+                );
+            }
+        }
+        StorageBuildState::SbqDisk(bq_disk, state) => {
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
+            if let Some(vec) = vec {
+                let spare_vec =
+                    LabeledVector::from_datums(values, isnull, state.graph.get_meta_page())
+                        .unwrap();
+                build_callback_memory_wrapper(
+                    &index_relation,
+                    heap_pointer,
+                    vec,
+                    spare_vec,
+                    state,
+                    *bq_disk,
                 );
             }
         }

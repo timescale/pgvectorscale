@@ -278,6 +278,7 @@ impl MetaPage {
         match self.get_storage_type() {
             StorageType::Plain => None,
             StorageType::SbqCompression => Some(self.quantizer_metadata),
+            StorageType::SbqDisk => Some(self.quantizer_metadata),
         }
     }
 
@@ -287,6 +288,7 @@ impl MetaPage {
             match (*opt).get_storage_type() {
                 StorageType::Plain => 50,
                 StorageType::SbqCompression => 50,
+                StorageType::SbqDisk => 50,
             }
         } else {
             num_neighbors as u32

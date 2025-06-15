@@ -14,6 +14,7 @@ pub mod options;
 pub mod pg_vector;
 pub mod plain;
 mod sbq;
+mod sbq_disk;
 mod scan;
 pub mod stats;
 mod storage;
