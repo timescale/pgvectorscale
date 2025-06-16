@@ -1,7 +1,8 @@
 use std::time::Instant;
 
 use pg_sys::{FunctionCall0Coll, InvalidOid};
-use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr};
+use pgrx::ffi::c_char;
+use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr, Oid};
 use pgrx::*;
 
 use crate::access_method::distance::DistanceType;
@@ -29,6 +30,8 @@ use super::meta_page::MetaPage;
 use super::plain::storage::PlainStorage;
 use super::sbq::SbqMeans;
 use super::storage::{Storage, StorageType};
+
+mod parallel;
 
 struct SbqTrainState<'a, 'b> {
     quantizer: &'a mut SbqQuantizer,
@@ -72,24 +75,26 @@ pub const MAX_DIMENSION: u32 = 16000;
 /// using the SBQ storage type.
 pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
-#[pg_guard]
-pub extern "C-unwind" fn ambuild(
-    heaprel: pg_sys::Relation,
+/// Data about parallel index build that never changes.
+#[derive(Debug, Copy, Clone)]
+struct ParallelSharedParams {
+    heaprelid: Oid,
+    indexrelid: Oid,
+    is_concurrent: bool,
+}
+
+/// Status data for parallel index builds, shared among all parallel workers.
+#[derive(Debug)]
+struct ParallelShared {
+    params: ParallelSharedParams,
+    ntuples: usize,
+}
+
+fn get_meta_page(
     indexrel: pg_sys::Relation,
-    index_info: *mut pg_sys::IndexInfo,
-) -> *mut pg_sys::IndexBuildResult {
-    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
-    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
-    let opt = TSVIndexOptions::from_relation(&index_relation);
-
-    notice!(
-        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}.",
-        opt.get_num_neighbors(),
-        opt.search_list_size,
-        opt.max_alpha,
-        opt.get_storage_type(),
-    );
-
+    index_relation: &PgRelation,
+    opt: PgBox<TSVIndexOptions>,
+) -> MetaPage {
     let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
 
     let distance_type = unsafe {
@@ -105,7 +110,7 @@ pub extern "C-unwind" fn ambuild(
         error!("Inner product distance type is not supported with plain storage");
     }
 
-    let mut meta_page =
+    let meta_page =
         unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
 
     if meta_page.get_num_dimensions_to_index() == 0 {
@@ -129,15 +134,131 @@ pub extern "C-unwind" fn ambuild(
         error!("Labeled filtering is not supported with plain storage");
     }
 
+    meta_page
+}
+
+#[pg_guard]
+pub extern "C-unwind" fn ambuild(
+    heaprel: pg_sys::Relation,
+    indexrel: pg_sys::Relation,
+    index_info: *mut pg_sys::IndexInfo,
+) -> *mut pg_sys::IndexBuildResult {
+    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
+    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
+    let opt = TSVIndexOptions::from_relation(&index_relation);
+    let mut meta_page = get_meta_page(indexrel, &index_relation, opt);
+    let opt = TSVIndexOptions::from_relation(&index_relation);
+
+    notice!(
+        "Starting index build with num_neighbors={}, search_list_size={}, max_alpha={}, storage_layout={:?}.",
+        opt.get_num_neighbors(),
+        opt.search_list_size,
+        opt.max_alpha,
+        opt.get_storage_type(),
+    );
+
+    // Train quantizer before doing anything in parallel
     let write_stats =
         maybe_train_quantizer(index_info, &heap_relation, &index_relation, &mut meta_page);
-    let ntuples = do_heap_scan(
-        index_info,
-        &heap_relation,
-        &index_relation,
-        meta_page,
-        write_stats,
-    );
+    unsafe {
+        meta_page.store(&index_relation, false);
+    };
+
+    let workers = 1; // TODO: unsafe { (*index_info).ii_ParallelWorkers };
+    let is_concurrent = unsafe { (*index_info).ii_Concurrent };
+    struct ParallelData {
+        pcxt: *mut pg_sys::ParallelContext,
+        snapshot: *mut pg_sys::SnapshotData,
+    }
+    let parallel_data = if workers > 0 {
+        notice!("Parallel build with {} workers", workers);
+        unsafe {
+            pg_sys::EnterParallelMode();
+            const EXTENSION_NAME: *const c_char = {
+                static NAME: &str =
+                    concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"), "\0");
+                NAME.as_ptr() as *const c_char
+            };
+
+            let pcxt = pg_sys::CreateParallelContext(EXTENSION_NAME, PARALLEL_BUILD_MAIN, workers);
+            let snapshot = if is_concurrent {
+                pg_sys::RegisterSnapshot(pg_sys::GetTransactionSnapshot())
+            } else {
+                &raw mut pg_sys::SnapshotAnyData
+            };
+
+            // Estimate things we put in shared memory
+            parallel::toc_estimate_single_chunk(pcxt, size_of::<ParallelShared>());
+            let tablescandesc_size_estimate =
+                pg_sys::table_parallelscan_estimate(heaprel, snapshot);
+            parallel::toc_estimate_single_chunk(pcxt, tablescandesc_size_estimate);
+
+            pg_sys::InitializeParallelDSM(pcxt);
+            if (*pcxt).seg.is_null() {
+                parallel::cleanup_pcxt(pcxt, snapshot);
+                None
+            } else {
+                let parallel_shared =
+                    pg_sys::shm_toc_allocate((*pcxt).toc, size_of::<ParallelShared>())
+                        .cast::<ParallelShared>();
+                parallel_shared.write(ParallelShared {
+                    params: ParallelSharedParams {
+                        heaprelid: heap_relation.rd_id,
+                        indexrelid: index_relation.rd_id,
+                        is_concurrent,
+                    },
+                    ntuples: 0,
+                });
+                let tablescandesc =
+                    pg_sys::shm_toc_allocate((*pcxt).toc, tablescandesc_size_estimate)
+                        .cast::<pg_sys::ParallelTableScanDescData>();
+                pg_sys::table_parallelscan_initialize(heaprel, tablescandesc, snapshot);
+
+                pg_sys::shm_toc_insert(
+                    (*pcxt).toc,
+                    parallel::SHM_TOC_SHARED_KEY,
+                    parallel_shared.cast(),
+                );
+                pg_sys::shm_toc_insert(
+                    (*pcxt).toc,
+                    parallel::SHM_TOC_TABLESCANDESC_KEY,
+                    tablescandesc.cast(),
+                );
+
+                pg_sys::LaunchParallelWorkers(pcxt);
+                if (*pcxt).nworkers_launched == 0 {
+                    warning!("No workers launched");
+                    parallel::cleanup_pcxt(pcxt, snapshot);
+                    None
+                } else {
+                    pg_sys::WaitForParallelWorkersToAttach(pcxt);
+                    Some(ParallelData { pcxt, snapshot })
+                }
+            }
+        }
+    } else {
+        None
+    };
+
+    let ntuples = if let Some(ParallelData { pcxt, snapshot }) = parallel_data {
+        unsafe {
+            pg_sys::WaitForParallelWorkersToFinish(pcxt);
+            let parallel_shared: *mut ParallelShared =
+                pg_sys::shm_toc_lookup((*pcxt).toc, parallel::SHM_TOC_SHARED_KEY, false)
+                    .cast::<ParallelShared>();
+            let ntuples = (*parallel_shared).ntuples;
+            parallel::cleanup_pcxt(pcxt, snapshot);
+            ntuples
+        }
+    } else {
+        do_heap_scan(
+            index_info,
+            &heap_relation,
+            &index_relation,
+            meta_page,
+            write_stats,
+        )
+    };
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
     result.heap_tuples = ntuples as f64;
@@ -319,6 +440,66 @@ fn maybe_train_quantizer(
         }
     }
     write_stats
+}
+
+const PARALLEL_BUILD_MAIN: *const c_char = c"_vectorscale_build_main".as_ptr();
+#[pg_guard]
+#[unsafe(no_mangle)]
+pub extern "C-unwind" fn _vectorscale_build_main(
+    seg: *mut pg_sys::dsm_segment,
+    shm_toc: *mut pg_sys::shm_toc,
+) {
+    let status_flags = unsafe { (*pg_sys::MyProc).statusFlags };
+    assert!(
+        status_flags == 0 || status_flags == pg_sys::PROC_IN_SAFE_IC as u8,
+        "Status flags for an index build process must be unset or PROC_IN_SAFE_IC (in a safe index creation)"
+    );
+
+    let parallel_shared: *mut ParallelShared = unsafe {
+        pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_SHARED_KEY, false)
+            .cast::<ParallelShared>()
+    };
+    let tablescandesc = unsafe {
+        pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_TABLESCANDESC_KEY, false)
+            .cast::<pg_sys::ParallelTableScanDescData>()
+    };
+
+    let params = unsafe {
+        // SAFETY: these parameters never change, so no data races
+        (*parallel_shared).params
+    };
+
+    let (heap_lockmode, index_lockmode) = if params.is_concurrent {
+        (
+            pg_sys::ShareLock as pg_sys::LOCKMODE,
+            pg_sys::AccessExclusiveLock as pg_sys::LOCKMODE,
+        )
+    } else {
+        (
+            pg_sys::ShareUpdateExclusiveLock as pg_sys::LOCKMODE,
+            pg_sys::RowExclusiveLock as pg_sys::LOCKMODE,
+        )
+    };
+
+    let heaprel = unsafe { pg_sys::table_open(params.heaprelid, heap_lockmode) };
+    let indexrel = unsafe { pg_sys::index_open(params.indexrelid, index_lockmode) };
+    let index_info = unsafe { pg_sys::BuildIndexInfo(indexrel) };
+    let heap_relation = unsafe { PgRelation::from_pg(heaprel) };
+    let index_relation = unsafe { PgRelation::from_pg(indexrel) };
+    let meta_page = MetaPage::fetch(&index_relation);
+
+    let ntuples = do_heap_scan(
+        index_info,
+        &heap_relation,
+        &index_relation,
+        meta_page,
+        WriteStats::default(),
+    );
+
+    unsafe {
+        // SAFETY: nobody reads this until all the parallel workers are done
+        (*parallel_shared).ntuples = ntuples;
+    }
 }
 
 fn do_heap_scan(
@@ -1219,7 +1400,7 @@ pub mod tests {
                 id int,
                 embedding vector ({dimensions})
             );
-            
+
             CREATE INDEX idx_diskann_insert_after ON test_data_insert_after USING diskann (embedding) WITH ({index_options});
 
             select setseed(0.5);
