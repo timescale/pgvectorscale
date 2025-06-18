@@ -38,6 +38,7 @@ pub enum PageType {
     SbqDiskMeansV1 = 9,
     SbqDiskMeans = 10,
     SbqDiskNode = 11,
+    SbqDiskNeighborNode = 12,
 }
 
 impl PageType {
@@ -55,6 +56,7 @@ impl PageType {
             9 => PageType::SbqDiskMeansV1,
             10 => PageType::SbqDiskMeans,
             11 => PageType::SbqDiskNode,
+            12 => PageType::SbqDiskNeighborNode,
             _ => panic!("Unknown PageType number {}", value),
         }
     }

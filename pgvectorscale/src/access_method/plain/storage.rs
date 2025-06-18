@@ -97,7 +97,7 @@ impl PlainStorageLsnPrivateData {
     ) -> Self {
         let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         let neighbors = match gns {
-            GraphNeighborStore::Disk => node.get_index_pointer_to_neighbors(),
+            GraphNeighborStore::Disk => node.get_index_pointer_to_neighbors(storage.index, stats),
             GraphNeighborStore::Builder(b) => {
                 b.get_neighbors(index_pointer_to_node, storage, stats)
             }

@@ -155,7 +155,7 @@ impl ArchivedData for ArchivedClassicSbqNode {
         self.heap_item_pointer.deserialize_item_pointer()
     }
 
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, _index: &PgRelation, _stats: &mut S) -> Vec<ItemPointer> {
         self.neighbor_index_pointers
             .iter()
             .map(|p| p.deserialize_item_pointer())
@@ -172,7 +172,7 @@ impl ArchivedData for ArchivedLabeledSbqNode {
         self.heap_item_pointer.deserialize_item_pointer()
     }
 
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, _index: &PgRelation, _stats: &mut S) -> Vec<ItemPointer> {
         self.neighbor_index_pointers
             .iter()
             .map(|p| p.deserialize_item_pointer())
@@ -240,10 +240,10 @@ impl ArchivedData for ArchivedSbqNode<'_> {
         }
     }
 
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, index: &PgRelation, stats: &mut S) -> Vec<ItemPointer> {
         match self {
-            ArchivedSbqNode::Classic(node) => node.get_index_pointer_to_neighbors(),
-            ArchivedSbqNode::Labeled(node) => node.get_index_pointer_to_neighbors(),
+            ArchivedSbqNode::Classic(node) => node.get_index_pointer_to_neighbors(index, stats),
+            ArchivedSbqNode::Labeled(node) => node.get_index_pointer_to_neighbors(index, stats),
         }
     }
 }
@@ -311,7 +311,7 @@ impl ArchivedSbqNode<'_> {
 }
 
 impl ArchivedData for ArchivedMutSbqNode<'_> {
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, _index: &PgRelation, _stats: &mut S) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
 

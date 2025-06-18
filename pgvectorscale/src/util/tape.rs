@@ -70,6 +70,10 @@ impl<'a> Tape<'a> {
         item_pointer
     }
 
+    pub fn get_relation(&self) -> &PgRelation {
+        self.index
+    }
+
     pub fn close(self) {}
 }
 

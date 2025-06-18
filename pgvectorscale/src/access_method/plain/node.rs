@@ -9,7 +9,9 @@ use rkyv::{Archive, Deserialize, Serialize};
 use crate::access_method::graph::neighbor_with_distance::NeighborWithDistance;
 use crate::access_method::meta_page::MetaPage;
 use crate::access_method::node::{ReadableNode, WriteableNode};
+use crate::access_method::stats::StatsNodeRead;
 use crate::access_method::storage::{ArchivedData, NodeVacuum};
+use crate::access_method::PgRelation;
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -107,7 +109,7 @@ impl ArchivedPlainNode {
 }
 
 impl ArchivedData for ArchivedPlainNode {
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer> {
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, _index: &PgRelation, _stats: &mut S) -> Vec<ItemPointer> {
         self.iter_neighbors().collect()
     }
 

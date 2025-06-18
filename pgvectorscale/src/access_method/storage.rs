@@ -3,6 +3,7 @@ use std::pin::Pin;
 use pgrx::{pg_sys, PgBox};
 
 use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPointer};
+use crate::access_method::PgRelation;
 
 use super::{
     distance::DistanceFn,
@@ -30,7 +31,7 @@ pub trait NodeDistanceMeasure {
 pub trait ArchivedData {
     fn is_deleted(&self) -> bool;
     fn get_heap_item_pointer(&self) -> HeapPointer;
-    fn get_index_pointer_to_neighbors(&self) -> Vec<ItemPointer>;
+    fn get_index_pointer_to_neighbors<S: StatsNodeRead>(&self, index: &PgRelation, stats: &mut S) -> Vec<ItemPointer>;
 }
 
 pub trait NodeVacuum: ArchivedData {
