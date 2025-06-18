@@ -452,6 +452,10 @@ impl Storage for SbqSpeedupStorage<'_> {
         let node = rn.get_archived_node();
         node.get_labels().map(Into::into)
     }
+
+    fn get_has_labels(&self) -> bool {
+        self.has_labels
+    }
 }
 
 pub type SbqSpeedupStorageLsnPrivateData = PhantomData<bool>; //no data stored

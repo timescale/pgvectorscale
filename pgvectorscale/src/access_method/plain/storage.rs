@@ -331,4 +331,8 @@ impl Storage for PlainStorage<'_> {
     ) -> Option<LabelSet> {
         None
     }
+
+    fn get_has_labels(&self) -> bool {
+        false
+    }
 }
