@@ -75,7 +75,9 @@ impl QuantizedVectorCache {
             let item_pointer = ItemPointer::new(index_pointer.block_number, index_pointer.offset);
             // Only load if not already in cache
             if !self.cache.contains(&item_pointer) {
-                let node = unsafe { SbqNode::read(storage.index, item_pointer, true, stats) };
+                let node = unsafe {
+                    SbqNode::read(storage.index, item_pointer, storage.get_has_labels(), stats)
+                };
                 let vector = node.get_archived_node().get_bq_vector().to_vec();
                 self.cache.push(item_pointer, vector);
             }
