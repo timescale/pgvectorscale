@@ -257,6 +257,7 @@ impl Storage for SbqSpeedupStorage<'_> {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        _neighbor_tape: Option<&mut Tape>,
         stats: &mut S,
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);

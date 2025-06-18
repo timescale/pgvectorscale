@@ -60,6 +60,7 @@ pub trait Storage {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        neighbor_tape: Option<&mut Tape>,
         stats: &mut S,
     ) -> ItemPointer;
 

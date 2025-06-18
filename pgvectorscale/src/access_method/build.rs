@@ -46,6 +46,7 @@ struct BuildState<'a> {
     memcxt: PgMemoryContexts,
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
+    neighbor_tape: Option<Tape<'a>>, // For SBQ disk storage neighbor nodes
     graph: Graph<'a>,
     started: Instant,
     stats: InsertStats,
@@ -54,11 +55,19 @@ struct BuildState<'a> {
 impl<'a> BuildState<'a> {
     fn new(index_relation: &'a PgRelation, graph: Graph<'a>, page_type: PageType) -> Self {
         let tape = unsafe { Tape::new(index_relation, page_type) };
+        
+        // Create neighbor tape only for SBQ disk storage
+        let neighbor_tape = if page_type == PageType::SbqDiskNode {
+            Some(unsafe { Tape::new(index_relation, PageType::SbqDiskNeighborNode) })
+        } else {
+            None
+        };
 
         BuildState {
             memcxt: PgMemoryContexts::new("diskann build context"),
             ntuples: 0,
             tape,
+            neighbor_tape,
             graph,
             started: Instant::now(),
             stats: InsertStats::default(),
@@ -266,12 +275,21 @@ unsafe fn insert_storage<S: Storage>(
     stats: &mut InsertStats,
 ) {
     let mut tape = Tape::resume(index_relation, S::page_type());
+    
+    // Create neighbor tape only for SBQ disk storage
+    let mut neighbor_tape = if S::page_type() == PageType::SbqDiskNode {
+        Some(Tape::resume(index_relation, PageType::SbqDiskNeighborNode))
+    } else {
+        None
+    };
+    
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
         vector.labels().cloned(),
         heap_pointer,
         meta_page,
         &mut tape,
+        neighbor_tape.as_mut(),
         stats,
     );
 
@@ -642,6 +660,7 @@ fn build_callback_internal<S: Storage>(
         heap_pointer,
         state.graph.get_meta_page(),
         &mut state.tape,
+        state.neighbor_tape.as_mut(),
         &mut state.stats,
     );
 

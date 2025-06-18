@@ -79,6 +79,7 @@ impl SbqDiskNode {
     pub fn write_with_meta<S: StatsNodeWrite>(
         &mut self,
         tape: &mut Tape,
+        neighbor_tape: Option<&mut Tape>,
         meta_page: &MetaPage,
         stats: &mut S,
     ) -> ItemPointer {
@@ -88,10 +89,8 @@ impl SbqDiskNode {
                 let neighbor_node =
                     ClassicSbqDiskNeighborNode::new(meta_page.get_num_neighbors() as usize);
 
-                // Write the neighbor node using resume to try to reuse existing pages
-                let mut neighbor_tape =
-                    unsafe { Tape::resume(tape.get_relation(), PageType::SbqDiskNeighborNode) };
-                let neighbor_pointer = neighbor_node.write(&mut neighbor_tape, stats);
+                // Use the provided neighbor tape
+                let neighbor_pointer = neighbor_node.write(neighbor_tape.expect("neighbor_tape should be provided for Classic nodes"), stats);
 
                 node.neighbor_node_pointer = Some(neighbor_pointer);
 

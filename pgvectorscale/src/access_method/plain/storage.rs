@@ -132,6 +132,7 @@ impl Storage for PlainStorage<'_> {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        _neighbor_tape: Option<&mut Tape>,
         stats: &mut S,
     ) -> ItemPointer {
         //OPT: avoid the clone?

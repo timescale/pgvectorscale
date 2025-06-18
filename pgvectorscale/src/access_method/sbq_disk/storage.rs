@@ -261,6 +261,7 @@ impl Storage for SbqDiskSpeedupStorage<'_> {
         heap_pointer: HeapPointer,
         meta_page: &MetaPage,
         tape: &mut Tape,
+        neighbor_tape: Option<&mut Tape>,
         stats: &mut S,
     ) -> ItemPointer {
         let bq_vector = self.quantizer.vector_for_new_node(meta_page, full_vector);
@@ -268,7 +269,7 @@ impl Storage for SbqDiskSpeedupStorage<'_> {
         let mut node =
             SbqDiskNode::with_meta(heap_pointer, meta_page, bq_vector.as_slice(), labels);
 
-        let index_pointer: IndexPointer = node.write_with_meta(tape, meta_page, stats);
+        let index_pointer: IndexPointer = node.write_with_meta(tape, neighbor_tape, meta_page, stats);
         index_pointer
     }
 
