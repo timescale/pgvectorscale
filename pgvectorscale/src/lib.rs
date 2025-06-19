@@ -30,8 +30,12 @@ pub mod pg_test {
         // perform one-off initialization when the pg_test framework starts
     }
 
+    #[cfg(feature = "build_parallel")]
     pub fn postgresql_conf_options() -> Vec<&'static str> {
-        // return any postgresql.conf settings that are required for your tests
         vec!["maintenance_work_mem = '640MB'"]
+    }
+    #[cfg(not(feature = "build_parallel"))]
+    pub fn postgresql_conf_options() -> Vec<&'static str> {
+        vec![]
     }
 }
