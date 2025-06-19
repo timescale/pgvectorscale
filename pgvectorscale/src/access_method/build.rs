@@ -77,6 +77,7 @@ pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
 /// Data about parallel index build that never changes.
 #[derive(Debug, Copy, Clone)]
+#[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelSharedParams {
     heaprelid: Oid,
     indexrelid: Oid,
@@ -85,6 +86,7 @@ struct ParallelSharedParams {
 
 /// Status data for parallel index builds, shared among all parallel workers.
 #[derive(Debug)]
+#[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelShared {
     params: ParallelSharedParams,
     ntuples: usize,
@@ -450,8 +452,9 @@ fn maybe_train_quantizer(
 const PARALLEL_BUILD_MAIN: *const c_char = c"_vectorscale_build_main".as_ptr();
 #[pg_guard]
 #[unsafe(no_mangle)]
+#[cfg(feature = "build_parallel")]
 pub extern "C-unwind" fn _vectorscale_build_main(
-    seg: *mut pg_sys::dsm_segment,
+    _seg: *mut pg_sys::dsm_segment,
     shm_toc: *mut pg_sys::shm_toc,
 ) {
     let status_flags = unsafe { (*pg_sys::MyProc).statusFlags };
@@ -464,7 +467,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_SHARED_KEY, false)
             .cast::<ParallelShared>()
     };
-    let tablescandesc = unsafe {
+    let _tablescandesc = unsafe {
         pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_TABLESCANDESC_KEY, false)
             .cast::<pg_sys::ParallelTableScanDescData>()
     };
