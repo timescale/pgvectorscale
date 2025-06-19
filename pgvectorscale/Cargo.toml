@@ -19,6 +19,7 @@ pg16 = ["pgrx/pg16", "pgrx-tests/pg16"]
 pg17 = ["pgrx/pg17", "pgrx-tests/pg17"]
 pg18 = ["pgrx/pg18", "pgrx-tests/pg18"]
 pg_test = []
+build_parallel = []
 
 [lints.rust]
 unexpected_cfgs = { level = "allow", check-cfg = [

@@ -164,7 +164,12 @@ pub extern "C-unwind" fn ambuild(
         meta_page.store(&index_relation, false);
     };
 
-    let workers = 1; // TODO: unsafe { (*index_info).ii_ParallelWorkers };
+    // TODO: unsafe { (*index_info).ii_ParallelWorkers };
+    let workers = if cfg!(feature = "build_parallel") {
+        1
+    } else {
+        0
+    };
     let is_concurrent = unsafe { (*index_info).ii_Concurrent };
     struct ParallelData {
         pcxt: *mut pg_sys::ParallelContext,
