@@ -294,12 +294,12 @@ fn maybe_train_quantizer(
             unsafe {
                 pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_TRAINING);
             }
-            let mut quantizer = SbqQuantizer::new(&meta_page);
+            let mut quantizer = SbqQuantizer::new(meta_page);
             quantizer.start_training(meta_page);
 
             let mut state = SbqTrainState {
                 quantizer: &mut quantizer,
-                meta_page: &meta_page,
+                meta_page,
             };
 
             unsafe {
@@ -673,9 +673,7 @@ pub mod tests {
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {vector_dimensions}));");
-        println!("{}", sql);
         Spi::run(&sql)?;
-        // assert!(false);
 
         let test_vec: Option<Vec<f32>> = Spi::get_one(
             &format!("SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding

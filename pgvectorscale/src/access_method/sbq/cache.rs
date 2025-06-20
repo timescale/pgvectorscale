@@ -2,6 +2,7 @@ use std::num::NonZero;
 
 use pgrx::debug1;
 
+use crate::access_method::storage::Storage;
 use crate::util::lru::LruCacheWithStats;
 
 use crate::{
@@ -43,11 +44,18 @@ impl QuantizedVectorCache {
         stats: &mut S,
     ) -> &[SbqVectorElement] {
         // TODO this probes the cache twice in the case of a hit, figure out
-        // how to do this in a single probe without running afould of the Rust
+        // how to do this in a single probe without running afoul of the Rust
         // borrow checker
         if !self.cache.contains(&index_pointer) {
             // Not in cache, need to read from storage
-            let node = unsafe { SbqNode::read(storage.index, index_pointer, true, stats) };
+            let node = unsafe {
+                SbqNode::read(
+                    storage.index,
+                    index_pointer,
+                    storage.get_has_labels(),
+                    stats,
+                )
+            };
             let vector = node.get_archived_node().get_bq_vector().to_vec();
 
             // Insert into cache and handle evicted item
@@ -67,7 +75,9 @@ impl QuantizedVectorCache {
             let item_pointer = ItemPointer::new(index_pointer.block_number, index_pointer.offset);
             // Only load if not already in cache
             if !self.cache.contains(&item_pointer) {
-                let node = unsafe { SbqNode::read(storage.index, item_pointer, true, stats) };
+                let node = unsafe {
+                    SbqNode::read(storage.index, item_pointer, storage.get_has_labels(), stats)
+                };
                 let vector = node.get_archived_node().get_bq_vector().to_vec();
                 self.cache.push(item_pointer, vector);
             }

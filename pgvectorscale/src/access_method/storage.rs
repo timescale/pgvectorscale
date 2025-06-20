@@ -137,6 +137,8 @@ pub trait Storage {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Option<LabelSet>;
+
+    fn get_has_labels(&self) -> bool;
 }
 
 #[derive(PartialEq, Debug)]
