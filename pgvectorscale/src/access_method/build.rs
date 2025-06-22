@@ -847,6 +847,62 @@ pub mod tests {
     }
 
     #[pg_test]
+    pub unsafe fn test_no_rescore() -> spi::Result<()> {
+        // Create a table with 2 vectors.  Create an index on the table before adding
+        // data to ensure that SBQ uses default 0 means and therefore cannot distinguish
+        // between the vectors.
+        Spi::run(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING diskann(embedding vector_l2_ops);
+
+            INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]');
+            ",
+        )?;
+
+        // Query the table with scoring disabled.  The result should be "wrong" for at
+        // least one of the queries if rescoring is disabled.
+        let res_a: Option<Vec<String>> = Spi::get_one(
+            "set enable_seqscan = 0;
+            SET diskann.query_rescore = 0;
+            WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        let wrong_a = res_a.unwrap() != vec!["[1,1,1]"];
+        let res_b: Option<Vec<String>> = Spi::get_one(
+            "set enable_seqscan = 0;
+            SET diskann.query_rescore = 0;
+            WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        let wrong_b = res_b.unwrap() != vec!["[2,2,2]"];
+        assert!(wrong_a || wrong_b);
+
+        // Now query the table with scoring enabled.  The result should be correct for
+        // both queries.
+        let res_a: Option<Vec<String>> = Spi::get_one(
+            "set enable_seqscan = 0;
+            SET diskann.query_rescore = 2;
+            WITH cte as (select * from test order by embedding <-> '[1,1,1]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        let res_b: Option<Vec<String>> = Spi::get_one(
+            "set enable_seqscan = 0;
+            SET diskann.query_rescore = 2;
+            WITH cte as (select * from test order by embedding <-> '[2,2,2]' LIMIT 1)
+            SELECT array_agg(embedding::text) from cte;",
+        )?;
+        assert_eq!(vec!["[1,1,1]"], res_a.unwrap());
+        assert_eq!(vec!["[2,2,2]"], res_b.unwrap());
+
+        Spi::run("DROP INDEX idxtest;")?;
+
+        Ok(())
+    }
+
+    #[pg_test]
     pub unsafe fn test_l2_sanity_check() -> spi::Result<()> {
         Spi::run(
             "CREATE TABLE test(embedding vector(3));
