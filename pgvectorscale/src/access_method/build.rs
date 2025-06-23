@@ -193,9 +193,8 @@ unsafe fn aminsert_internal(
     }
     let vec = vec.unwrap();
 
-    // PgVector is not cloneable, but in some cases we need a second copy of it
-    // for the insert.  This is a bit of a hack to get that second copy.
-    let spare_vec = LabeledVector::from_datums(values, isnull, &meta_page).unwrap();
+    // Create a copy of the vector for the insert operation
+    let spare_vec = vec.clone();
 
     let heap_pointer = ItemPointer::with_item_pointer_data(*heap_tid);
     let mut storage = meta_page.get_storage_type();

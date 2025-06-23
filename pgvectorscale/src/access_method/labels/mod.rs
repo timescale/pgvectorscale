@@ -167,7 +167,7 @@ impl Debug for ArchivedLabelSet {
 }
 
 /// A labeled vector is a vector with an optional set of labels.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabeledVector {
     vec: PgVector,
     labels: Option<LabelSet>,
