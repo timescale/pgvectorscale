@@ -99,11 +99,11 @@ test-python: test-python-setup
 # Run specific test categories
 test-concurrency: test-python-setup
 	@echo "Running concurrency tests..."
-	PYTEST_ARGS="-v tests/concurrency/" ./scripts/run-python-tests.sh
+	PYTEST_ARGS="-v -m concurrency" ./scripts/run-python-tests.sh
 
 test-integration: test-python-setup
 	@echo "Running integration tests..."
-	PYTEST_ARGS="-v tests/integration/" ./scripts/run-python-tests.sh
+	PYTEST_ARGS="-v -m integration" ./scripts/run-python-tests.sh
 
 # Run all tests (existing + Python)
 test-all: test test-python

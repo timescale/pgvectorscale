@@ -116,7 +116,7 @@ jobs:
           DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/test_db
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-          pytest tests/concurrency/ -v --tb=short
+          pytest tests/ -m concurrency -v --tb=short
           
       - name: Upload test results
         uses: actions/upload-artifact@v4
