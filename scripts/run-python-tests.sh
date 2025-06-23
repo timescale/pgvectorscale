@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 echo -e "${YELLOW}🔧 Setting up Python test environment...${NC}"
 
 # Check if PostgreSQL is running
-if ! pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USER -d $DB_NAME >/dev/null 2>&1; then
+if ! pg_isready -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -d "$DB_NAME" >/dev/null 2>&1; then
     echo -e "${RED}❌ PostgreSQL is not running or not accessible${NC}"
     echo "Please ensure PostgreSQL is running and accessible at:"
     echo "  Host: $DB_HOST"
@@ -68,7 +68,7 @@ fi
 echo -e "${YELLOW}🔌 Checking extensions...${NC}"
 DATABASE_URL="postgresql+asyncpg://$DB_USER@$DB_HOST:$DB_PORT/$DB_NAME"
 
-python3 -c "
+if ! python3 -c "
 import asyncio
 import asyncpg
 import sys
@@ -92,9 +92,7 @@ async def check_extensions():
         sys.exit(1)
 
 asyncio.run(check_extensions())
-"
-
-if [ $? -ne 0 ]; then
+"; then
     exit 1
 fi
 
@@ -104,9 +102,9 @@ export DATABASE_URL="$DATABASE_URL"
 
 # Use python3 -m pytest to ensure we use the installed pytest
 if command -v pytest >/dev/null 2>&1; then
-    pytest tests/ $PYTEST_ARGS
+    pytest tests/ "$PYTEST_ARGS"
 else
-    python3 -m pytest tests/ $PYTEST_ARGS
+    python3 -m pytest tests/ "$PYTEST_ARGS"
 fi
 
 echo -e "${GREEN}✅ Python tests completed!${NC}"
