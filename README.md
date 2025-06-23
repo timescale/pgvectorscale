@@ -35,7 +35,7 @@ offering the PostgreSQL community a new avenue for contributing to vector suppor
    * [Install pgvectorscale](#installation)
    * [Get started using pgvectorscale](#get-started-with-pgvectorscale)
 
-If you **want to contribute** to this extension, see how to [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md).
+If you **want to contribute** to this extension, see how to [build pgvectorscale from source in a developer environment](./DEVELOPMENT.md) and our [comprehensive testing guide](./TESTING.md).
 
 For production vector workloads, get **private beta access to vector-optimized databases** with pgvector and pgvectorscale on Timescale. [Sign up here for priority access](https://timescale.typeform.com/to/H7lQ10eQ).
 

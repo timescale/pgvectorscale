@@ -1,0 +1,124 @@
+name: Python Integration Tests
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        pgvector:
+          - version: 0.7.4
+        pg:
+          - major: 15
+            minor: 7
+          - major: 16
+            minor: 3
+          - major: 17
+            minor: 0
+        python-version: ['3.9', '3.11']
+    
+    env:
+      PG_SRC_DIR: pgbuild
+      PG_INSTALL_DIR: postgresql
+      MAKE_JOBS: 6
+      PG_CONFIG_PATH: postgresql/bin/pg_config
+
+    services:
+      postgres:
+        image: postgres:${{ matrix.pg.major }}-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: test_db
+          POSTGRES_USER: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout pgvectorscale
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python-version }}
+          
+      - name: Cache pip dependencies
+        uses: actions/cache@v3
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('tests/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install Linux Packages
+        uses: ./.github/actions/install-packages
+
+      - name: Install PostgreSQL ${{ matrix.pg.major }}
+        uses: ./.github/actions/install-postgres
+        with:
+          pg-version: ${{ matrix.pg.major }}.${{ matrix.pg.minor }}
+          pg-src-dir: ~/${{ env.PG_SRC_DIR }}
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+      
+      - name: Install pgvector ${{ matrix.pgvector.version }}
+        uses: ./.github/actions/install-pgvector
+        with:
+          pgvector-version: ${{ matrix.pgvector.version }}
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+
+      - name: Install pgrx
+        uses: ./.github/actions/install-pgrx
+        with:
+          pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
+          pgrx-version: 0.12.9
+
+      - name: Build and install pgvectorscale
+        run: |
+          cd pgvectorscale
+          cargo pgrx install --features pg${{ matrix.pg.major }}
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r tests/requirements.txt
+          
+      - name: Setup test database with extensions
+        env:
+          PGPASSWORD: postgres
+        run: |
+          # Wait for PostgreSQL to be ready
+          pg_isready -h localhost -p 5432 -U postgres
+          
+          # Install extensions in the test database
+          psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vectorscale;"
+
+      - name: Run Python integration tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        run: |
+          pytest tests/ -v --tb=short
+          
+      - name: Run concurrency tests specifically
+        env:
+          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+        run: |
+          pytest tests/concurrency/ -v --tb=short
+          
+      - name: Upload test results
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: python-test-results-pg${{ matrix.pg.major }}-py${{ matrix.python-version }}
+          path: |
+            pytest.log
+            test-results.xml
+          retention-days: 7

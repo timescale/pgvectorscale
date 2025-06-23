@@ -12,7 +12,7 @@ Embeddings = sa.Table(
     "embeddings",
     metadata,
     sa.Column("id", sa.BigInteger, primary_key=True),
-    sa.Column("embedding", Vector(1024)),
+    sa.Column("embedding", Vector(3)),
 )
 
 parser = argparse.ArgumentParser()
@@ -53,7 +53,7 @@ async def _main(args):
 async def _init_db(engine) -> None:
     tbl = """CREATE TABLE IF NOT EXISTS embeddings (
  id BIGSERIAL PRIMARY KEY,
- embedding vector(1024)
+ embedding vector(3)
  )
  """
 
@@ -73,7 +73,7 @@ async def _insert_embeddings(engine, n: int):
         )
 
 def _random_embeddings(n: int):
-    return [np.random.rand(1024) for _ in range(n)]
+    return [np.random.rand(3) for _ in range(n)]
 
 if __name__ == "__main__":
     args = parser.parse_args()

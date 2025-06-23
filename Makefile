@@ -83,5 +83,35 @@ shellcheck:
 shfmt:
 	shfmt -w -i 4 test scripts
 
+# Python test targets
+.PHONY: test-python-setup test-python test-concurrency test-integration test-all
+
+# Setup Python test environment
+test-python-setup:
+	@echo "Setting up Python test environment..."
+	pip3 install --break-system-packages -r tests/requirements.txt
+
+# Run Python integration tests
+test-python: test-python-setup
+	@echo "Running Python integration tests..."
+	./scripts/run-python-tests.sh
+
+# Run specific test categories
+test-concurrency: test-python-setup
+	@echo "Running concurrency tests..."
+	PYTEST_ARGS="-v tests/concurrency/" ./scripts/run-python-tests.sh
+
+test-integration: test-python-setup
+	@echo "Running integration tests..."
+	PYTEST_ARGS="-v tests/integration/" ./scripts/run-python-tests.sh
+
+# Run all tests (existing + Python)
+test-all: test test-python
+	@echo "All tests completed!"
+
+# Development helper - run tests with database cleanup
+test-python-dev: test-python-setup
+	@echo "Running Python tests with cleanup..."
+	PYTEST_ARGS="-v --tb=short -x" ./scripts/run-python-tests.sh
 
 .PHONY: release rust test prove install clean

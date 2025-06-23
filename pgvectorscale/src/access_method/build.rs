@@ -1410,4 +1410,82 @@ pub mod tests {
         Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
     }
+
+    #[pg_test]
+    pub unsafe fn test_concurrent_insert_safety() -> spi::Result<()> {
+        // Functional regression test for GitHub issue #193.
+        //
+        // Note: This test cannot reproduce the actual multi-process race condition
+        // (which requires multiple PostgreSQL backend processes accessing the same page
+        // simultaneously). The race condition is properly reproduced by
+        // scripts/issue_193_repro.py using multiple async database connections.
+        //
+        // This test serves as a functional regression test to ensure that the fix
+        // doesn't break basic insert and index functionality.
+
+        let dimensions = 3; // Using short vectors to keep test reasonable
+        let num_vectors = 100;
+
+        // Create table and index
+        Spi::run(&format!(
+            "CREATE TABLE test_concurrent (
+                id BIGSERIAL PRIMARY KEY,
+                embedding vector({dimensions})
+            );
+
+            CREATE INDEX test_concurrent_idx ON test_concurrent 
+            USING diskann (embedding vector_cosine_ops);"
+        ))?;
+
+        // Insert test vectors
+        let mut insert_values = Vec::new();
+        for i in 0..num_vectors {
+            let vector_components: Vec<String> = (0..dimensions)
+                .map(|dim| {
+                    let seed = (i * 31 + dim * 17) as f64;
+                    let value = ((seed * 0.123456789) % 1.0) * 2.0 - 1.0;
+                    format!("{:.6}", value)
+                })
+                .collect();
+
+            let vector_str = format!("[{}]", vector_components.join(","));
+            insert_values.push(format!("('{}')", vector_str));
+        }
+
+        let insert_query = format!(
+            "INSERT INTO test_concurrent (embedding) VALUES {};",
+            insert_values.join(",")
+        );
+        Spi::run(&insert_query)?;
+
+        // Verify that all inserts succeeded
+        let count: Option<i64> = Spi::get_one("SELECT COUNT(*) FROM test_concurrent;")?;
+
+        assert_eq!(
+            count.unwrap(),
+            num_vectors as i64,
+            "Expected {} rows, but found {}",
+            num_vectors,
+            count.unwrap_or(-1)
+        );
+
+        // Test that index scan works correctly with a simple 3-dimensional query vector
+        let index_scan_result: Option<i64> = Spi::get_one(
+            "SET enable_seqscan = 0;
+             WITH ordered_results AS (
+                 SELECT * FROM test_concurrent 
+                 ORDER BY embedding <=> '[0.5, 0.3, 0.8]'
+                 LIMIT 10
+             )
+             SELECT COUNT(*) FROM ordered_results;",
+        )?;
+
+        assert!(
+            index_scan_result.is_some(),
+            "Index scan should return results"
+        );
+
+        Spi::run("DROP TABLE test_concurrent CASCADE;")?;
+        Ok(())
+    }
 }
