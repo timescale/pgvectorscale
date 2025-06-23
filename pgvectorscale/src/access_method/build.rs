@@ -1389,6 +1389,8 @@ pub mod tests {
     #[pg_test]
     pub unsafe fn test_null_vector_scan() -> spi::Result<()> {
         // Test for issue #238 - NULL vectors should not crash index scans
+        // Instead the index scan should return all vectors in some arbitrary order.
+
         Spi::run(
             "CREATE TABLE test(embedding vector(3));
 
@@ -1401,16 +1403,15 @@ pub mod tests {
             ",
         )?;
 
-        // This should not crash - scanning with a NULL vector should handle gracefully
-        // The query uses a NULL vector as the comparison target
-        let res: Option<Vec<String>> = Spi::get_one(
+        // Scan the table with a NULL vector - this should not crash
+        // The main goal is to verify NULL vector handling doesn't cause segfaults
+        let count: Option<i64> = Spi::get_one(
             "set enable_seqscan = 0;
-            SELECT embedding::text FROM test ORDER BY embedding <-> NULL::vector LIMIT 1;",
+            SELECT COUNT(*) FROM (SELECT embedding FROM test ORDER BY embedding <-> NULL LIMIT 3) t;",
         )?;
 
-        // Should return NULL since NULL comparison doesn't match anything
-        assert_eq!(None, res);
-
+        // Should return 3 rows (all vectors, since the index scan completes successfully)
+        assert_eq!(count, Some(3));
         // Clean up
         Spi::run("DROP TABLE test CASCADE;")?;
         Ok(())
