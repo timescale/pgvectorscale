@@ -1403,13 +1403,13 @@ pub mod tests {
 
         // This should not crash - scanning with a NULL vector should handle gracefully
         // The query uses a NULL vector as the comparison target
-        let res: Option<i64> = Spi::get_one(
+        let res: Option<Vec<String>> = Spi::get_one(
             "set enable_seqscan = 0;
-            SELECT COUNT(*) FROM test ORDER BY embedding <-> NULL::vector LIMIT 1;",
+            SELECT embedding::text FROM test ORDER BY embedding <-> NULL::vector LIMIT 1;",
         )?;
 
-        // Should return 0 since NULL comparison doesn't match anything
-        assert_eq!(Some(0), res);
+        // Should return NULL since NULL comparison doesn't match anything
+        assert_eq!(None, res);
 
         // Clean up
         Spi::run("DROP TABLE test CASCADE;")?;
