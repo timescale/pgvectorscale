@@ -50,6 +50,53 @@ impl Drop for PgVector {
 }
 
 impl PgVector {
+    /// Creates a zero-filled PgVector with the specified dimensions
+    pub fn zeros(meta_page: &meta_page::MetaPage) -> Self {
+        let num_dimensions = meta_page.get_num_dimensions();
+        let num_dimensions_to_index = meta_page.get_num_dimensions_to_index();
+
+        unsafe {
+            if num_dimensions == num_dimensions_to_index {
+                // Optimization: same pointer for both index and full distance
+                let inner = Self::create_zeros_inner(num_dimensions as i16);
+                PgVector {
+                    index_distance: Some(inner),
+                    index_distance_needs_pfree: true,
+                    full_distance: Some(inner),
+                    full_distance_needs_pfree: false,
+                }
+            } else {
+                // Different dimensions for index vs full
+                let index_inner = Self::create_zeros_inner(num_dimensions_to_index as i16);
+                let full_inner = Self::create_zeros_inner(num_dimensions as i16);
+                PgVector {
+                    index_distance: Some(index_inner),
+                    index_distance_needs_pfree: true,
+                    full_distance: Some(full_inner),
+                    full_distance_needs_pfree: true,
+                }
+            }
+        }
+    }
+
+    unsafe fn create_zeros_inner(dimensions: i16) -> *mut PgVectorInternal {
+        // Calculate total size needed: header + array of f32s
+        let header_size = std::mem::size_of::<PgVectorInternal>();
+        let array_size = dimensions as usize * std::mem::size_of::<f32>();
+        let total_size = header_size + array_size;
+
+        // Allocate PostgreSQL memory
+        let ptr = pg_sys::palloc0(total_size) as *mut PgVectorInternal;
+
+        // Initialize the header
+        (*ptr).vl_len_ = total_size as i32;
+        (*ptr).dim = dimensions;
+        (*ptr).unused = 0;
+
+        // The array is already zero-filled due to palloc0
+        ptr
+    }
+
     /// # Safety
     ///
     /// TODO
@@ -117,6 +164,8 @@ impl PgVector {
         index_distance: bool,
         full_distance: bool,
     ) -> PgVector {
+        assert!(!datum.is_null(), "Datum should not be NULL");
+
         if meta_page.get_num_dimensions() == meta_page.get_num_dimensions_to_index() {
             /* optimization if the num dimensions are the same */
             let inner = Self::create_inner(datum, meta_page, true);
