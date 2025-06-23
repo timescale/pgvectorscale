@@ -1386,4 +1386,34 @@ pub mod tests {
         Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
     }
+
+    #[pg_test]
+    pub unsafe fn test_null_vector_scan() -> spi::Result<()> {
+        // Test for issue #238 - NULL vectors should not crash index scans
+        Spi::run(
+            "CREATE TABLE test(embedding vector(3));
+
+            CREATE INDEX idxtest
+                  ON test
+               USING diskann(embedding vector_l2_ops)
+                WITH (num_neighbors=10, search_list_size=10);
+
+            INSERT INTO test(embedding) VALUES ('[1,1,1]'), ('[2,2,2]'), ('[3,3,3]');
+            ",
+        )?;
+
+        // This should not crash - scanning with a NULL vector should handle gracefully
+        // The query uses a NULL vector as the comparison target
+        let res: Option<i64> = Spi::get_one(
+            "set enable_seqscan = 0;
+            SELECT COUNT(*) FROM test ORDER BY embedding <-> NULL::vector LIMIT 1;",
+        )?;
+
+        // Should return 0 since NULL comparison doesn't match anything
+        assert_eq!(Some(0), res);
+
+        // Clean up
+        Spi::run("DROP TABLE test CASCADE;")?;
+        Ok(())
+    }
 }
