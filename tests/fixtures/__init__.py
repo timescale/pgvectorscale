@@ -1,1 +1,0 @@
-"""Test fixtures and utilities for pgvectorscale tests."""

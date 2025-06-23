@@ -47,15 +47,8 @@ tests/
 ├── __init__.py                    # Package initialization
 ├── conftest.py                    # pytest configuration and shared fixtures
 ├── requirements.txt               # Python dependencies
-├── concurrency/                   # Concurrency and race condition tests
-│   ├── __init__.py
-│   ├── test_concurrent_inserts.py # GitHub issue #193 tests
-│   └── issue_193_original.py      # Original reproduction script
-├── integration/                   # General integration tests
-│   ├── __init__.py
-│   └── test_basic_operations.py   # Basic functionality tests
-└── fixtures/                      # Test data and utilities
-    └── __init__.py
+├── test_concurrent_inserts.py     # Concurrency and race condition tests (GitHub issue #193)
+└── test_basic_operations.py       # Basic functionality and integration tests
 ```
 
 ### Quick Start
@@ -85,20 +78,18 @@ make test-python-setup
 pytest tests/ -v
 
 # Run only concurrency tests
-pytest tests/concurrency/ -v
+pytest tests/ -m concurrency -v
 
 # Run only integration tests  
-pytest tests/integration/ -v
+pytest tests/ -m integration -v
 
 # Run specific test
-pytest tests/concurrency/test_concurrent_inserts.py::test_concurrent_insert_race_condition -v
+pytest tests/test_concurrent_inserts.py::test_concurrent_insert_race_condition -v
 ```
 
 **Using Makefile targets:**
 ```bash
 make test-python              # Run all Python tests
-make test-concurrency         # Run concurrency tests only
-make test-integration         # Run integration tests only
 make test-all                 # Run Rust + Python tests
 ```
 
@@ -152,7 +143,7 @@ pytest -m "concurrency or integration" -v
 
 ### Test Categories
 
-#### Concurrency Tests (`tests/concurrency/`)
+#### Concurrency Tests (`test_concurrent_inserts.py`)
 
 These tests verify that the extension handles concurrent operations correctly, particularly focusing on race conditions and multi-process scenarios.
 
@@ -163,7 +154,7 @@ These tests verify that the extension handles concurrent operations correctly, p
 
 **Note:** These tests require multiple database connections and cannot be replicated in PGRX's single-process test environment.
 
-#### Integration Tests (`tests/integration/`)
+#### Integration Tests (`test_basic_operations.py`)
 
 These tests verify basic functionality and integration between components.
 
@@ -266,7 +257,7 @@ pytest tests/ -v -s -x
 pytest tests/ --tb=long
 
 # Run specific test with debugging
-pytest tests/concurrency/test_concurrent_inserts.py::test_concurrent_insert_race_condition -v -s
+pytest tests/test_concurrent_inserts.py::test_concurrent_insert_race_condition -v -s
 ```
 
 #### Docker-based Testing
@@ -294,7 +285,7 @@ docker stop pgvectorscale-test
 
 #### Adding Concurrency Tests
 
-Create new test files in `tests/concurrency/`:
+Add new concurrency tests to `tests/test_concurrent_inserts.py` or create new test files:
 
 ```python
 import pytest
@@ -323,7 +314,7 @@ async def test_your_concurrency_scenario(db_engine, clean_db):
 
 #### Adding Integration Tests
 
-Create new test files in `tests/integration/`:
+Add new integration tests to `tests/test_basic_operations.py` or create new test files:
 
 ```python
 import pytest
@@ -360,7 +351,7 @@ pytest -m slow -v
 
 ### Test Organization
 
-1. **Separate concerns**: Use different directories for different test types
+1. **Separate concerns**: Use different test files and markers for different test types
 2. **Use descriptive names**: Test names should clearly indicate what they test
 3. **Use appropriate markers**: Mark tests by type and characteristics
 4. **Clean up**: Use fixtures for setup/teardown
