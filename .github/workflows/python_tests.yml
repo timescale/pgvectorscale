@@ -87,22 +87,22 @@ jobs:
       - name: Initialize and start PostgreSQL
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-          # Initialize the database
-          initdb -D ${{ env.PGDATA }} --auth-local=trust --auth-host=md5
+          # Initialize the database with trust authentication for all connections
+          initdb -D ${{ env.PGDATA }} --auth-local=trust --auth-host=trust
           # Start PostgreSQL server
           pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start
           # Wait for PostgreSQL to start
           sleep 5
-          # Create test user and database
-          createuser -s postgres
-          createdb -O postgres test_db
+          # Create test user and database (using current user, no password needed with trust auth)
+          createuser -s postgres || true  # may already exist
+          createdb test_db || true  # may already exist
           
       - name: Setup test database with extensions
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-          # Install extensions in the test database
-          psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
-          psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vectorscale;"
+          # Install extensions in the test database (no -U needed with trust auth)
+          psql -h localhost -p 5432 -d test_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
+          psql -h localhost -p 5432 -d test_db -c "CREATE EXTENSION IF NOT EXISTS vectorscale;"
 
       - name: Run Python integration tests
         env:
