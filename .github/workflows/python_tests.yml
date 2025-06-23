@@ -84,7 +84,7 @@ jobs:
       - name: Build and install pgvectorscale
         run: |
           cd pgvectorscale
-          cargo pgrx install --features pg${{ matrix.pg.major }}
+          cargo pgrx install --no-default-features --features pg${{ matrix.pg.major }}
 
       - name: Install Python dependencies
         run: |
