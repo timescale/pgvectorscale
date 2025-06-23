@@ -286,23 +286,32 @@ mod tests {
 
         let index_oid = Spi::get_one::<pg_sys::Oid>("SELECT 'test_clone_idx'::regclass::oid")?
             .expect("oid was null");
-        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
-        let meta_page = MetaPage::fetch(&indexrel);
 
-        // Create an original PgVector with test data
-        let original = PgVector::zeros(&meta_page);
+        let (original, cloned) = {
+            let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+            let meta_page = MetaPage::fetch(&indexrel);
 
-        // Modify the original vector to have specific test values
-        {
-            let slice = original.to_index_slice();
-            let slice_mut = std::slice::from_raw_parts_mut(slice.as_ptr() as *mut f32, slice.len());
-            slice_mut[0] = 1.0;
-            slice_mut[1] = 2.0;
-            slice_mut[2] = 3.0;
-        }
+            // Create an original PgVector with test data
+            let original = PgVector::zeros(&meta_page);
 
-        // Clone the vector
-        let cloned = original.clone();
+            // Modify the original vector to have specific test values
+            {
+                let slice = original.to_index_slice();
+                let slice_mut =
+                    std::slice::from_raw_parts_mut(slice.as_ptr() as *mut f32, slice.len());
+                slice_mut[0] = 1.0;
+                slice_mut[1] = 2.0;
+                slice_mut[2] = 3.0;
+            }
+
+            // Clone the vector
+            let cloned = original.clone();
+
+            // Release the relation reference before cleanup
+            drop(indexrel);
+
+            (original, cloned)
+        };
 
         // Verify the data was copied correctly
         let original_slice = original.to_index_slice();
@@ -350,34 +359,40 @@ mod tests {
 
         let index_oid = Spi::get_one::<pg_sys::Oid>("SELECT 'test_shared_idx'::regclass::oid")?
             .expect("oid was null");
-        let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
-        let meta_page = MetaPage::fetch(&indexrel);
 
-        // Create a vector where both pointers are the same (optimization case)
-        let original = PgVector::zeros(&meta_page);
+        {
+            let indexrel = PgRelation::from_pg(pg_sys::RelationIdGetRelation(index_oid));
+            let meta_page = MetaPage::fetch(&indexrel);
 
-        // Verify the optimization case is active
-        if std::ptr::eq(
-            original.index_distance.unwrap(),
-            original.full_distance.unwrap(),
-        ) {
-            let cloned = original.clone();
+            // Create a vector where both pointers are the same (optimization case)
+            let original = PgVector::zeros(&meta_page);
 
-            // In the clone, they should also point to the same memory
-            assert!(
-                std::ptr::eq(
-                    cloned.index_distance.unwrap(),
-                    cloned.full_distance.unwrap()
-                ),
-                "Cloned vector should preserve pointer optimization"
-            );
-
-            // But clone should have different memory than original
-            assert_ne!(
+            // Verify the optimization case is active
+            if std::ptr::eq(
                 original.index_distance.unwrap(),
-                cloned.index_distance.unwrap(),
-                "Clone should have different memory than original"
-            );
+                original.full_distance.unwrap(),
+            ) {
+                let cloned = original.clone();
+
+                // In the clone, they should also point to the same memory
+                assert!(
+                    std::ptr::eq(
+                        cloned.index_distance.unwrap(),
+                        cloned.full_distance.unwrap()
+                    ),
+                    "Cloned vector should preserve pointer optimization"
+                );
+
+                // But clone should have different memory than original
+                assert_ne!(
+                    original.index_distance.unwrap(),
+                    cloned.index_distance.unwrap(),
+                    "Clone should have different memory than original"
+                );
+            }
+
+            // Release the relation reference before cleanup
+            drop(indexrel);
         }
 
         // Clean up
