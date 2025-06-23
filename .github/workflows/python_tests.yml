@@ -26,21 +26,8 @@ jobs:
       PG_INSTALL_DIR: postgresql
       MAKE_JOBS: 6
       PG_CONFIG_PATH: postgresql/bin/pg_config
-
-    services:
-      postgres:
-        image: postgres:${{ matrix.pg.major }}-alpine
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: test_db
-          POSTGRES_USER: postgres
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
+      PGDATA: /tmp/pgdata
+      PGPORT: 5432
 
     steps:
       - name: Checkout pgvectorscale
@@ -97,27 +84,38 @@ jobs:
         run: |
           pip install -r tests/requirements.txt
           
-      - name: Setup test database with extensions
-        env:
-          PGPASSWORD: postgres
+      - name: Initialize and start PostgreSQL
         run: |
-          # Wait for PostgreSQL to be ready
-          pg_isready -h localhost -p 5432 -U postgres
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
+          # Initialize the database
+          initdb -D ${{ env.PGDATA }} --auth-local=trust --auth-host=md5
+          # Start PostgreSQL server
+          pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start
+          # Wait for PostgreSQL to start
+          sleep 5
+          # Create test user and database
+          createuser -s postgres
+          createdb -O postgres test_db
           
+      - name: Setup test database with extensions
+        run: |
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           # Install extensions in the test database
           psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
           psql -h localhost -p 5432 -U postgres -d test_db -c "CREATE EXTENSION IF NOT EXISTS vectorscale;"
 
       - name: Run Python integration tests
         env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/test_db
         run: |
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           pytest tests/ -v --tb=short
           
       - name: Run concurrency tests specifically
         env:
-          DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/test_db
+          DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/test_db
         run: |
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           pytest tests/concurrency/ -v --tb=short
           
       - name: Upload test results
