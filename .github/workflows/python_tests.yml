@@ -85,8 +85,13 @@ jobs:
         run: |
           cd pgvectorscale
           cargo clean
-          # Set PGRX_PG_VERSION to explicitly control which PostgreSQL version to use
-          PGRX_PG_VERSION=${{ matrix.pg.major }} cargo pgrx install --no-default-features --features pg${{ matrix.pg.major }}
+          # Ensure we use the correct PostgreSQL version that was installed
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
+          export PG_CONFIG=~/${{ env.PG_INSTALL_DIR }}/bin/pg_config  
+          # Reinitialize pgrx to ensure it uses the correct PostgreSQL version
+          cargo pgrx init --pg${{ matrix.pg.major }}=$PG_CONFIG
+          # Install with explicit version matching
+          cargo pgrx install --no-default-features --features pg${{ matrix.pg.major }}
 
       - name: Install Python dependencies
         run: |
