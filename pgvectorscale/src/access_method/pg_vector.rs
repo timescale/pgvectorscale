@@ -1,4 +1,5 @@
 use pgrx::*;
+use std::mem::MaybeUninit;
 
 use crate::access_method::distance::DistanceType;
 
@@ -10,7 +11,7 @@ use super::{distance::preprocess_cosine, meta_page};
 pub struct PgVectorInternal {
     vl_len_: i32, /* varlena header (do not touch directly!) */
     pub dim: i16, /* number of dimensions */
-    unused: i16,
+    unused: MaybeUninit<i16>,
     pub x: pg_sys::__IncompleteArrayField<std::os::raw::c_float>,
 }
 
@@ -91,7 +92,7 @@ impl PgVector {
         // Initialize the header
         (*ptr).vl_len_ = total_size as i32;
         (*ptr).dim = dimensions;
-        (*ptr).unused = 0;
+        (*ptr).unused = MaybeUninit::new(0);
 
         // The array is already zero-filled due to palloc0
         ptr
