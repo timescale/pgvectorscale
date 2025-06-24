@@ -141,73 +141,6 @@ pytest -m "not slow" -v
 pytest -m "concurrency or integration" -v
 ```
 
-### Test Categories
-
-#### Concurrency Tests (`test_concurrent_inserts.py`)
-
-These tests verify that the extension handles concurrent operations correctly, particularly focusing on race conditions and multi-process scenarios.
-
-**Key Tests:**
-- `test_concurrent_insert_race_condition` - Tests GitHub issue #193 fix
-- `test_high_concurrency_inserts` - Stress testing with higher concurrency
-- `test_concurrent_mixed_operations` - Mixed insert/query workloads
-
-**Note:** These tests require multiple database connections and cannot be replicated in PGRX's single-process test environment.
-
-#### Integration Tests (`test_basic_operations.py`)
-
-These tests verify basic functionality and integration between components.
-
-**Key Tests:**
-- `test_extension_installation` - Verifies extension installation
-- `test_diskann_index_creation` - Tests index creation
-- `test_vector_insert_and_query` - Basic CRUD operations
-- `test_different_distance_metrics` - Tests cosine, L2, and inner product
-- `test_index_options` - Tests index configuration options
-
-### Development Workflow
-
-#### Daily Development
-
-```bash
-# 1. Start PGRX environment (one-time)
-cd pgvectorscale && cargo pgrx start pg17
-
-# 2. Install/update extension
-cargo pgrx install --features pg17
-
-# 3. Run tests
-make test-python
-
-# Or with PGRX database directly
-DATABASE_URL="postgresql+asyncpg://$(whoami)@localhost:28817/postgres" pytest tests/ -v
-```
-
-#### Testing Against Different PostgreSQL Versions
-
-```bash
-# Test against different PostgreSQL versions (if multiple PGRX instances)
-DB_PORT=28815 pytest tests/  # pg15
-DB_PORT=28816 pytest tests/  # pg16  
-DB_PORT=28817 pytest tests/  # pg17
-```
-
-#### IDE Integration
-
-**VSCode:** Add to `.vscode/settings.json`:
-```json
-{
-    "python.testing.pytestEnabled": true,
-    "python.testing.pytestArgs": ["tests/"],
-    "python.testing.cwd": "${workspaceFolder}"
-}
-```
-
-**Environment file (`.env`):**
-```bash
-DATABASE_URL=postgresql+asyncpg://$(whoami)@localhost:28817/postgres
-```
-
 ### Continuous Integration
 
 Python tests run automatically in GitHub Actions for:
@@ -260,76 +193,6 @@ pytest tests/ --tb=long
 pytest tests/test_concurrent_inserts.py::test_concurrent_insert_race_condition -v -s
 ```
 
-#### Docker-based Testing
-
-For isolated testing environments:
-
-```bash
-# Start PostgreSQL in Docker
-docker run --rm -d \
-    --name pgvectorscale-test \
-    -e POSTGRES_PASSWORD=postgres \
-    -e POSTGRES_DB=test_db \
-    -p 5432:5432 \
-    postgres:16-alpine
-
-# Run tests against Docker instance
-DATABASE_URL="postgresql+asyncpg://postgres:postgres@localhost:5432/test_db" \
-    pytest tests/ -v
-
-# Cleanup
-docker stop pgvectorscale-test
-```
-
-### Writing New Tests
-
-#### Adding Concurrency Tests
-
-Add new concurrency tests to `tests/test_concurrent_inserts.py` or create new test files:
-
-```python
-import pytest
-import asyncio
-from sqlalchemy import text
-
-@pytest.mark.asyncio
-@pytest.mark.concurrency
-async def test_your_concurrency_scenario(db_engine, clean_db):
-    """Test description."""
-    # Setup
-    async with db_engine.begin() as conn:
-        await conn.execute(text("CREATE TABLE ..."))
-    
-    # Test concurrent operations
-    async def worker():
-        # Your concurrent operation
-        pass
-    
-    tasks = [worker() for _ in range(parallelism)]
-    await asyncio.gather(*tasks)
-    
-    # Assertions
-    assert ...
-```
-
-#### Adding Integration Tests
-
-Add new integration tests to `tests/test_basic_operations.py` or create new test files:
-
-```python
-import pytest
-from sqlalchemy import text
-
-@pytest.mark.asyncio
-@pytest.mark.integration
-async def test_your_integration_scenario(db_engine, clean_db):
-    """Test description."""
-    async with db_engine.begin() as conn:
-        # Your test logic
-        result = await conn.execute(text("SELECT ..."))
-        assert result.scalar() == expected_value
-```
-
 ### Performance and Load Testing
 
 For performance testing, use the `@pytest.mark.slow` marker:
@@ -346,29 +209,6 @@ Run performance tests separately:
 ```bash
 pytest -m slow -v
 ```
-
-## Best Practices
-
-### Test Organization
-
-1. **Separate concerns**: Use different test files and markers for different test types
-2. **Use descriptive names**: Test names should clearly indicate what they test
-3. **Use appropriate markers**: Mark tests by type and characteristics
-4. **Clean up**: Use fixtures for setup/teardown
-
-### Database Testing
-
-1. **Use transactions**: Tests should be isolated and not affect each other
-2. **Use clean fixtures**: Start each test with a clean database state
-3. **Test realistic scenarios**: Use realistic data sizes and access patterns
-4. **Verify cleanup**: Ensure tests clean up after themselves
-
-### Concurrency Testing
-
-1. **Test real scenarios**: Use realistic concurrency levels
-2. **Use proper synchronization**: Use asyncio properly for concurrent operations
-3. **Verify race conditions**: Tests should fail without the fix
-4. **Test different patterns**: Mix different types of operations
 
 ## Related Documentation
 

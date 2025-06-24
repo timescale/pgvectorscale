@@ -10,6 +10,7 @@ use crate::access_method::graph::Graph;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
+use crate::util::index_lock::acquire_index_lock;
 
 use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
@@ -175,53 +176,6 @@ pub unsafe extern "C" fn aminsert(
     aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
 }
 
-/// RAII guard for PostgreSQL transaction-level advisory lock to serialize index operations.
-///
-/// This lock ensures that:
-/// 1. Only one process can perform index operations on a given relation at a time
-/// 2. The lock is held until transaction commit/abort, preventing other processes
-///    from seeing uncommitted changes
-/// 3. Eliminates race conditions in ChainTapeWriter and MetaPage operations
-struct IndexLock {
-    // Transaction-level locks don't need explicit tracking since they're
-    // automatically released by PostgreSQL on transaction end
-}
-
-impl IndexLock {
-    /// Acquire a transaction-level advisory lock for the given relation to serialize index operations.
-    /// Uses the relation OID as the lock key to ensure per-index synchronization.
-    /// The lock is automatically released when the transaction commits/aborts.
-    fn new(index: &PgRelation) -> Self {
-        let oid = index.oid().as_u32();
-
-        unsafe {
-            // Use PostgreSQL's transaction-level advisory lock with relation OID as key
-            // This will block until the lock is acquired and automatically release on transaction end
-            pgrx::direct_function_call::<()>(
-                pgrx::pg_sys::pg_advisory_xact_lock_int8,
-                &[
-                    Some(pgrx::pg_sys::Datum::from(oid as i64)),
-                    Some(pgrx::pg_sys::Datum::from(1i64)), // Use 1 to distinguish from other lock types
-                ],
-            );
-
-            Self {
-                // Transaction-level locks are automatically managed by PostgreSQL
-            }
-        }
-    }
-}
-
-impl Drop for IndexLock {
-    fn drop(&mut self) {
-        // Transaction-level advisory locks are automatically released when the transaction
-        // commits or aborts, so no explicit unlock is needed. This ensures that other
-        // processes waiting on the lock will only proceed after seeing committed data.
-
-        // No manual unlock needed for transaction-level locks
-    }
-}
-
 unsafe fn aminsert_internal(
     indexrel: pg_sys::Relation,
     values: *mut pg_sys::Datum,
@@ -232,9 +186,10 @@ unsafe fn aminsert_internal(
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
 
-    // Acquire advisory lock to serialize all index operations
-    // This prevents concurrent insertion race conditions
-    let _lock = IndexLock::new(&index_relation);
+    // Acquire advisory txn-level lock to serialize all index operations.
+    // This prevents concurrent update races (and snapshot-isolation anomalies)
+    // in meta_page, tape, and index pages.  TODO: allow more concurrency.
+    acquire_index_lock(&index_relation);
     let mut meta_page = MetaPage::fetch(&index_relation);
 
     let vec = LabeledVector::from_datums(values, isnull, &meta_page);
@@ -296,11 +251,7 @@ unsafe fn insert_storage<S: Storage>(
     meta_page: &mut MetaPage,
     stats: &mut InsertStats,
 ) {
-    // Use a safer tape creation strategy to avoid concurrent page access issues.
-    // We try to resume on an existing page first, but if that fails due to
-    // concurrent access (which manifests as a page corruption assertion),
-    // we fall back to creating a new page.
-    let mut tape = create_tape_safely(index_relation, S::page_type());
+    let mut tape = Tape::resume(index_relation, S::page_type());
 
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
@@ -320,16 +271,6 @@ unsafe fn insert_storage<S: Storage>(
         storage,
         stats,
     );
-}
-
-/// Create a tape safely, with proper synchronization.
-/// Now that we have proper advisory locking in place, we can safely resume
-/// existing tapes which is more space-efficient than always creating new pages.
-unsafe fn create_tape_safely(index_relation: &PgRelation, page_type: PageType) -> Tape {
-    // With the IndexLock advisory lock protecting the entire insert operation,
-    // we can now safely resume existing tapes without race conditions.
-    // This is more space-efficient than always creating new pages.
-    Tape::resume(index_relation, page_type)
 }
 
 #[pg_guard]
