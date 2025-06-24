@@ -103,20 +103,13 @@ jobs:
           psql -h localhost -p 5432 -d test_db -c "CREATE EXTENSION IF NOT EXISTS vector;"
           psql -h localhost -p 5432 -d test_db -c "CREATE EXTENSION IF NOT EXISTS vectorscale;"
 
-      - name: Run Python integration tests
+      - name: Run Python tests
         env:
           DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/test_db
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           pytest tests/ -v --tb=short
-          
-      - name: Run concurrency tests specifically
-        env:
-          DATABASE_URL: postgresql+asyncpg://postgres@localhost:5432/test_db
-        run: |
-          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
-          pytest tests/ -m concurrency -v --tb=short
-          
+
       - name: Upload test results
         uses: actions/upload-artifact@v4
         if: always()

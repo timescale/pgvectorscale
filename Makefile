@@ -93,7 +93,7 @@ test-python-setup:
 
 # Run Python integration tests
 test-python: test-python-setup
-	@echo "Running Python integration tests..."
+	@echo "Running Python tests..."
 	./scripts/run-python-tests.sh
 
 # Run specific test categories
