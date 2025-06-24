@@ -19,7 +19,6 @@ jobs:
             minor: 3
           - major: 17
             minor: 0
-        python-version: ['3.9', '3.11']
     
     env:
       PG_SRC_DIR: pgbuild
@@ -33,10 +32,10 @@ jobs:
       - name: Checkout pgvectorscale
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.11
         uses: actions/setup-python@v4
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.11'
           
       - name: Cache pip dependencies
         uses: actions/cache@v3
@@ -122,7 +121,7 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: python-test-results-pg${{ matrix.pg.major }}-py${{ matrix.python-version }}
+          name: python-test-results-pg${{ matrix.pg.major }}
           path: |
             pytest.log
             test-results.xml
