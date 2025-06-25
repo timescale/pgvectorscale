@@ -153,3 +153,11 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
         }
     }
 }
+
+/// Reimplementation of Postgres BUFFERALIGN macro.
+pub fn buffer_align(len: usize) -> usize {
+    unsafe {
+        // SAFETY: TYPEALIGN is just arithmetic, it shouldn't be marked as unsafe
+        pg_sys::TYPEALIGN(pg_sys::ALIGNOF_BUFFER as usize, len)
+    }
+}
