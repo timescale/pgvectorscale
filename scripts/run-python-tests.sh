@@ -103,11 +103,11 @@ export DATABASE_URL="$DATABASE_URL"
 
 # Use pytest from virtual environment if available, otherwise fallback
 if [ -d ".venv" ]; then
-    .venv/bin/python -m pytest tests/ $PYTEST_ARGS
+    .venv/bin/python -m pytest tests/ "$PYTEST_ARGS"
 elif command -v pytest >/dev/null 2>&1; then
-    pytest tests/ $PYTEST_ARGS
+    pytest tests/ "$PYTEST_ARGS"
 else
-    python3 -m pytest tests/ $PYTEST_ARGS
+    python3 -m pytest tests/ "$PYTEST_ARGS"
 fi
 
 echo -e "${GREEN}✅ Python tests completed!${NC}"
