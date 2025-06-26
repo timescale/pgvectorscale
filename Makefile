@@ -89,7 +89,8 @@ shfmt:
 # Setup Python test environment
 test-python-setup:
 	@echo "Setting up Python test environment..."
-	pip3 install --break-system-packages -r tests/requirements.txt
+	python3 -m venv .venv || true
+	.venv/bin/pip install -r tests/requirements.txt
 
 # Run Python integration tests
 test-python: test-python-setup

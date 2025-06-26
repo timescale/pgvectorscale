@@ -1,6 +1,5 @@
 pub mod buffer;
 pub mod chain;
-pub mod index_lock;
 pub mod lru;
 pub mod page;
 pub mod ports;

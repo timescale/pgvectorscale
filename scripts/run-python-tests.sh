@@ -40,22 +40,23 @@ fi
 
 echo -e "${YELLOW}📦 Installing Python dependencies...${NC}"
 
-# Check if we're in a virtual environment
-if [[ "$VIRTUAL_ENV" != "" ]]; then
-    echo "Using virtual environment: $VIRTUAL_ENV"
+# Check if we have a .venv directory (created by make target)
+if [ -d ".venv" ]; then
+    echo "Using project virtual environment: .venv"
+    .venv/bin/pip install -r tests/requirements.txt >/dev/null 2>&1
+elif [[ "$VIRTUAL_ENV" != "" ]]; then
+    echo "Using active virtual environment: $VIRTUAL_ENV"
     pip install -r tests/requirements.txt
 elif command -v pip3 >/dev/null 2>&1; then
     # Try pip3 with --user flag first
     if pip3 install --user -r tests/requirements.txt >/dev/null 2>&1; then
         echo "Installed dependencies with pip3 --user"
-    elif pip3 install --break-system-packages -r tests/requirements.txt >/dev/null 2>&1; then
-        echo "Installed dependencies with pip3 --break-system-packages"
     else
         echo -e "${RED}❌ Could not install Python dependencies${NC}"
         echo "Please create a virtual environment and install dependencies:"
-        echo "  python3 -m venv venv"
-        echo "  source venv/bin/activate"
-        echo "  pip install -r tests/requirements.txt"
+        echo "  python3 -m venv .venv"
+        echo "  .venv/bin/pip install -r tests/requirements.txt"
+        echo "Or run: make test-python-setup"
         exit 1
     fi
 else
@@ -100,11 +101,13 @@ fi
 echo -e "${GREEN}🧪 Running Python tests...${NC}"
 export DATABASE_URL="$DATABASE_URL"
 
-# Use python3 -m pytest to ensure we use the installed pytest
-if command -v pytest >/dev/null 2>&1; then
-    pytest tests/ "$PYTEST_ARGS"
+# Use pytest from virtual environment if available, otherwise fallback
+if [ -d ".venv" ]; then
+    .venv/bin/python -m pytest tests/ $PYTEST_ARGS
+elif command -v pytest >/dev/null 2>&1; then
+    pytest tests/ $PYTEST_ARGS
 else
-    python3 -m pytest tests/ "$PYTEST_ARGS"
+    python3 -m pytest tests/ $PYTEST_ARGS
 fi
 
 echo -e "${GREEN}✅ Python tests completed!${NC}"
