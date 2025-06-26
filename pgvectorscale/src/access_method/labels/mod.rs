@@ -167,7 +167,7 @@ impl Debug for ArchivedLabelSet {
 }
 
 /// A labeled vector is a vector with an optional set of labels.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LabeledVector {
     vec: PgVector,
     labels: Option<LabelSet>,
@@ -211,6 +211,10 @@ impl LabeledVector {
         orderbys: &[ScanKeyData],
         meta_page: &MetaPage,
     ) -> Self {
+        if orderbys[0].sk_argument.is_null() {
+            return Self::new(PgVector::zeros(meta_page), None);
+        }
+
         let query = unsafe {
             PgVector::from_datum(
                 orderbys[0].sk_argument,

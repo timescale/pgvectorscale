@@ -639,7 +639,6 @@ digraph G {
         index: &PgRelation,
         index_pointer: IndexPointer,
         vec: LabeledVector,
-        spare_vec: LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
     ) {
@@ -653,7 +652,7 @@ digraph G {
 
         if vec.labels().is_some() {
             // Insert starting from label start nodes and apply label filtering
-            self.insert_internal(index_pointer, spare_vec, false, storage, stats);
+            self.insert_internal(index_pointer, vec.clone(), false, storage, stats);
         }
 
         // Insert starting from default start node and avoid label filtering
