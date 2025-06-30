@@ -10,6 +10,7 @@ use crate::access_method::graph::Graph;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
+use crate::util::ports::acquire_index_lock;
 
 use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
@@ -184,6 +185,11 @@ unsafe fn aminsert_internal(
 ) -> bool {
     let index_relation = PgRelation::from_pg(indexrel);
     let heap_relation = PgRelation::from_pg(heaprel);
+
+    // Acquire advisory txn-level lock to serialize all index operations.
+    // This prevents concurrent update races (and snapshot-isolation anomalies)
+    // in meta_page, tape, and index pages.  TODO: allow more concurrency.
+    acquire_index_lock(&index_relation);
     let mut meta_page = MetaPage::fetch(&index_relation);
 
     let vec = LabeledVector::from_datums(values, isnull, &meta_page);
@@ -239,6 +245,7 @@ unsafe fn insert_storage<S: Storage>(
     stats: &mut InsertStats,
 ) {
     let mut tape = Tape::resume(index_relation, S::page_type());
+
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
         vector.labels().cloned(),
@@ -1109,19 +1116,23 @@ pub mod tests {
         Ok(())
     }
 
-    pub fn verify_index_accuracy(expected_cnt: i64, dimensions: usize) -> spi::Result<()> {
+    pub fn verify_index_accuracy(
+        expected_cnt: i64,
+        dimensions: usize,
+        table_name: &str,
+    ) -> spi::Result<()> {
         let test_vec: Option<Vec<f32>> = Spi::get_one(&format!(
             "SELECT('{{' || array_to_string(array_agg(1.0), ',', '0') || '}}')::real[] AS embedding
     FROM generate_series(1, {dimensions})"
         ))?;
 
         let cnt: Option<i64> = Spi::get_one_with_args(
-                    "
+                    &format!("
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select * from test_data order by embedding <=> $1::vector) SELECT count(*) from cte;
-            ",
+            WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
+            "),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),
@@ -1131,12 +1142,12 @@ pub mod tests {
         if cnt.unwrap() != expected_cnt {
             // better debugging
             let id: Option<String> = Spi::get_one_with_args(
-                    "
+                    &format!("
             SET enable_seqscan = 0;
             SET enable_indexscan = 1;
             SET diskann.query_search_list_size = 2;
-            WITH cte as (select id from test_data EXCEPT (select id from test_data order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from test_data where id in (select id from cte limit 1);
-            ",
+            WITH cte as (select id from {table_name} EXCEPT (select id from {table_name} order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from {table_name} where id in (select id from cte limit 1);
+            "),
                 vec![(
                     pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
                     test_vec.clone().into_datum(),
@@ -1193,7 +1204,7 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        verify_index_accuracy(expected_cnt, dimensions)?;
+        verify_index_accuracy(expected_cnt, dimensions, "test_data")?;
         Ok(())
     }
 
@@ -1206,17 +1217,20 @@ pub mod tests {
         let expected_cnt = 1000;
         let dimensions = 2;
 
+        // Cleanup any leftover state from previous test runs
+        let _ = Spi::run("DROP TABLE IF EXISTS test_data_insert_after CASCADE;");
+
         Spi::run(&format!(
-            "CREATE TABLE test_data (
+            "CREATE TABLE test_data_insert_after (
                 id int,
                 embedding vector ({dimensions})
             );
             
-            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding) WITH ({index_options});
+            CREATE INDEX idx_diskann_insert_after ON test_data_insert_after USING diskann (embedding) WITH ({index_options});
 
             select setseed(0.5);
            -- generate {expected_cnt} vectors
-            INSERT INTO test_data (id, embedding)
+            INSERT INTO test_data_insert_after (id, embedding)
             SELECT
                 *
             FROM (
@@ -1233,14 +1247,15 @@ pub mod tests {
             SELECT
                 *
             FROM
-                test_data
+                test_data_insert_after
             ORDER BY
                 embedding <=> (
                     SELECT
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        verify_index_accuracy(expected_cnt, dimensions)?;
+        verify_index_accuracy(expected_cnt, dimensions, "test_data_insert_after")?;
+        Spi::run("DROP TABLE test_data_insert_after CASCADE;")?;
         Ok(())
     }
 
@@ -1303,7 +1318,7 @@ pub mod tests {
                         ('[' || array_to_string(array_agg(random()), ',', '0') || ']')::vector AS embedding
             FROM generate_series(1, {dimensions}));"))?;
 
-        verify_index_accuracy(vector_count as i64, dimensions)?;
+        verify_index_accuracy(vector_count as i64, dimensions, "test_data")?;
 
         Spi::run("DROP TABLE test_data CASCADE;")?;
         Ok(())
@@ -1315,19 +1330,22 @@ pub mod tests {
         let expected_cnt = 50;
         let dimension = 128;
 
+        // Cleanup any leftover state from previous test runs
+        let _ = Spi::run("DROP TABLE IF EXISTS test_data_labeled CASCADE;");
+
         let query = &format!(
-            "CREATE TABLE test_data (
+            "CREATE TABLE test_data_labeled (
                 id int,
                 embedding vector ({dimension}),
                 labels smallint[]
             );
 
-            CREATE INDEX idx_diskann_bq ON test_data USING diskann (embedding, labels) WITH ({index_options});
+            CREATE INDEX idx_diskann_labeled ON test_data_labeled USING diskann (embedding, labels) WITH ({index_options});
 
             select setseed(0.5);
 
             -- generate {expected_cnt} vectors along with labels
-            INSERT INTO test_data (id, embedding, labels)
+            INSERT INTO test_data_labeled (id, embedding, labels)
             SELECT
                 gs AS id,
                 ARRAY[
@@ -1386,7 +1404,7 @@ pub mod tests {
             SELECT
                 *
             FROM
-                test_data
+                test_data_labeled
             ORDER BY
                 embedding <=> (
                     SELECT
@@ -1396,9 +1414,9 @@ pub mod tests {
         warning!("Running query: {}", query);
         Spi::run(query)?;
 
-        verify_index_accuracy(expected_cnt, dimension)?;
+        verify_index_accuracy(expected_cnt, dimension, "test_data_labeled")?;
 
-        Spi::run("DROP TABLE test_data CASCADE;")?;
+        Spi::run("DROP TABLE test_data_labeled CASCADE;")?;
         Ok(())
     }
 

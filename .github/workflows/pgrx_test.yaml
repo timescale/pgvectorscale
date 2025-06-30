@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         pgvector:
-          - version: 0.7.4
+          - version: 0.8.0
         pg:
           - major: 13
             minor: 16
