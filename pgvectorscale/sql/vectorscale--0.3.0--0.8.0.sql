@@ -1,1 +1,1 @@
-vectorscale--0.6.0--0.8.0.sql
+vectorscale--0.7.1--0.8.0.sql
