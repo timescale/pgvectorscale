@@ -98,6 +98,7 @@ pub mod tests {
                 "cargo-pgrx",
                 "--version",
                 pgrx_str.as_str(),
+                "--locked",
                 "--force",
                 "--root",
                 temp_path.join(pgrx_dir.as_str()).to_str().unwrap(),
