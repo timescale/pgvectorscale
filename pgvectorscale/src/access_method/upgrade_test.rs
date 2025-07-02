@@ -98,6 +98,7 @@ pub mod tests {
                 "cargo-pgrx",
                 "--version",
                 pgrx_str.as_str(),
+                "--locked",
                 "--force",
                 "--root",
                 temp_path.join(pgrx_dir.as_str()).to_str().unwrap(),
@@ -110,29 +111,42 @@ pub mod tests {
 
         assert!(res.status.success(), "failed: {:?}", res);
 
-        let res = std::process::Command::new(
+        let mut cmd = std::process::Command::new(
             temp_path
                 .join(pgrx_dir.as_str())
                 .join("bin/cargo-pgrx")
                 .to_str()
                 .unwrap(),
-        )
-        .current_dir(temp_path.join(subdirname))
-        .env(
-            "CARGO_TARGET_DIR",
-            temp_path.join(subdirname).join("target"),
-        )
-        .env("CARGO_PKG_VERSION", version)
-        .arg("pgrx")
-        .arg("install")
-        .arg("--test")
-        .arg("--pg-config")
-        .arg(pg_config.path().unwrap())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()
-        .unwrap();
-        assert!(res.status.success(), "failed: {:?}", res);
+        );
+        cmd.current_dir(temp_path.join(subdirname))
+            .env(
+                "CARGO_TARGET_DIR",
+                temp_path.join(subdirname).join("target"),
+            )
+            .env("CARGO_PKG_VERSION", version);
+
+        // Old versions need AVX2/FMA flags on x86
+        if cfg!(target_arch = "x86_64") {
+            cmd.env("RUSTFLAGS", "-C target-feature=+avx2,+fma");
+        }
+
+        let res = cmd
+            .arg("pgrx")
+            .arg("install")
+            .arg("--test")
+            .arg("--pg-config")
+            .arg(pg_config.path().unwrap())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+
+        assert!(
+            res.status.success(),
+            "failed: {:?}, stderr: {}",
+            res,
+            String::from_utf8_lossy(&res.stderr)
+        );
 
         client
             .execute(
@@ -200,6 +214,7 @@ pub mod tests {
 
         //need to recreate the client to avoid double load of GUC. Look into this later.
         let (mut client, _) = pgrx_tests::client().unwrap();
+
         client
             .execute(
                 &format!(
@@ -298,5 +313,12 @@ pub mod tests {
     #[test]
     fn test_upgrade_from_0_7_0() {
         test_upgrade_base("0.7.0", "0.12.9", "pgvectorscale", "vectorscale", "diskann");
+    }
+
+    #[ignore]
+    #[serial]
+    #[test]
+    fn test_upgrade_from_0_7_1() {
+        test_upgrade_base("0.7.1", "0.12.9", "pgvectorscale", "vectorscale", "diskann");
     }
 }

@@ -20,6 +20,8 @@ Cargo.lock
 
 # Claude Code workspace
 .claude/
+CLAUDE.md
+CLAUDE.local.md
 
 # Python cache files
 __pycache__/
