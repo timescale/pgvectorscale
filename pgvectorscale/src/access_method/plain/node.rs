@@ -6,10 +6,10 @@ use pgvectorscale_derive::{Readable, Writeable};
 use rkyv::vec::ArchivedVec;
 use rkyv::{Archive, Deserialize, Serialize};
 
-use super::meta_page::MetaPage;
-use super::neighbor_with_distance::NeighborWithDistance;
-use super::storage::{ArchivedData, NodeVacuum};
+use crate::access_method::graph::neighbor_with_distance::NeighborWithDistance;
+use crate::access_method::meta_page::MetaPage;
 use crate::access_method::node::{ReadableNode, WriteableNode};
+use crate::access_method::storage::{ArchivedData, NodeVacuum};
 use crate::util::{ArchivedItemPointer, HeapPointer, ItemPointer, ReadableBuffer, WritableBuffer};
 
 #[derive(Archive, Deserialize, Serialize, Readable, Writeable)]
@@ -87,7 +87,7 @@ impl ArchivedPlainNode {
     pub fn set_neighbors(
         mut self: Pin<&mut Self>,
         neighbors: &[NeighborWithDistance],
-        meta_page: &MetaPage,
+        num_neighbors: u32,
     ) {
         for (i, new_neighbor) in neighbors.iter().enumerate() {
             let mut a_index_pointer = self.as_mut().neighbor_index_pointer().index_pin(i);
@@ -97,7 +97,7 @@ impl ArchivedPlainNode {
             a_index_pointer.offset = new_neighbor.get_index_pointer_to_neighbor().offset;
         }
         //set the marker that the list ended
-        if neighbors.len() < meta_page.get_num_neighbors() as _ {
+        if neighbors.len() < num_neighbors as _ {
             let mut past_last_index_pointers =
                 self.neighbor_index_pointer().index_pin(neighbors.len());
             past_last_index_pointers.block_number = InvalidBlockNumber;

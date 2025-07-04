@@ -4,8 +4,8 @@ use pgrx::{pg_sys::InvalidOffsetNumber, *};
 
 use crate::{
     access_method::{
-        graph_neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
-        sbq::SbqSpeedupStorage,
+        graph::neighbor_store::GraphNeighborStore, labels::LabeledVector, meta_page::MetaPage,
+        sbq::storage::SbqSpeedupStorage,
     },
     util::{buffer::PinnedBufferShare, ports::pgstat_count_index_scan, HeapPointer, IndexPointer},
 };
@@ -14,8 +14,14 @@ use super::{
     distance::DistanceFn,
     graph::{Graph, ListSearchResult},
     labels::LabelSetView,
-    plain_storage::{PlainDistanceMeasure, PlainStorage, PlainStorageLsnPrivateData},
-    sbq::{SbqMeans, SbqQuantizer, SbqSearchDistanceMeasure, SbqSpeedupStorageLsnPrivateData},
+    plain::{
+        storage::{PlainStorage, PlainStorageLsnPrivateData},
+        PlainDistanceMeasure,
+    },
+    sbq::{
+        quantize::SbqQuantizer, storage::SbqSpeedupStorageLsnPrivateData, SbqMeans,
+        SbqSearchDistanceMeasure,
+    },
     stats::QuantizerStats,
     storage::{Storage, StorageType},
 };
@@ -61,15 +67,14 @@ impl TSVScanState {
 
         let store_type = match storage {
             StorageType::Plain => {
-                let stats = QuantizerStats::new();
-                let bq =
-                    PlainStorage::load_for_search(index, heap, meta_page.get_distance_function());
+                let stats = QuantizerStats::default();
+                let bq = PlainStorage::load_for_search(index, heap, &meta_page);
                 let it =
                     TSVResponseIterator::new(&bq, index, query, search_list_size, meta_page, stats);
                 StorageState::Plain(it)
             }
             StorageType::SbqCompression => {
-                let mut stats = QuantizerStats::new();
+                let mut stats = QuantizerStats::default();
                 let quantizer = unsafe { SbqMeans::load(index, &meta_page, &mut stats) };
                 let bq = SbqSpeedupStorage::load_for_search(index, heap, &quantizer, &meta_page);
                 let it =
@@ -179,7 +184,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         quantizer_stats: QuantizerStats,
     ) -> Self {
         let mut meta_page = MetaPage::fetch(index);
-        let graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
+        let mut graph = Graph::new(GraphNeighborStore::Disk, &mut meta_page);
 
         let has_label_filter = query.labels().is_some_and(|labels| !labels.is_empty());
         let lsr = graph.greedy_search_streaming_init(query, search_list_size, storage);
@@ -207,7 +212,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
         storage: &S,
     ) -> Option<(HeapPointer, IndexPointer)> {
         self.next_calls += 1;
-        let graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
+        let mut graph = Graph::new(GraphNeighborStore::Disk, &mut self.meta_page);
 
         /* Iterate until we find a non-deleted tuple */
         loop {
@@ -385,8 +390,7 @@ pub extern "C" fn amgettuple(
             get_tuple(state, next, scan)
         }
         StorageState::Plain(iter) => {
-            let storage =
-                PlainStorage::load_for_search(&indexrel, &heaprel, state.distance_fn.unwrap());
+            let storage = PlainStorage::load_for_search(&indexrel, &heaprel, &state.meta_page);
             let next = if state.meta_page.get_num_dimensions()
                 == state.meta_page.get_num_dimensions_to_index()
             {

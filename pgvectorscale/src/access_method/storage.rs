@@ -6,20 +6,22 @@ use crate::util::{page::PageType, tape::Tape, HeapPointer, IndexPointer, ItemPoi
 
 use super::{
     distance::DistanceFn,
+    graph::neighbor_store::GraphNeighborStore,
+    graph::neighbor_with_distance::NeighborWithDistance,
     graph::{ListSearchNeighbor, ListSearchResult},
-    graph_neighbor_store::GraphNeighborStore,
     labels::{LabelSet, LabeledVector},
     meta_page::MetaPage,
-    neighbor_with_distance::NeighborWithDistance,
     stats::{
         GreedySearchStats, StatsDistanceComparison, StatsHeapNodeRead, StatsNodeModify,
-        StatsNodeRead, StatsNodeWrite, WriteStats,
+        StatsNodeRead, StatsNodeWrite,
     },
 };
 
 /// NodeDistanceMeasure keeps the state to make distance comparisons between two nodes.
 pub trait NodeDistanceMeasure {
-    unsafe fn get_distance<S: StatsNodeRead + StatsDistanceComparison>(
+    unsafe fn get_distance<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -60,19 +62,14 @@ pub trait Storage {
         stats: &mut S,
     ) -> ItemPointer;
 
-    fn start_training(&mut self, meta_page: &MetaPage);
-    fn add_sample(&mut self, sample: &[f32]);
-    fn finish_training(&mut self, meta_page: &mut MetaPage, stats: &mut WriteStats);
-
     fn finalize_node_at_end_of_build<S: StatsNodeRead + StatsNodeModify>(
         &mut self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
     );
 
-    unsafe fn get_node_distance_measure<'a, S: StatsNodeRead>(
+    unsafe fn get_node_distance_measure<'a, S: StatsNodeRead + StatsNodeWrite + StatsNodeModify>(
         &'a self,
         index_pointer: IndexPointer,
         stats: &mut S,
@@ -94,7 +91,7 @@ pub trait Storage {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         lsn_idx: usize,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
         no_filter: bool,
     ) where
         Self: Sized;
@@ -105,7 +102,7 @@ pub trait Storage {
         &self,
         lsr: &mut ListSearchResult<Self::QueryDistanceMeasure, Self::LSNPrivateData>,
         index_pointer: ItemPointer,
-        gns: &GraphNeighborStore,
+        gns: &mut GraphNeighborStore,
     ) -> Option<ListSearchNeighbor<Self::LSNPrivateData>>
     where
         Self: Sized;
@@ -118,16 +115,16 @@ pub trait Storage {
     where
         Self: Sized;
 
-    fn get_neighbors_with_distances_from_disk<S: StatsNodeRead + StatsDistanceComparison>(
+    fn get_neighbors_with_distances_from_disk<
+        S: StatsNodeRead + StatsDistanceComparison + StatsNodeWrite + StatsNodeModify,
+    >(
         &self,
         neighbors_of: ItemPointer,
-        result: &mut Vec<NeighborWithDistance>,
         stats: &mut S,
-    );
+    ) -> Vec<NeighborWithDistance>;
 
     fn set_neighbors_on_disk<S: StatsNodeModify + StatsNodeRead>(
         &self,
-        meta: &MetaPage,
         index_pointer: IndexPointer,
         neighbors: &[NeighborWithDistance],
         stats: &mut S,
@@ -140,6 +137,8 @@ pub trait Storage {
         index_pointer: IndexPointer,
         stats: &mut S,
     ) -> Option<LabelSet>;
+
+    fn get_has_labels(&self) -> bool;
 }
 
 #[derive(PartialEq, Debug)]

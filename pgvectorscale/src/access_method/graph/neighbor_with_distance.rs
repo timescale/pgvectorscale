@@ -2,7 +2,7 @@ use std::{cell::OnceCell, cmp::Ordering};
 
 use crate::util::{IndexPointer, ItemPointer};
 
-use super::labels::LabelSet;
+use crate::access_method::labels::LabelSet;
 
 //TODO is this right?
 pub type Distance = f32;

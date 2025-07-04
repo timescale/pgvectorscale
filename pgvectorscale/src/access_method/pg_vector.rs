@@ -1,4 +1,5 @@
 use pgrx::*;
+use std::mem::MaybeUninit;
 
 use crate::access_method::distance::DistanceType;
 
@@ -10,7 +11,7 @@ use super::{distance::preprocess_cosine, meta_page};
 pub struct PgVectorInternal {
     vl_len_: i32, /* varlena header (do not touch directly!) */
     pub dim: i16, /* number of dimensions */
-    unused: i16,
+    unused: MaybeUninit<i16>,
     pub x: pg_sys::__IncompleteArrayField<std::os::raw::c_float>,
 }
 
@@ -50,6 +51,53 @@ impl Drop for PgVector {
 }
 
 impl PgVector {
+    /// Creates a zero-filled PgVector with the specified dimensions
+    pub fn zeros(meta_page: &meta_page::MetaPage) -> Self {
+        let num_dimensions = meta_page.get_num_dimensions();
+        let num_dimensions_to_index = meta_page.get_num_dimensions_to_index();
+
+        unsafe {
+            if num_dimensions == num_dimensions_to_index {
+                // Optimization: same pointer for both index and full distance
+                let inner = Self::create_zeros_inner(num_dimensions as i16);
+                PgVector {
+                    index_distance: Some(inner),
+                    index_distance_needs_pfree: true,
+                    full_distance: Some(inner),
+                    full_distance_needs_pfree: false,
+                }
+            } else {
+                // Different dimensions for index vs full
+                let index_inner = Self::create_zeros_inner(num_dimensions_to_index as i16);
+                let full_inner = Self::create_zeros_inner(num_dimensions as i16);
+                PgVector {
+                    index_distance: Some(index_inner),
+                    index_distance_needs_pfree: true,
+                    full_distance: Some(full_inner),
+                    full_distance_needs_pfree: true,
+                }
+            }
+        }
+    }
+
+    unsafe fn create_zeros_inner(dimensions: i16) -> *mut PgVectorInternal {
+        // Calculate total size needed: header + array of f32s
+        let header_size = std::mem::size_of::<PgVectorInternal>();
+        let array_size = dimensions as usize * std::mem::size_of::<f32>();
+        let total_size = header_size + array_size;
+
+        // Allocate PostgreSQL memory
+        let ptr = pg_sys::palloc0(total_size) as *mut PgVectorInternal;
+
+        // Initialize the header
+        (*ptr).vl_len_ = total_size as i32;
+        (*ptr).dim = dimensions;
+        (*ptr).unused = MaybeUninit::new(0);
+
+        // The array is already zero-filled due to palloc0
+        ptr
+    }
+
     /// # Safety
     ///
     /// TODO
@@ -117,6 +165,8 @@ impl PgVector {
         index_distance: bool,
         full_distance: bool,
     ) -> PgVector {
+        assert!(!datum.is_null(), "Datum should not be NULL");
+
         if meta_page.get_num_dimensions() == meta_page.get_num_dimensions_to_index() {
             /* optimization if the num dimensions are the same */
             let inner = Self::create_inner(datum, meta_page, true);
@@ -154,5 +204,67 @@ impl PgVector {
 
     pub fn to_full_slice(&self) -> &[f32] {
         unsafe { (*self.full_distance.unwrap()).to_slice() }
+    }
+}
+
+impl Clone for PgVector {
+    fn clone(&self) -> Self {
+        unsafe {
+            let index_distance = self
+                .index_distance
+                .map(|original| Self::clone_inner(original));
+
+            let full_distance = if let Some(original) = self.full_distance {
+                // Check if full_distance points to the same memory as index_distance
+                if self.index_distance.is_some()
+                    && std::ptr::eq(original, self.index_distance.unwrap())
+                {
+                    // Reuse the same cloned pointer
+                    index_distance
+                } else {
+                    // Clone separately
+                    Some(Self::clone_inner(original))
+                }
+            } else {
+                None
+            };
+
+            PgVector {
+                index_distance,
+                index_distance_needs_pfree: index_distance.is_some(),
+                full_distance,
+                full_distance_needs_pfree: full_distance.is_some()
+                    && !std::ptr::eq(
+                        full_distance.unwrap_or(std::ptr::null_mut()),
+                        index_distance.unwrap_or(std::ptr::null_mut()),
+                    ),
+            }
+        }
+    }
+}
+
+impl PgVector {
+    unsafe fn clone_inner(original: *mut PgVectorInternal) -> *mut PgVectorInternal {
+        let dim = (*original).dim;
+        let slice = (*original).to_slice();
+
+        // Calculate total size needed: header + array of f32s
+        let header_size = std::mem::size_of::<PgVectorInternal>();
+        let array_size = dim as usize * std::mem::size_of::<f32>();
+        let total_size = header_size + array_size;
+
+        // Allocate new PostgreSQL memory
+        let new_ptr = pg_sys::palloc(total_size) as *mut PgVectorInternal;
+
+        // Copy the header
+        (*new_ptr).vl_len_ = (*original).vl_len_;
+        (*new_ptr).dim = dim;
+        (*new_ptr).unused = (*original).unused;
+
+        // Copy the vector data
+        let new_slice = (*new_ptr).x.as_mut_slice(dim as _);
+        new_slice.copy_from_slice(slice);
+
+        new_ptr
     }
 }

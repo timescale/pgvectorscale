@@ -20,7 +20,7 @@ pub fn init() {
         "The number of elements rescored (0 to disable rescoring)",
         "Rescoring takes the query_rescore number of elements that have the smallest approximate distance, rescores them with the exact distance, returning the closest ones with the exact distance.",
         &TSV_RESORT_SIZE,
-        1,
+        0,
         1000,
         GucContext::Userset,
         GucFlags::default(),

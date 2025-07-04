@@ -7,9 +7,6 @@ jobs:
   fmt:
     runs-on: ubuntu-latest
 
-    container:
-      image: timescaledev/rust-builder:ubuntu-1.65
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4

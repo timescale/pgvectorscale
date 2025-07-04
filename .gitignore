@@ -14,3 +14,19 @@ Cargo.lock
 *.pdb
 
 .idea
+
+# macOS
+.DS_Store
+
+# Claude Code workspace
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/

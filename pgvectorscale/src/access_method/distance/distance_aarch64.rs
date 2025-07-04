@@ -59,15 +59,15 @@ impl ops::Mul<S> for S {
 }
 
 pub unsafe fn distance_l2_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    super::distance::distance_l2_simd_body!(x, y)
+    super::distance_l2_simd_body!(x, y)
 }
 
 pub unsafe fn distance_cosine_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    (1.0 - super::distance::inner_product_simd_body!(x, y)).max(0.0)
+    (1.0 - super::inner_product_simd_body!(x, y)).max(0.0)
 }
 
 pub unsafe fn inner_product_aarch64_neon(x: &[f32], y: &[f32]) -> f32 {
-    super::distance::inner_product_simd_body!(x, y)
+    super::inner_product_simd_body!(x, y)
 }
 
 #[cfg(test)]
@@ -85,13 +85,13 @@ mod tests {
 
         assert!(
             (unsafe { super::distance_cosine_aarch64_neon(&r, &l) }
-                - super::super::distance::distance_cosine_unoptimized(&r, &l))
+                - super::super::distance_cosine_unoptimized(&r, &l))
             .abs()
                 < 0.000001
         );
         assert!(
             (unsafe { super::distance_l2_aarch64_neon(&r, &l) }
-                - super::super::distance::distance_l2_unoptimized(&r, &l))
+                - super::super::distance_l2_unoptimized(&r, &l))
             .abs()
                 < 0.000001
         );

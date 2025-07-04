@@ -7,7 +7,7 @@ use crate::util::{ItemPointer, ReadableBuffer, WritableBuffer};
 use pgrx::PgRelation;
 use std::collections::BTreeMap;
 
-use super::labels::LabelSetView;
+use crate::access_method::labels::LabelSetView;
 
 /// Start nodes for the graph.  For unlabeled vectorsets, this is a single node.  For
 /// labeled vectorsets, this is a map of labels to nodes.

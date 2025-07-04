@@ -11,7 +11,7 @@ jobs:
       fail-fast: false
       matrix:
         pgvector:
-          - version: 0.7.4
+          - version: 0.8.0
         pg:
           - major: 13
             minor: 16
@@ -62,7 +62,7 @@ jobs:
       uses: ./.github/actions/install-pgrx
       with:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-        pgrx-version: 0.12.5
+        pgrx-version: 0.12.9
 
     - name: Run Clippy
       id: clippy

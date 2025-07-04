@@ -9,9 +9,9 @@ use super::options::{
     NUM_DIMENSIONS_DEFAULT_SENTINEL, NUM_NEIGHBORS_DEFAULT_SENTINEL,
     SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL,
 };
-use super::start_nodes::StartNodes;
 use super::storage::StorageType;
 use super::storage_common::get_num_index_attributes;
+use crate::access_method::graph::start_nodes::StartNodes;
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::stats::WriteStats;
@@ -365,7 +365,7 @@ impl MetaPage {
         assert!(header.magic_number == TSV_MAGIC_NUMBER);
         assert!(header.version == TSV_VERSION);
 
-        let mut stats = WriteStats::new();
+        let mut stats = WriteStats::default();
         let mut tape = if first_time {
             ChainTapeWriter::new(index, PageType::Meta, &mut stats)
         } else {
@@ -384,7 +384,7 @@ impl MetaPage {
     }
 
     unsafe fn load(index: &PgRelation) -> MetaPage {
-        let mut stats = WriteStats::new();
+        let mut stats = WriteStats::default();
         let mut tape = ChainItemReader::new(index, PageType::Meta, &mut stats);
 
         let mut buf: Vec<u8> = Vec::new();

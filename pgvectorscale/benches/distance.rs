@@ -196,7 +196,7 @@ fn benchmark_distance_few_dimensions(c: &mut Criterion) {
 }
 
 fn pack_bools_to_u8(bools: Vec<bool>) -> Vec<u8> {
-    let mut bytes = vec![0u8; (bools.len() + 7) / 8];
+    let mut bytes = vec![0u8; bools.len().div_ceil(8)];
 
     for (i, &b) in bools.iter().enumerate() {
         let byte_index = i / 8;
@@ -211,7 +211,7 @@ fn pack_bools_to_u8(bools: Vec<bool>) -> Vec<u8> {
 }
 
 fn pack_bools_to_u64(bools: Vec<bool>) -> Vec<u64> {
-    let mut u64s = vec![0u64; (bools.len() + 63) / 64];
+    let mut u64s = vec![0u64; bools.len().div_ceil(64)];
 
     for (i, &b) in bools.iter().enumerate() {
         let u64_index = i / 64;
@@ -226,7 +226,7 @@ fn pack_bools_to_u64(bools: Vec<bool>) -> Vec<u64> {
 }
 
 fn pack_bools_to_u128(bools: Vec<bool>) -> Vec<u128> {
-    let mut u128s = vec![0u128; (bools.len() + 127) / 128];
+    let mut u128s = vec![0u128; bools.len().div_ceil(128)];
 
     for (i, &b) in bools.iter().enumerate() {
         let u128_index = i / 128;
