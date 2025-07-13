@@ -9,10 +9,10 @@ pgvectorscale has two main types of tests:
 
 ```bash
 # Run all Rust tests
-cd pgvectorscale && cargo pgrx test pg17
+cd pgvectorscale && cargo pgrx test pg16
 
 # Run specific test
-cd pgvectorscale && cargo pgrx test pg17 test_name
+cd pgvectorscale && cargo pgrx test pg16 test_name
 ```
 
 ## Python Tests
@@ -41,6 +41,6 @@ DB_PORT=28817 ./scripts/run-python-tests.sh
 
 For PGRX development:
 ```bash
-cd pgvectorscale && cargo pgrx start pg17
-cargo pgrx install --features pg17
+cd pgvectorscale && cargo pgrx start pg16
+cargo pgrx install --features pg16
 ```
