@@ -136,6 +136,45 @@ impl BuilderNeighborCache {
             storage.set_neighbors_on_disk(key, new_neighbors.as_slice(), stats);
         }
     }
+
+    /// Flush cached entries to disk if cache usage is above the given threshold.
+    /// This helps prevent memory buildup during parallel builds.
+    pub fn flush_if_above_threshold<S: Storage>(
+        &self,
+        storage: &S,
+        stats: &mut PruneNeighborStats,
+        threshold: f64,
+    ) {
+        let mut cache = self.neighbor_map.borrow_mut();
+        let current_size = cache.len();
+        let capacity_val = cache.cap().get();
+        
+        if current_size as f64 / capacity_val as f64 > threshold {
+            let target_size = (capacity_val as f64 * 0.5) as usize;
+            
+            // Flush least recently used entries to disk
+            while cache.len() > target_size {
+                if let Some((neighbors_of, entry)) = cache.pop_lru() {
+                    let pruned_neighbors = if entry.neighbors.len() > self.num_neighbors {
+                        Graph::prune_neighbors(
+                            self.max_alpha,
+                            self.num_neighbors,
+                            entry.labels.as_ref(),
+                            entry.neighbors,
+                            storage,
+                            stats,
+                        )
+                    } else {
+                        entry.neighbors
+                    };
+                    
+                    storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
 }
 
 pub enum GraphNeighborStore {

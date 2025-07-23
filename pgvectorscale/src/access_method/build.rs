@@ -661,12 +661,9 @@ fn do_heap_scan(
                     );
                 }
 
-                finalize_index_build(
-                    &mut plain,
-                    bs.into_build_state(),
-                    index_relation,
-                    write_stats,
-                )
+                // In parallel mode, nodes are finalized during insertion via streaming
+                // Just need to handle any remaining cached nodes and update meta page
+                finalize_remaining_parallel_nodes(&mut plain, bs, index_relation, write_stats)
             }
             StorageType::SbqCompression => {
                 let mut bq = unsafe {
@@ -700,7 +697,9 @@ fn do_heap_scan(
                     );
                 }
 
-                finalize_index_build(&mut bq, bs.into_build_state(), index_relation, write_stats)
+                // In parallel mode, nodes are finalized during insertion via streaming
+                // Just need to handle any remaining cached nodes and update meta page
+                finalize_remaining_parallel_nodes(&mut bq, bs, index_relation, write_stats)
             }
         }
     } else {
@@ -771,6 +770,17 @@ fn do_heap_scan(
             }
         }
     }
+}
+
+fn finalize_remaining_parallel_nodes<S: Storage>(
+    storage: &mut S,
+    state: BuildStateParallel,
+    index_relation: &PgRelation,
+    write_stats: WriteStats,
+) -> usize {
+    // Convert parallel state to regular build state for final processing
+    let build_state = state.into_build_state();
+    finalize_index_build(storage, build_state, index_relation, write_stats)
 }
 
 fn finalize_index_build<S: Storage>(
@@ -1032,7 +1042,8 @@ fn build_callback_parallel_internal<S: Storage>(
         &mut state.local_stats,
     );
 
-    // Insert node into graph - PostgreSQL page locking handles concurrency
+    // Insert node into graph with parallel build mode enabled
+    // PostgreSQL page locking handles concurrency when finalizing nodes
     state.graph.insert(
         index,
         index_pointer,
@@ -1040,6 +1051,7 @@ fn build_callback_parallel_internal<S: Storage>(
         spare_vector,
         storage,
         &mut state.local_stats,
+        true,
     );
 }
 
