@@ -11,7 +11,7 @@ name = "pgrx_embed_vectorscale"
 path = "./src/bin/pgrx_embed.rs"
 
 [features]
-default = ["pg18"]
+default = ["pg18", "build_parallel"]
 pg13 = ["pgrx/pg13", "pgrx-tests/pg13"]
 pg14 = ["pgrx/pg14", "pgrx-tests/pg14"]
 pg15 = ["pgrx/pg15", "pgrx-tests/pg15"]

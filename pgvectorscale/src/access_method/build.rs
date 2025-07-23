@@ -1,3 +1,4 @@
+use std::sync::RwLock;
 use std::time::Instant;
 
 use pg_sys::{FunctionCall0Coll, InvalidOid};
@@ -43,6 +44,15 @@ enum StorageBuildState<'a, 'b, 'c, 'd> {
     Plain(&'a mut PlainStorage<'b>, &'c mut BuildState<'d>),
 }
 
+/// Storage build state for parallel builds using shared state
+enum StorageBuildStateParallel<'a, 'b, 'c> {
+    SbqSpeedup(
+        &'a mut SbqSpeedupStorage<'b>,
+        &'c mut BuildStateParallel<'b>,
+    ),
+    Plain(&'a mut PlainStorage<'b>, &'c mut BuildStateParallel<'b>),
+}
+
 struct BuildState<'a> {
     memcxt: PgMemoryContexts,
     ntuples: usize,
@@ -50,6 +60,15 @@ struct BuildState<'a> {
     graph: Graph<'a>,
     started: Instant,
     stats: InsertStats,
+}
+
+/// Wrapper for BuildState that shares statistics with parallel workers
+struct BuildStateParallel<'a> {
+    memcxt: PgMemoryContexts,
+    tape: Tape<'a>,
+    graph: Graph<'a>,
+    shared_state: &'a ParallelShared,
+    local_stats: InsertStats,
 }
 
 impl<'a> BuildState<'a> {
@@ -63,6 +82,60 @@ impl<'a> BuildState<'a> {
             graph,
             started: Instant::now(),
             stats: InsertStats::default(),
+        }
+    }
+}
+
+impl<'a> BuildStateParallel<'a> {
+    fn new(
+        index_relation: &'a PgRelation,
+        graph: Graph<'a>,
+        page_type: PageType,
+        shared_state: &'a ParallelShared,
+    ) -> Self {
+        let tape = unsafe { Tape::new(index_relation, page_type) };
+
+        BuildStateParallel {
+            memcxt: PgMemoryContexts::new("diskann build context"),
+            tape,
+            graph,
+            shared_state,
+            local_stats: InsertStats::default(),
+        }
+    }
+
+    fn get_ntuples(&self) -> usize {
+        *self.shared_state.build_state.ntuples.read().unwrap()
+    }
+
+    fn increment_ntuples(&self) {
+        let mut ntuples_guard = self.shared_state.build_state.ntuples.write().unwrap();
+        *ntuples_guard += 1;
+    }
+
+    fn get_started(&self) -> Option<Instant> {
+        *self.shared_state.build_state.started.read().unwrap()
+    }
+
+    fn update_shared_stats(&self) {
+        let mut stats_guard = self.shared_state.build_state.stats.write().unwrap();
+        stats_guard.merge(&self.local_stats);
+    }
+
+    fn into_build_state(self) -> BuildState<'a> {
+        // Update shared stats one final time
+        self.update_shared_stats();
+
+        let ntuples = self.get_ntuples();
+        let started = self.get_started().unwrap_or(Instant::now());
+
+        BuildState {
+            memcxt: self.memcxt,
+            ntuples,
+            tape: self.tape,
+            graph: self.graph,
+            started,
+            stats: self.local_stats,
         }
     }
 }
@@ -84,12 +157,29 @@ struct ParallelSharedParams {
     is_concurrent: bool,
 }
 
+/// Shared build state for parallel index builds.
+#[derive(Debug)]
+#[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
+struct ParallelBuildState {
+    ntuples: RwLock<usize>,
+    started: RwLock<Option<Instant>>,
+    stats: RwLock<InsertStats>,
+}
+
 /// Status data for parallel index builds, shared among all parallel workers.
 #[derive(Debug)]
 #[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelShared {
     params: ParallelSharedParams,
     ntuples: usize,
+    build_state: ParallelBuildState,
+}
+
+/// Information about parallel build passed to heap scan.
+#[derive(Debug)]
+#[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
+struct ParallelBuildInfo {
+    parallel_shared: *mut ParallelShared,
 }
 
 fn get_meta_page(
@@ -168,7 +258,7 @@ pub extern "C-unwind" fn ambuild(
 
     // TODO: unsafe { (*index_info).ii_ParallelWorkers };
     let workers = if cfg!(feature = "build_parallel") {
-        1
+        2 // TODO: set properly
     } else {
         0
     };
@@ -215,6 +305,11 @@ pub extern "C-unwind" fn ambuild(
                         is_concurrent,
                     },
                     ntuples: 0,
+                    build_state: ParallelBuildState {
+                        ntuples: RwLock::new(0),
+                        started: RwLock::new(None),
+                        stats: RwLock::new(InsertStats::default()),
+                    },
                 });
                 let tablescandesc =
                     pg_sys::shm_toc_allocate((*pcxt).toc, tablescandesc_size_estimate)
@@ -264,6 +359,7 @@ pub extern "C-unwind" fn ambuild(
             &index_relation,
             meta_page,
             write_stats,
+            None,
         )
     };
 
@@ -502,6 +598,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         &index_relation,
         meta_page,
         WriteStats::default(),
+        Some(ParallelBuildInfo { parallel_shared }),
     );
 
     unsafe {
@@ -516,6 +613,7 @@ fn do_heap_scan(
     index_relation: &PgRelation,
     mut meta_page: MetaPage,
     mut write_stats: WriteStats,
+    parallel_build_info: Option<ParallelBuildInfo>,
 ) -> usize {
     unsafe {
         pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_BUILDING_GRAPH);
@@ -523,66 +621,154 @@ fn do_heap_scan(
 
     let storage = meta_page.get_storage_type();
 
-    let graph = Graph::new(
-        GraphNeighborStore::Builder(BuilderNeighborCache::new(
-            BUILDER_NEIGHBOR_CACHE_SIZE,
-            &meta_page,
-        )),
-        &mut meta_page,
-    );
+    if let Some(parallel_info) = parallel_build_info {
+        let shared_state = unsafe { &*parallel_info.parallel_shared };
 
-    match storage {
-        StorageType::Plain => {
-            let mut plain =
-                PlainStorage::new_for_build(index_relation, heap_relation, graph.get_meta_page());
-            let page_type = PlainStorage::page_type();
-            let mut bs = BuildState::new(index_relation, graph, page_type);
-            let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
-
-            unsafe {
-                pg_sys::IndexBuildHeapScan(
-                    heap_relation.as_ptr(),
-                    index_relation.as_ptr(),
-                    index_info,
-                    Some(build_callback),
-                    &mut state,
-                );
+        {
+            let mut started_guard = shared_state.build_state.started.write().unwrap();
+            if started_guard.is_none() {
+                *started_guard = Some(Instant::now());
             }
-
-            finalize_index_build(&mut plain, bs, index_relation, write_stats)
         }
-        StorageType::SbqCompression => {
-            let mut bq = unsafe {
-                SbqSpeedupStorage::new_for_build(
+
+        let graph = Graph::new(
+            GraphNeighborStore::Builder(BuilderNeighborCache::new(
+                BUILDER_NEIGHBOR_CACHE_SIZE,
+                &meta_page,
+            )),
+            &mut meta_page,
+        );
+
+        match storage {
+            StorageType::Plain => {
+                let mut plain = PlainStorage::new_for_build(
                     index_relation,
                     heap_relation,
                     graph.get_meta_page(),
-                    &mut write_stats,
+                );
+                let page_type = PlainStorage::page_type();
+                let mut bs =
+                    BuildStateParallel::new(index_relation, graph, page_type, shared_state);
+                let mut state = StorageBuildStateParallel::Plain(&mut plain, &mut bs);
+
+                unsafe {
+                    pg_sys::IndexBuildHeapScan(
+                        heap_relation.as_ptr(),
+                        index_relation.as_ptr(),
+                        index_info,
+                        Some(build_callback_parallel),
+                        &mut state,
+                    );
+                }
+
+                finalize_index_build(
+                    &mut plain,
+                    bs.into_build_state(),
+                    index_relation,
+                    write_stats,
                 )
-            };
-
-            let page_type = SbqSpeedupStorage::page_type();
-            let mut bs = BuildState::new(index_relation, graph, page_type);
-            let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
-
-            unsafe {
-                pg_sys::IndexBuildHeapScan(
-                    heap_relation.as_ptr(),
-                    index_relation.as_ptr(),
-                    index_info,
-                    Some(build_callback),
-                    &mut state,
-                );
             }
+            StorageType::SbqCompression => {
+                let mut bq = unsafe {
+                    SbqSpeedupStorage::new_for_build(
+                        index_relation,
+                        heap_relation,
+                        graph.get_meta_page(),
+                        &mut write_stats,
+                    )
+                };
 
-            unsafe {
-                pgstat_progress_update_param(
-                    PROGRESS_CREATE_IDX_SUBPHASE,
-                    BUILD_PHASE_FINALIZING_GRAPH,
-                );
+                let page_type = SbqSpeedupStorage::page_type();
+                let mut bs =
+                    BuildStateParallel::new(index_relation, graph, page_type, shared_state);
+                let mut state = StorageBuildStateParallel::SbqSpeedup(&mut bq, &mut bs);
+
+                unsafe {
+                    pg_sys::IndexBuildHeapScan(
+                        heap_relation.as_ptr(),
+                        index_relation.as_ptr(),
+                        index_info,
+                        Some(build_callback_parallel),
+                        &mut state,
+                    );
+                }
+
+                unsafe {
+                    pgstat_progress_update_param(
+                        PROGRESS_CREATE_IDX_SUBPHASE,
+                        BUILD_PHASE_FINALIZING_GRAPH,
+                    );
+                }
+
+                finalize_index_build(&mut bq, bs.into_build_state(), index_relation, write_stats)
             }
+        }
+    } else {
+        // Serial build: use local state
+        let graph = Graph::new(
+            GraphNeighborStore::Builder(BuilderNeighborCache::new(
+                BUILDER_NEIGHBOR_CACHE_SIZE,
+                &meta_page,
+            )),
+            &mut meta_page,
+        );
 
-            finalize_index_build(&mut bq, bs, index_relation, write_stats)
+        match storage {
+            StorageType::Plain => {
+                let mut plain = PlainStorage::new_for_build(
+                    index_relation,
+                    heap_relation,
+                    graph.get_meta_page(),
+                );
+                let page_type = PlainStorage::page_type();
+                let mut bs = BuildState::new(index_relation, graph, page_type);
+                let mut state = StorageBuildState::Plain(&mut plain, &mut bs);
+
+                unsafe {
+                    pg_sys::IndexBuildHeapScan(
+                        heap_relation.as_ptr(),
+                        index_relation.as_ptr(),
+                        index_info,
+                        Some(build_callback),
+                        &mut state,
+                    );
+                }
+
+                finalize_index_build(&mut plain, bs, index_relation, write_stats)
+            }
+            StorageType::SbqCompression => {
+                let mut bq = unsafe {
+                    SbqSpeedupStorage::new_for_build(
+                        index_relation,
+                        heap_relation,
+                        graph.get_meta_page(),
+                        &mut write_stats,
+                    )
+                };
+
+                let page_type = SbqSpeedupStorage::page_type();
+                let mut bs = BuildState::new(index_relation, graph, page_type);
+                let mut state = StorageBuildState::SbqSpeedup(&mut bq, &mut bs);
+
+                unsafe {
+                    pg_sys::IndexBuildHeapScan(
+                        heap_relation.as_ptr(),
+                        index_relation.as_ptr(),
+                        index_info,
+                        Some(build_callback),
+                        &mut state,
+                    );
+                }
+
+                unsafe {
+                    pgstat_progress_update_param(
+                        PROGRESS_CREATE_IDX_SUBPHASE,
+                        BUILD_PHASE_FINALIZING_GRAPH,
+                    );
+                }
+
+                finalize_index_build(&mut bq, bs, index_relation, write_stats)
+            }
         }
     }
 }
@@ -688,6 +874,54 @@ unsafe extern "C-unwind" fn build_callback(
     }
 }
 
+#[pg_guard]
+unsafe extern "C" fn build_callback_parallel(
+    index: pg_sys::Relation,
+    ctid: pg_sys::ItemPointer,
+    values: *mut pg_sys::Datum,
+    isnull: *mut bool,
+    _tuple_is_alive: bool,
+    state: *mut std::os::raw::c_void,
+) {
+    let heap_pointer = ItemPointer::with_item_pointer_data(*ctid);
+    let index_relation = PgRelation::from_pg(index);
+    let state = (state as *mut StorageBuildStateParallel).as_mut().unwrap();
+    match state {
+        StorageBuildStateParallel::SbqSpeedup(bq, state) => {
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
+            if let Some(vec) = vec {
+                let spare_vec =
+                    LabeledVector::from_datums(values, isnull, state.graph.get_meta_page())
+                        .unwrap();
+                build_callback_parallel_memory_wrapper(
+                    &index_relation,
+                    heap_pointer,
+                    vec,
+                    spare_vec,
+                    state,
+                    *bq,
+                );
+            }
+        }
+        StorageBuildStateParallel::Plain(plain, state) => {
+            let vec = LabeledVector::from_datums(values, isnull, state.graph.get_meta_page());
+            if let Some(vec) = vec {
+                let spare_vec =
+                    LabeledVector::from_datums(values, isnull, state.graph.get_meta_page())
+                        .unwrap();
+                build_callback_parallel_memory_wrapper(
+                    &index_relation,
+                    heap_pointer,
+                    vec,
+                    spare_vec,
+                    state,
+                    *plain,
+                );
+            }
+        }
+    }
+}
+
 #[inline(always)]
 unsafe fn build_callback_memory_wrapper<S: Storage>(
     index: &PgRelation,
@@ -740,6 +974,73 @@ fn build_callback_internal<S: Storage>(
     state
         .graph
         .insert(index, index_pointer, vector, storage, &mut state.stats);
+}
+
+#[inline(always)]
+unsafe fn build_callback_parallel_memory_wrapper<S: Storage>(
+    index: &PgRelation,
+    heap_pointer: ItemPointer,
+    vector: LabeledVector,
+    spare_vector: LabeledVector,
+    state: &mut BuildStateParallel,
+    storage: &mut S,
+) {
+    let mut old_context = state.memcxt.set_as_current();
+
+    build_callback_parallel_internal(index, heap_pointer, vector, spare_vector, state, storage);
+
+    old_context.set_as_current();
+    state.memcxt.reset();
+}
+
+#[inline(always)]
+fn build_callback_parallel_internal<S: Storage>(
+    index: &PgRelation,
+    heap_pointer: ItemPointer,
+    vector: LabeledVector,
+    spare_vector: LabeledVector,
+    state: &mut BuildStateParallel,
+    storage: &mut S,
+) {
+    check_for_interrupts!();
+
+    // Update shared tuple count
+    state.increment_ntuples();
+    let current_ntuples = state.get_ntuples();
+
+    if current_ntuples % 1000 == 0 {
+        if let Some(started) = state.get_started() {
+            debug1!(
+                "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
+                current_ntuples,
+                Instant::now().duration_since(started).as_secs_f64(),
+                (Instant::now().duration_since(started) / current_ntuples as u32).as_secs_f64(),
+                state.local_stats.prune_neighbor_stats.distance_comparisons / current_ntuples,
+                state.local_stats.greedy_search_stats.get_total_distance_comparisons() / current_ntuples,
+                state.local_stats,
+            );
+        }
+    }
+
+    // Create node using local tape - PostgreSQL page locking handles concurrency
+    let index_pointer = storage.create_node(
+        vector.vec().to_index_slice(),
+        vector.labels().cloned(),
+        heap_pointer,
+        state.graph.get_meta_page(),
+        &mut state.tape,
+        &mut state.local_stats,
+    );
+
+    // Insert node into graph - PostgreSQL page locking handles concurrency
+    state.graph.insert(
+        index,
+        index_pointer,
+        vector,
+        spare_vector,
+        storage,
+        &mut state.local_stats,
+    );
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
