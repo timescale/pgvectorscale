@@ -58,7 +58,6 @@ struct BuildState<'a> {
     ntuples: usize,
     tape: Tape<'a>, //The tape is a memory abstraction over Postgres pages for writing data.
     graph: Graph<'a>,
-    started: Instant,
     stats: InsertStats,
 }
 
@@ -69,6 +68,7 @@ struct BuildStateParallel<'a> {
     graph: Graph<'a>,
     shared_state: &'a ParallelShared,
     local_stats: InsertStats,
+    local_ntuples: usize,
 }
 
 impl<'a> BuildState<'a> {
@@ -80,7 +80,6 @@ impl<'a> BuildState<'a> {
             ntuples: 0,
             tape,
             graph,
-            started: Instant::now(),
             stats: InsertStats::default(),
         }
     }
@@ -101,20 +100,12 @@ impl<'a> BuildStateParallel<'a> {
             graph,
             shared_state,
             local_stats: InsertStats::default(),
+            local_ntuples: 0,
         }
     }
 
-    fn get_ntuples(&self) -> usize {
-        *self.shared_state.build_state.ntuples.read().unwrap()
-    }
-
-    fn increment_ntuples(&self) {
-        let mut ntuples_guard = self.shared_state.build_state.ntuples.write().unwrap();
-        *ntuples_guard += 1;
-    }
-
-    fn get_started(&self) -> Option<Instant> {
-        *self.shared_state.build_state.started.read().unwrap()
+    fn increment_ntuples(&mut self) {
+        self.local_ntuples += 1;
     }
 
     fn update_shared_stats(&self) {
@@ -123,20 +114,24 @@ impl<'a> BuildStateParallel<'a> {
     }
 
     fn into_build_state(self) -> BuildState<'a> {
-        // Update shared stats one final time
+        // Update shared stats and ntuples one final time
         self.update_shared_stats();
+        self.update_shared_ntuples();
 
-        let ntuples = self.get_ntuples();
-        let started = self.get_started().unwrap_or(Instant::now());
+        let ntuples = self.local_ntuples;
 
         BuildState {
             memcxt: self.memcxt,
             ntuples,
             tape: self.tape,
             graph: self.graph,
-            started,
             stats: self.local_stats,
         }
+    }
+
+    fn update_shared_ntuples(&self) {
+        let mut ntuples_guard = self.shared_state.build_state.ntuples.write().unwrap();
+        *ntuples_guard += self.local_ntuples;
     }
 }
 
@@ -171,7 +166,6 @@ struct ParallelBuildState {
 #[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelShared {
     params: ParallelSharedParams,
-    ntuples: usize,
     build_state: ParallelBuildState,
 }
 
@@ -258,7 +252,7 @@ pub extern "C-unwind" fn ambuild(
 
     // TODO: unsafe { (*index_info).ii_ParallelWorkers };
     let workers = if cfg!(feature = "build_parallel") {
-        2 // TODO: set properly
+        8 // TODO: set properly
     } else {
         0
     };
@@ -304,7 +298,6 @@ pub extern "C-unwind" fn ambuild(
                         indexrelid: index_relation.rd_id,
                         is_concurrent,
                     },
-                    ntuples: 0,
                     build_state: ParallelBuildState {
                         ntuples: RwLock::new(0),
                         started: RwLock::new(None),
@@ -348,7 +341,7 @@ pub extern "C-unwind" fn ambuild(
             let parallel_shared: *mut ParallelShared =
                 pg_sys::shm_toc_lookup((*pcxt).toc, parallel::SHM_TOC_SHARED_KEY, false)
                     .cast::<ParallelShared>();
-            let ntuples = (*parallel_shared).ntuples;
+            let ntuples = *(*parallel_shared).build_state.ntuples.read().unwrap();
             parallel::cleanup_pcxt(pcxt, snapshot);
             ntuples
         }
@@ -592,7 +585,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
     let index_relation = unsafe { PgRelation::from_pg(indexrel) };
     let meta_page = MetaPage::fetch(&index_relation);
 
-    let ntuples = do_heap_scan(
+    do_heap_scan(
         index_info,
         &heap_relation,
         &index_relation,
@@ -600,11 +593,6 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         WriteStats::default(),
         Some(ParallelBuildInfo { parallel_shared }),
     );
-
-    unsafe {
-        // SAFETY: nobody reads this until all the parallel workers are done
-        (*parallel_shared).ntuples = ntuples;
-    }
 }
 
 fn do_heap_scan(
@@ -960,7 +948,7 @@ fn build_callback_internal<S: Storage>(
 
     state.ntuples += 1;
 
-    if state.ntuples % 1000 == 0 {
+    /*if state.ntuples % 1000 == 0 {
         debug1!(
             "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
             state.ntuples,
@@ -970,7 +958,7 @@ fn build_callback_internal<S: Storage>(
             state.stats.greedy_search_stats.get_total_distance_comparisons() / state.ntuples,
             state.stats,
         );
-    }
+    }*/
 
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
@@ -1014,11 +1002,9 @@ fn build_callback_parallel_internal<S: Storage>(
 ) {
     check_for_interrupts!();
 
-    // Update shared tuple count
     state.increment_ntuples();
-    let current_ntuples = state.get_ntuples();
 
-    if current_ntuples % 1000 == 0 {
+    /*if current_ntuples % 1000 == 0 {
         if let Some(started) = state.get_started() {
             debug1!(
                 "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
@@ -1030,7 +1016,7 @@ fn build_callback_parallel_internal<S: Storage>(
                 state.local_stats,
             );
         }
-    }
+    }*/
 
     // Create node using local tape - PostgreSQL page locking handles concurrency
     let index_pointer = storage.create_node(
