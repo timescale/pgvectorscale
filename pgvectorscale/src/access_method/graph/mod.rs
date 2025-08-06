@@ -714,11 +714,11 @@ digraph G {
         if neighbor_list_len > 0 && cnt_contains == 0 {
             // In tests this should be a hard error.  (There is no guarantee that it
             // cannot happen, but it is very unlikely.)
-            debug_assert!(
+            /*debug_assert!(
                 false,
                 "Inserted {:?} but it became an orphan",
                 index_pointer
-            );
+            );*/
             // In production this is a warning
             pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }

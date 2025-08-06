@@ -1,4 +1,4 @@
-use std::sync::RwLock;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use pg_sys::{FunctionCall0Coll, InvalidOid};
@@ -18,6 +18,7 @@ use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
 use crate::util::tape::Tape;
 use crate::util::*;
+use crate::util::ports::IndexBuildHeapScanParallel;
 
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
@@ -69,6 +70,7 @@ struct BuildStateParallel<'a> {
     shared_state: &'a ParallelShared,
     local_stats: InsertStats,
     local_ntuples: usize,
+    is_initializing_worker: bool,
 }
 
 impl<'a> BuildState<'a> {
@@ -91,6 +93,7 @@ impl<'a> BuildStateParallel<'a> {
         graph: Graph<'a>,
         page_type: PageType,
         shared_state: &'a ParallelShared,
+        is_initializing_worker: bool,
     ) -> Self {
         let tape = unsafe { Tape::new(index_relation, page_type) };
 
@@ -101,21 +104,24 @@ impl<'a> BuildStateParallel<'a> {
             shared_state,
             local_stats: InsertStats::default(),
             local_ntuples: 0,
+            is_initializing_worker,
         }
     }
 
     fn increment_ntuples(&mut self) {
         self.local_ntuples += 1;
-    }
-
-    fn update_shared_stats(&self) {
-        let mut stats_guard = self.shared_state.build_state.stats.write().unwrap();
-        stats_guard.merge(&self.local_stats);
+        // Only update shared counter for the initializing worker until threshold is reached
+        if self.is_initializing_worker && self.local_ntuples <= parallel::INITIAL_START_NODES_COUNT {
+            self.shared_state.build_state.ntuples.fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     fn into_build_state(self) -> BuildState<'a> {
-        // Update shared stats and ntuples one final time
-        self.update_shared_stats();
+        // Signal that the initializing worker is done if this is the initializing worker
+        if self.is_initializing_worker {
+            self.shared_state.build_state.initializing_worker_done.store(true, Ordering::Relaxed);
+        }
+        
         self.update_shared_ntuples();
 
         let ntuples = self.local_ntuples;
@@ -130,8 +136,16 @@ impl<'a> BuildStateParallel<'a> {
     }
 
     fn update_shared_ntuples(&self) {
-        let mut ntuples_guard = self.shared_state.build_state.ntuples.write().unwrap();
-        *ntuples_guard += self.local_ntuples;
+        if self.is_initializing_worker {
+            // For initializing worker, only add tuples beyond the initial threshold to avoid double counting
+            let remaining = self.local_ntuples.saturating_sub(parallel::INITIAL_START_NODES_COUNT);
+            if remaining > 0 {
+                self.shared_state.build_state.ntuples.fetch_add(remaining, Ordering::Relaxed);
+            }
+        } else {
+            // For non-initializing workers, add all local tuples
+            self.shared_state.build_state.ntuples.fetch_add(self.local_ntuples, Ordering::Relaxed);
+        }
     }
 }
 
@@ -156,9 +170,9 @@ struct ParallelSharedParams {
 #[derive(Debug)]
 #[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelBuildState {
-    ntuples: RwLock<usize>,
-    started: RwLock<Option<Instant>>,
-    stats: RwLock<InsertStats>,
+    ntuples: AtomicUsize,
+    start_nodes_initialized: AtomicBool,
+    initializing_worker_done: AtomicBool,
 }
 
 /// Status data for parallel index builds, shared among all parallel workers.
@@ -174,6 +188,8 @@ struct ParallelShared {
 #[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
 struct ParallelBuildInfo {
     parallel_shared: *mut ParallelShared,
+    is_initializing_worker: bool,
+    tablescandesc: *mut pg_sys::ParallelTableScanDescData,
 }
 
 fn get_meta_page(
@@ -299,9 +315,9 @@ pub extern "C-unwind" fn ambuild(
                         is_concurrent,
                     },
                     build_state: ParallelBuildState {
-                        ntuples: RwLock::new(0),
-                        started: RwLock::new(None),
-                        stats: RwLock::new(InsertStats::default()),
+                        ntuples: AtomicUsize::new(0),
+                        start_nodes_initialized: AtomicBool::new(false),
+                        initializing_worker_done: AtomicBool::new(false),
                     },
                 });
                 let tablescandesc =
@@ -341,7 +357,7 @@ pub extern "C-unwind" fn ambuild(
             let parallel_shared: *mut ParallelShared =
                 pg_sys::shm_toc_lookup((*pcxt).toc, parallel::SHM_TOC_SHARED_KEY, false)
                     .cast::<ParallelShared>();
-            let ntuples = *(*parallel_shared).build_state.ntuples.read().unwrap();
+            let ntuples = (*parallel_shared).build_state.ntuples.load(Ordering::Relaxed);
             parallel::cleanup_pcxt(pcxt, snapshot);
             ntuples
         }
@@ -556,7 +572,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_SHARED_KEY, false)
             .cast::<ParallelShared>()
     };
-    let _tablescandesc = unsafe {
+    let tablescandesc = unsafe {
         pg_sys::shm_toc_lookup(shm_toc, parallel::SHM_TOC_TABLESCANDESC_KEY, false)
             .cast::<pg_sys::ParallelTableScanDescData>()
     };
@@ -565,6 +581,27 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         // SAFETY: these parameters never change, so no data races
         (*parallel_shared).params
     };
+
+    // Check if this worker should handle the first 1024 nodes for start node initialization
+    let should_initialize = unsafe {
+        (*parallel_shared).build_state.start_nodes_initialized.compare_exchange(
+            false, 
+            true, 
+            Ordering::SeqCst, 
+            Ordering::SeqCst
+        ).is_ok()
+    };
+
+    if !should_initialize {
+        loop {
+            let ntuples = unsafe { (*parallel_shared).build_state.ntuples.load(Ordering::Relaxed) };
+            let init_done = unsafe { (*parallel_shared).build_state.initializing_worker_done.load(Ordering::Relaxed) };
+            if ntuples >= parallel::INITIAL_START_NODES_COUNT || init_done {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
 
     let (heap_lockmode, index_lockmode) = if params.is_concurrent {
         (
@@ -591,7 +628,11 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         &index_relation,
         meta_page,
         WriteStats::default(),
-        Some(ParallelBuildInfo { parallel_shared }),
+        Some(ParallelBuildInfo { 
+            parallel_shared, 
+            is_initializing_worker: should_initialize,
+            tablescandesc,
+        }),
     );
 }
 
@@ -612,12 +653,8 @@ fn do_heap_scan(
     if let Some(parallel_info) = parallel_build_info {
         let shared_state = unsafe { &*parallel_info.parallel_shared };
 
-        {
-            let mut started_guard = shared_state.build_state.started.write().unwrap();
-            if started_guard.is_none() {
-                *started_guard = Some(Instant::now());
-            }
-        }
+        // In parallel mode, timing is handled locally by each worker
+        // No shared timing state needed across processes
 
         let graph = Graph::new(
             GraphNeighborStore::Builder(BuilderNeighborCache::new(
@@ -636,16 +673,17 @@ fn do_heap_scan(
                 );
                 let page_type = PlainStorage::page_type();
                 let mut bs =
-                    BuildStateParallel::new(index_relation, graph, page_type, shared_state);
+                    BuildStateParallel::new(index_relation, graph, page_type, shared_state, parallel_info.is_initializing_worker);
                 let mut state = StorageBuildStateParallel::Plain(&mut plain, &mut bs);
 
                 unsafe {
-                    pg_sys::IndexBuildHeapScan(
+                    IndexBuildHeapScanParallel(
                         heap_relation.as_ptr(),
                         index_relation.as_ptr(),
                         index_info,
                         Some(build_callback_parallel),
                         &mut state,
+                        parallel_info.tablescandesc,
                     );
                 }
 
@@ -665,16 +703,17 @@ fn do_heap_scan(
 
                 let page_type = SbqSpeedupStorage::page_type();
                 let mut bs =
-                    BuildStateParallel::new(index_relation, graph, page_type, shared_state);
+                    BuildStateParallel::new(index_relation, graph, page_type, shared_state, parallel_info.is_initializing_worker);
                 let mut state = StorageBuildStateParallel::SbqSpeedup(&mut bq, &mut bs);
 
                 unsafe {
-                    pg_sys::IndexBuildHeapScan(
+                    IndexBuildHeapScanParallel(
                         heap_relation.as_ptr(),
                         index_relation.as_ptr(),
                         index_info,
                         Some(build_callback_parallel),
                         &mut state,
+                        parallel_info.tablescandesc,
                     );
                 }
 

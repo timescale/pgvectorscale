@@ -177,3 +177,31 @@ pub fn buffer_align(len: usize) -> usize {
         pg_sys::TYPEALIGN(pg_sys::ALIGNOF_BUFFER as usize, len)
     }
 }
+
+/// Custom IndexBuildHeapScan that uses parallel table scan descriptor
+#[allow(non_snake_case)]
+pub unsafe fn IndexBuildHeapScanParallel<T>(
+    heap_relation: pg_sys::Relation,
+    index_relation: pg_sys::Relation,
+    index_info: *mut pg_sys::IndexInfo,
+    build_callback: pg_sys::IndexBuildCallback,
+    build_callback_state: *mut T,
+    tablescandesc: *mut pg_sys::ParallelTableScanDescData,
+) {
+    let heap_relation_ref = heap_relation.as_ref().unwrap();
+    let table_am = heap_relation_ref.rd_tableam.as_ref().unwrap();
+
+    table_am.index_build_range_scan.unwrap()(
+        heap_relation,
+        index_relation,
+        index_info,
+        true,  // allow_sync
+        false, // anyvisible
+        true,  // progress
+        0,     // start_blockno
+        pg_sys::InvalidBlockNumber, // end_blockno
+        build_callback,
+        build_callback_state as *mut std::os::raw::c_void,
+        tablescandesc as *mut pg_sys::TableScanDescData,
+    );
+}

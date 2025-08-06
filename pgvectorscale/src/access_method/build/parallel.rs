@@ -3,6 +3,7 @@ use pgrx::pg_sys;
 
 pub const SHM_TOC_SHARED_KEY: u64 = 0xD000000000000001;
 pub const SHM_TOC_TABLESCANDESC_KEY: u64 = 0xD000000000000002;
+pub const INITIAL_START_NODES_COUNT: usize = 1024;
 
 /// Is a snapshop MVCC-safe? (This should really be a part of pgrx)
 pub unsafe fn is_mvcc_snapshot(snapshot: *mut pg_sys::SnapshotData) -> bool {
