@@ -188,6 +188,8 @@ pub unsafe fn IndexBuildHeapScanParallel<T>(
     build_callback_state: *mut T,
     tablescandesc: *mut pg_sys::ParallelTableScanDescData,
 ) {
+    let scan = pg_sys::table_beginscan_parallel(heap_relation, tablescandesc);
+
     let heap_relation_ref = heap_relation.as_ref().unwrap();
     let table_am = heap_relation_ref.rd_tableam.as_ref().unwrap();
 
@@ -202,6 +204,6 @@ pub unsafe fn IndexBuildHeapScanParallel<T>(
         pg_sys::InvalidBlockNumber, // end_blockno
         build_callback,
         build_callback_state as *mut std::os::raw::c_void,
-        tablescandesc as *mut pg_sys::TableScanDescData,
+        scan,
     );
 }
