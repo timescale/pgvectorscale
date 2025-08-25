@@ -149,26 +149,39 @@ impl BuilderNeighborCache {
         let current_size = cache.len();
         let capacity_val = cache.cap().get();
         
+        // pgrx::warning!("Should I flush?");
         if current_size as f64 / capacity_val as f64 > threshold {
-            let target_size = (capacity_val as f64 * 0.5) as usize;
+            // pgrx::warning!("Flushing neighbors");
+            let target_size = 0;//(capacity_val as f64 * 0.5) as usize;
             
             // Flush least recently used entries to disk
             while cache.len() > target_size {
                 if let Some((neighbors_of, entry)) = cache.pop_lru() {
-                    let pruned_neighbors = if entry.neighbors.len() > self.num_neighbors {
+                    drop(cache);
+                    // Read existing neighbors from disk and merge with cached neighbors
+                    let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+                    let mut all_neighbors = entry.neighbors;
+                    for disk_neighbor in disk_neighbors {
+                        if !all_neighbors.iter().any(|n: &NeighborWithDistance| n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()) {
+                            all_neighbors.push(disk_neighbor);
+                        }
+                    }
+                    
+                    let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
                         Graph::prune_neighbors(
                             self.max_alpha,
                             self.num_neighbors,
                             entry.labels.as_ref(),
-                            entry.neighbors,
+                            all_neighbors,
                             storage,
                             stats,
                         )
                     } else {
-                        entry.neighbors
+                        all_neighbors
                     };
                     
                     storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
+                    cache = self.neighbor_map.borrow_mut();
                 } else {
                     break;
                 }
