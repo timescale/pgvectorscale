@@ -144,17 +144,13 @@ impl BuilderNeighborCache {
         &self,
         storage: &S,
         stats: &mut PruneNeighborStats,
-        threshold: f64,
+        _threshold: f64,
     ) {
         let mut cache = self.neighbor_map.borrow_mut();
-        let current_size = cache.len();
-        let capacity_val = cache.cap().get();
-    
-        pgrx::warning!("Flushing neighbors");
-        let target_size = 0;//(capacity_val as f64 * 0.5) as usize;
+        // pgrx::warning!("Flushing neighbors");
         
         // Flush least recently used entries to disk
-        while cache.len() > target_size {
+        while cache.len() > 0 {
             if let Some((neighbors_of, entry)) = cache.pop_lru() {
                 drop(cache);
                 // Read existing neighbors from disk and merge with cached neighbors

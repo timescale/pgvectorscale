@@ -641,7 +641,6 @@ digraph G {
         vec: LabeledVector,
         storage: &S,
         stats: &mut InsertStats,
-        parallel_build: bool,
     ) {
         self.update_start_nodes(
             index,
@@ -658,13 +657,6 @@ digraph G {
 
         // Insert starting from default start node and avoid label filtering
         self.insert_internal(index_pointer, vec, true, storage, stats);
-
-        // In parallel build mode, periodically flush cached nodes to disk to avoid
-        // accumulating large amounts of data in memory that would need to be
-        // processed sequentially at the end
-        if parallel_build {
-            self.maybe_flush_neighbor_cache(storage, stats);
-        }
     }
 
     fn insert_internal<S: Storage>(
@@ -746,7 +738,7 @@ digraph G {
 
     /// In parallel builds, periodically flush cached neighbor data to disk
     /// to prevent accumulating too much data in memory
-    fn maybe_flush_neighbor_cache<S: Storage>(
+    pub fn maybe_flush_neighbor_cache<S: Storage>(
         &mut self,
         storage: &S,
         stats: &mut InsertStats,
