@@ -126,11 +126,19 @@ impl BuilderNeighborCache {
         let evictee =
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
+            // Read existing neighbors from disk and merge with cached neighbors
+            let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+            let mut all_neighbors = value.neighbors;
+            for disk_neighbor in disk_neighbors {
+                if !all_neighbors.iter().any(|n: &NeighborWithDistance| n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()) {
+                    all_neighbors.push(disk_neighbor);
+                }
+            }
             let new_neighbors = Graph::prune_neighbors(
                 self.max_alpha,
                 self.num_neighbors,
                 value.labels.as_ref(),
-                value.neighbors,
+                all_neighbors,
                 storage,
                 stats,
             );
