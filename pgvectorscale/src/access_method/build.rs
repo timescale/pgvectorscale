@@ -1078,6 +1078,10 @@ fn build_callback_parallel_internal<S: Storage>(
         &mut state.local_stats,
         true,
     );
+
+    if state.local_ntuples % 4096 == 0 {
+        state.graph.maybe_flush_neighbor_cache(storage, &mut state.local_stats);
+    }
 }
 
 const BUILD_PHASE_TRAINING: i64 = 0;
