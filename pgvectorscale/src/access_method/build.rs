@@ -267,7 +267,7 @@ pub extern "C-unwind" fn ambuild(
     };
 
     // TODO: unsafe { (*index_info).ii_ParallelWorkers };
-    let workers = if cfg!(feature = "build_parallel") {
+    let workers = if cfg!(feature = "build_parallel") && !meta_page.has_labels() {
         8 // TODO: set properly
     } else {
         0
