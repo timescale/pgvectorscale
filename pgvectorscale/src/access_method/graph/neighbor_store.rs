@@ -52,12 +52,16 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
-    pub fn new(memory_budget: f64, meta_page: &MetaPage) -> Self {
+    pub fn new(memory_budget: f64, meta_page: &MetaPage, worker_count: usize) -> Self {
         let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
         let capacity = memory_budget
             / NeighborCacheEntry::size(meta_page.get_num_neighbors() as _, meta_page.has_labels());
-        let capacity = capacity / 8;
+        let capacity = if worker_count > 0 {
+            capacity / worker_count
+        } else {
+            capacity
+        };
 
         Self {
             neighbor_map: RefCell::new(LruCacheWithStats::new(
@@ -127,10 +131,14 @@ impl BuilderNeighborCache {
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
             // Read existing neighbors from disk and merge with cached neighbors
-            let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+            let disk_neighbors =
+                storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
             let mut all_neighbors = value.neighbors;
             for disk_neighbor in disk_neighbors {
-                if !all_neighbors.iter().any(|n: &NeighborWithDistance| n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()) {
+                if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
+                    n.get_index_pointer_to_neighbor()
+                        == disk_neighbor.get_index_pointer_to_neighbor()
+                }) {
                     all_neighbors.push(disk_neighbor);
                 }
             }
@@ -156,20 +164,24 @@ impl BuilderNeighborCache {
     ) {
         let mut cache = self.neighbor_map.borrow_mut();
         // pgrx::warning!("Flushing neighbors");
-        
+
         // Flush least recently used entries to disk
         while cache.len() > 0 {
             if let Some((neighbors_of, entry)) = cache.pop_lru() {
                 drop(cache);
                 // Read existing neighbors from disk and merge with cached neighbors
-                let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+                let disk_neighbors =
+                    storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
                 let mut all_neighbors = entry.neighbors;
                 for disk_neighbor in disk_neighbors {
-                    if !all_neighbors.iter().any(|n: &NeighborWithDistance| n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()) {
+                    if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
+                        n.get_index_pointer_to_neighbor()
+                            == disk_neighbor.get_index_pointer_to_neighbor()
+                    }) {
                         all_neighbors.push(disk_neighbor);
                     }
                 }
-                
+
                 let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
                     Graph::prune_neighbors(
                         self.max_alpha,
@@ -182,7 +194,7 @@ impl BuilderNeighborCache {
                 } else {
                     all_neighbors
                 };
-                
+
                 storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
                 cache = self.neighbor_map.borrow_mut();
             } else {

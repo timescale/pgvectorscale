@@ -16,9 +16,9 @@ use crate::util::ports::acquire_index_lock;
 
 use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
+use crate::util::ports::IndexBuildHeapScanParallel;
 use crate::util::tape::Tape;
 use crate::util::*;
-use crate::util::ports::IndexBuildHeapScanParallel;
 
 use self::ports::PROGRESS_CREATE_IDX_SUBPHASE;
 
@@ -111,17 +111,24 @@ impl<'a> BuildStateParallel<'a> {
     fn increment_ntuples(&mut self) {
         self.local_ntuples += 1;
         // Only update shared counter for the initializing worker until threshold is reached
-        if self.is_initializing_worker && self.local_ntuples <= parallel::INITIAL_START_NODES_COUNT {
-            self.shared_state.build_state.ntuples.fetch_add(1, Ordering::Relaxed);
+        if self.is_initializing_worker && self.local_ntuples <= parallel::INITIAL_START_NODES_COUNT
+        {
+            self.shared_state
+                .build_state
+                .ntuples
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
     fn into_build_state(self) -> BuildState<'a> {
         // Signal that the initializing worker is done if this is the initializing worker
         if self.is_initializing_worker {
-            self.shared_state.build_state.initializing_worker_done.store(true, Ordering::Relaxed);
+            self.shared_state
+                .build_state
+                .initializing_worker_done
+                .store(true, Ordering::Relaxed);
         }
-        
+
         self.update_shared_ntuples();
 
         let ntuples = self.local_ntuples;
@@ -138,13 +145,21 @@ impl<'a> BuildStateParallel<'a> {
     fn update_shared_ntuples(&self) {
         if self.is_initializing_worker {
             // For initializing worker, only add tuples beyond the initial threshold to avoid double counting
-            let remaining = self.local_ntuples.saturating_sub(parallel::INITIAL_START_NODES_COUNT);
+            let remaining = self
+                .local_ntuples
+                .saturating_sub(parallel::INITIAL_START_NODES_COUNT);
             if remaining > 0 {
-                self.shared_state.build_state.ntuples.fetch_add(remaining, Ordering::Relaxed);
+                self.shared_state
+                    .build_state
+                    .ntuples
+                    .fetch_add(remaining, Ordering::Relaxed);
             }
         } else {
             // For non-initializing workers, add all local tuples
-            self.shared_state.build_state.ntuples.fetch_add(self.local_ntuples, Ordering::Relaxed);
+            self.shared_state
+                .build_state
+                .ntuples
+                .fetch_add(self.local_ntuples, Ordering::Relaxed);
         }
     }
 }
@@ -157,6 +172,9 @@ pub const MAX_DIMENSION: u32 = 16000;
 /// using the SBQ storage type.
 pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
+/// Minimum number of vectors required to enable parallel building.
+pub const MIN_VECTORS_FOR_PARALLEL_BUILD: usize = 65536; // 2^16
+
 /// Data about parallel index build that never changes.
 #[derive(Debug, Copy, Clone)]
 #[cfg_attr(not(feature = "build_parallel"), allow(dead_code))]
@@ -164,6 +182,7 @@ struct ParallelSharedParams {
     heaprelid: Oid,
     indexrelid: Oid,
     is_concurrent: bool,
+    worker_count: usize,
 }
 
 /// Shared build state for parallel index builds.
@@ -266,9 +285,14 @@ pub extern "C-unwind" fn ambuild(
         meta_page.store(&index_relation, false);
     };
 
-    // TODO: unsafe { (*index_info).ii_ParallelWorkers };
     let workers = if cfg!(feature = "build_parallel") && !meta_page.has_labels() {
-        8 // TODO: set properly
+        // Only use parallel building if we have enough vectors to justify it
+        let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
+        if heap_tuples >= MIN_VECTORS_FOR_PARALLEL_BUILD {
+            unsafe { (*index_info).ii_ParallelWorkers }
+        } else {
+            0
+        }
     } else {
         0
     };
@@ -313,6 +337,7 @@ pub extern "C-unwind" fn ambuild(
                         heaprelid: heap_relation.rd_id,
                         indexrelid: index_relation.rd_id,
                         is_concurrent,
+                        worker_count: workers as usize,
                     },
                     build_state: ParallelBuildState {
                         ntuples: AtomicUsize::new(0),
@@ -357,7 +382,10 @@ pub extern "C-unwind" fn ambuild(
             let parallel_shared: *mut ParallelShared =
                 pg_sys::shm_toc_lookup((*pcxt).toc, parallel::SHM_TOC_SHARED_KEY, false)
                     .cast::<ParallelShared>();
-            let ntuples = (*parallel_shared).build_state.ntuples.load(Ordering::Relaxed);
+            let ntuples = (*parallel_shared)
+                .build_state
+                .ntuples
+                .load(Ordering::Relaxed);
             parallel::cleanup_pcxt(pcxt, snapshot);
             ntuples
         }
@@ -369,6 +397,7 @@ pub extern "C-unwind" fn ambuild(
             meta_page,
             write_stats,
             None,
+            workers as usize,
         )
     };
 
@@ -584,18 +613,27 @@ pub extern "C-unwind" fn _vectorscale_build_main(
 
     // Check if this worker should handle the first 1024 nodes for start node initialization
     let should_initialize = unsafe {
-        (*parallel_shared).build_state.start_nodes_initialized.compare_exchange(
-            false, 
-            true, 
-            Ordering::SeqCst, 
-            Ordering::SeqCst
-        ).is_ok()
+        (*parallel_shared)
+            .build_state
+            .start_nodes_initialized
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
     };
 
     if !should_initialize {
         loop {
-            let ntuples = unsafe { (*parallel_shared).build_state.ntuples.load(Ordering::Relaxed) };
-            let init_done = unsafe { (*parallel_shared).build_state.initializing_worker_done.load(Ordering::Relaxed) };
+            let ntuples = unsafe {
+                (*parallel_shared)
+                    .build_state
+                    .ntuples
+                    .load(Ordering::Relaxed)
+            };
+            let init_done = unsafe {
+                (*parallel_shared)
+                    .build_state
+                    .initializing_worker_done
+                    .load(Ordering::Relaxed)
+            };
             if ntuples >= parallel::INITIAL_START_NODES_COUNT || init_done {
                 break;
             }
@@ -628,11 +666,12 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         &index_relation,
         meta_page,
         WriteStats::default(),
-        Some(ParallelBuildInfo { 
-            parallel_shared, 
+        Some(ParallelBuildInfo {
+            parallel_shared,
             is_initializing_worker: should_initialize,
             tablescandesc,
         }),
+        params.worker_count,
     );
 }
 
@@ -643,6 +682,7 @@ fn do_heap_scan(
     mut meta_page: MetaPage,
     mut write_stats: WriteStats,
     parallel_build_info: Option<ParallelBuildInfo>,
+    worker_count: usize,
 ) -> usize {
     unsafe {
         pgstat_progress_update_param(PROGRESS_CREATE_IDX_SUBPHASE, BUILD_PHASE_BUILDING_GRAPH);
@@ -660,6 +700,7 @@ fn do_heap_scan(
             GraphNeighborStore::Builder(BuilderNeighborCache::new(
                 BUILDER_NEIGHBOR_CACHE_SIZE,
                 &meta_page,
+                worker_count,
             )),
             &mut meta_page,
         );
@@ -672,8 +713,13 @@ fn do_heap_scan(
                     graph.get_meta_page(),
                 );
                 let page_type = PlainStorage::page_type();
-                let mut bs =
-                    BuildStateParallel::new(index_relation, graph, page_type, shared_state, parallel_info.is_initializing_worker);
+                let mut bs = BuildStateParallel::new(
+                    index_relation,
+                    graph,
+                    page_type,
+                    shared_state,
+                    parallel_info.is_initializing_worker,
+                );
                 let mut state = StorageBuildStateParallel::Plain(&mut plain, &mut bs);
 
                 unsafe {
@@ -702,8 +748,13 @@ fn do_heap_scan(
                 };
 
                 let page_type = SbqSpeedupStorage::page_type();
-                let mut bs =
-                    BuildStateParallel::new(index_relation, graph, page_type, shared_state, parallel_info.is_initializing_worker);
+                let mut bs = BuildStateParallel::new(
+                    index_relation,
+                    graph,
+                    page_type,
+                    shared_state,
+                    parallel_info.is_initializing_worker,
+                );
                 let mut state = StorageBuildStateParallel::SbqSpeedup(&mut bq, &mut bs);
 
                 unsafe {
@@ -735,6 +786,7 @@ fn do_heap_scan(
             GraphNeighborStore::Builder(BuilderNeighborCache::new(
                 BUILDER_NEIGHBOR_CACHE_SIZE,
                 &meta_page,
+                worker_count,
             )),
             &mut meta_page,
         );
@@ -1080,7 +1132,9 @@ fn build_callback_parallel_internal<S: Storage>(
     );
 
     if state.local_ntuples % 4096 == 0 {
-        state.graph.maybe_flush_neighbor_cache(storage, &mut state.local_stats);
+        state
+            .graph
+            .maybe_flush_neighbor_cache(storage, &mut state.local_stats);
     }
 }
 

@@ -197,10 +197,10 @@ pub unsafe fn IndexBuildHeapScanParallel<T>(
         heap_relation,
         index_relation,
         index_info,
-        true,  // allow_sync
-        false, // anyvisible
-        true,  // progress
-        0,     // start_blockno
+        true,                       // allow_sync
+        false,                      // anyvisible
+        true,                       // progress
+        0,                          // start_blockno
         pg_sys::InvalidBlockNumber, // end_blockno
         build_callback,
         build_callback_state as *mut std::os::raw::c_void,
