@@ -207,3 +207,10 @@ pub unsafe fn IndexBuildHeapScanParallel<T>(
         scan,
     );
 }
+
+/// Is a snapshot MVCC-safe? (This should really be a part of pgrx)
+pub unsafe fn is_mvcc_snapshot(snapshot: *mut pg_sys::SnapshotData) -> bool {
+    let typ = (*snapshot).snapshot_type;
+    typ == pg_sys::SnapshotType::SNAPSHOT_MVCC
+        || typ == pg_sys::SnapshotType::SNAPSHOT_HISTORIC_MVCC
+}
