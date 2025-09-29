@@ -305,13 +305,9 @@ pub extern "C-unwind" fn ambuild(
         notice!("Parallel build with {} workers", workers);
         unsafe {
             pg_sys::EnterParallelMode();
-            const EXTENSION_NAME: *const c_char = {
-                static NAME: &str =
-                    concat!(env!("CARGO_PKG_NAME"), "-", env!("CARGO_PKG_VERSION"), "\0");
-                NAME.as_ptr() as *const c_char
-            };
 
-            let pcxt = pg_sys::CreateParallelContext(EXTENSION_NAME, PARALLEL_BUILD_MAIN, workers);
+            let pcxt =
+                pg_sys::CreateParallelContext(crate::EXTENSION_NAME, PARALLEL_BUILD_MAIN, workers);
             let snapshot = if is_concurrent {
                 pg_sys::RegisterSnapshot(pg_sys::GetTransactionSnapshot())
             } else {
@@ -640,6 +636,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
+    debug1!("Worker should initialize: {}", should_initialize);
 
     let (heap_lockmode, index_lockmode) = if params.is_concurrent {
         (
@@ -1039,18 +1036,6 @@ fn build_callback_internal<S: Storage>(
 
     state.ntuples += 1;
 
-    /*if state.ntuples % 1000 == 0 {
-        debug1!(
-            "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
-            state.ntuples,
-            Instant::now().duration_since(state.started).as_secs_f64(),
-            (Instant::now().duration_since(state.started) / state.ntuples as u32).as_secs_f64(),
-            state.stats.prune_neighbor_stats.distance_comparisons / state.ntuples,
-            state.stats.greedy_search_stats.get_total_distance_comparisons() / state.ntuples,
-            state.stats,
-        );
-    }*/
-
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
         vector.labels().cloned(),
@@ -1095,20 +1080,6 @@ fn build_callback_parallel_internal<S: Storage>(
 
     state.increment_ntuples();
 
-    /*if current_ntuples % 1000 == 0 {
-        if let Some(started) = state.get_started() {
-            debug1!(
-                "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
-                current_ntuples,
-                Instant::now().duration_since(started).as_secs_f64(),
-                (Instant::now().duration_since(started) / current_ntuples as u32).as_secs_f64(),
-                state.local_stats.prune_neighbor_stats.distance_comparisons / current_ntuples,
-                state.local_stats.greedy_search_stats.get_total_distance_comparisons() / current_ntuples,
-                state.local_stats,
-            );
-        }
-    }*/
-
     // Create node using local tape - PostgreSQL page locking handles concurrency
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),
@@ -1131,7 +1102,7 @@ fn build_callback_parallel_internal<S: Storage>(
         true,
     );
 
-    if state.local_ntuples % 4096 == 0 {
+    if state.local_ntuples % parallel::FLUSH_RATE == 0 {
         state
             .graph
             .maybe_flush_neighbor_cache(storage, &mut state.local_stats);

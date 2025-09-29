@@ -375,7 +375,7 @@ impl MetaPage {
         // Serialize the header
         let bytes = header.serialize_to_vec();
         let off = tape.write(&bytes);
-        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_HEADER_OFFSET)); // <- Failing assert
+        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_HEADER_OFFSET));
 
         // Serialize the meta
         let bytes = self.serialize_to_vec();

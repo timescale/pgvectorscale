@@ -706,11 +706,11 @@ digraph G {
         if neighbor_list_len > 0 && cnt_contains == 0 {
             // In tests this should be a hard error.  (There is no guarantee that it
             // cannot happen, but it is very unlikely.)
-            /*debug_assert!(
+            debug_assert!(
                 false,
                 "Inserted {:?} but it became an orphan",
                 index_pointer
-            );*/
+            );
             // In production this is a warning
             pgrx::warning!("Inserted {:?} but it became an orphan", index_pointer);
         }
@@ -737,7 +737,7 @@ digraph G {
     }
 
     /// In parallel builds, periodically flush cached neighbor data to disk
-    /// to prevent accumulating too much data in memory
+    /// to communicate changed neighbors to other workers.
     pub fn maybe_flush_neighbor_cache<S: Storage>(&mut self, storage: &S, stats: &mut InsertStats) {
         if let GraphNeighborStore::Builder(ref cache) = self.neighbor_store {
             // Flush cache when it's getting full to avoid memory pressure

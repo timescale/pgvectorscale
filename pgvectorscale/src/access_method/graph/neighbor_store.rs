@@ -64,7 +64,7 @@ impl BuilderNeighborCache {
         };
 
         Self {
-            neighbor_map: RefCell::new(LruCacheWithStats::new(
+            neighbor_map: RefCell::new(LruCacheWithStats::new_mru(
                 NonZero::new(capacity).unwrap(),
                 "Builder neighbor",
             )),
@@ -163,43 +163,37 @@ impl BuilderNeighborCache {
         _threshold: f64,
     ) {
         let mut cache = self.neighbor_map.borrow_mut();
-        // pgrx::warning!("Flushing neighbors");
-
-        // Flush least recently used entries to disk
         while cache.len() > 0 {
-            if let Some((neighbors_of, entry)) = cache.pop_lru() {
-                drop(cache);
-                // Read existing neighbors from disk and merge with cached neighbors
-                let disk_neighbors =
-                    storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
-                let mut all_neighbors = entry.neighbors;
-                for disk_neighbor in disk_neighbors {
-                    if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
-                        n.get_index_pointer_to_neighbor()
-                            == disk_neighbor.get_index_pointer_to_neighbor()
-                    }) {
-                        all_neighbors.push(disk_neighbor);
-                    }
+            let (neighbors_of, entry) = cache.pop_lru().unwrap();
+            drop(cache);
+            // Read existing neighbors from disk and merge with cached neighbors
+            let disk_neighbors =
+                storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+            let mut all_neighbors = entry.neighbors;
+            for disk_neighbor in disk_neighbors {
+                if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
+                    n.get_index_pointer_to_neighbor()
+                        == disk_neighbor.get_index_pointer_to_neighbor()
+                }) {
+                    all_neighbors.push(disk_neighbor);
                 }
-
-                let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
-                    Graph::prune_neighbors(
-                        self.max_alpha,
-                        self.num_neighbors,
-                        entry.labels.as_ref(),
-                        all_neighbors,
-                        storage,
-                        stats,
-                    )
-                } else {
-                    all_neighbors
-                };
-
-                storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
-                cache = self.neighbor_map.borrow_mut();
-            } else {
-                break;
             }
+
+            let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
+                Graph::prune_neighbors(
+                    self.max_alpha,
+                    self.num_neighbors,
+                    entry.labels.as_ref(),
+                    all_neighbors,
+                    storage,
+                    stats,
+                )
+            } else {
+                all_neighbors
+            };
+
+            storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
+            cache = self.neighbor_map.borrow_mut();
         }
     }
 }
