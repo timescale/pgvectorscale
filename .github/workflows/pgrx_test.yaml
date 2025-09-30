@@ -37,6 +37,9 @@ jobs:
           - enabled: false
             name: "sequential" 
             features: "pg_test"
+        exclude:
+          - pg: { major: 13 }
+            parallel_build: { enabled: true }
 
     env:
       PG_SRC_DIR: pgbuild
