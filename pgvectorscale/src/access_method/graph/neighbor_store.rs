@@ -52,6 +52,25 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
+    fn reconcile_with_disk_neighbors<S: Storage>(
+        &self,
+        neighbors_of: ItemPointer,
+        cached_neighbors: Vec<NeighborWithDistance>,
+        storage: &S,
+        stats: &mut PruneNeighborStats,
+    ) -> Vec<NeighborWithDistance> {
+        let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+        let mut all_neighbors = cached_neighbors;
+        for disk_neighbor in disk_neighbors {
+            if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
+                n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()
+            }) {
+                all_neighbors.push(disk_neighbor);
+            }
+        }
+        all_neighbors
+    }
+
     pub fn new(memory_budget: f64, meta_page: &MetaPage, worker_count: usize) -> Self {
         let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
@@ -130,18 +149,8 @@ impl BuilderNeighborCache {
         let evictee =
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
-            // Read existing neighbors from disk and merge with cached neighbors
-            let disk_neighbors =
-                storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
-            let mut all_neighbors = value.neighbors;
-            for disk_neighbor in disk_neighbors {
-                if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
-                    n.get_index_pointer_to_neighbor()
-                        == disk_neighbor.get_index_pointer_to_neighbor()
-                }) {
-                    all_neighbors.push(disk_neighbor);
-                }
-            }
+            let all_neighbors =
+                self.reconcile_with_disk_neighbors(key, value.neighbors, storage, stats);
             let new_neighbors = Graph::prune_neighbors(
                 self.max_alpha,
                 self.num_neighbors,
@@ -166,18 +175,8 @@ impl BuilderNeighborCache {
         while cache.len() > 0 {
             let (neighbors_of, entry) = cache.pop_lru().unwrap();
             drop(cache);
-            // Read existing neighbors from disk and merge with cached neighbors
-            let disk_neighbors =
-                storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
-            let mut all_neighbors = entry.neighbors;
-            for disk_neighbor in disk_neighbors {
-                if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
-                    n.get_index_pointer_to_neighbor()
-                        == disk_neighbor.get_index_pointer_to_neighbor()
-                }) {
-                    all_neighbors.push(disk_neighbor);
-                }
-            }
+            let all_neighbors =
+                self.reconcile_with_disk_neighbors(neighbors_of, entry.neighbors, storage, stats);
 
             let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
                 Graph::prune_neighbors(
