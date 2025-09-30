@@ -285,7 +285,10 @@ pub extern "C-unwind" fn ambuild(
         meta_page.store(&index_relation, false);
     };
 
-    let workers = if cfg!(feature = "build_parallel") && !meta_page.has_labels() {
+    let workers = if cfg!(feature = "build_parallel")
+        && !meta_page.has_labels()
+        && meta_page.get_storage_type() == StorageType::SbqCompression
+    {
         // Only use parallel building if we have enough vectors to justify it
         let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
         if heap_tuples >= MIN_VECTORS_FOR_PARALLEL_BUILD {
