@@ -707,6 +707,11 @@ pub extern "C-unwind" fn _vectorscale_build_main(
         }),
         params.worker_count,
     );
+
+    unsafe {
+        pg_sys::index_close(indexrel, index_lockmode);
+        pg_sys::table_close(heaprel, heap_lockmode);
+    }
 }
 
 fn do_heap_scan(
