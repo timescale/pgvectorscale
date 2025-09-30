@@ -141,7 +141,7 @@ pub trait LabelSetView {
         false
     }
 
-    fn iter(&self) -> std::slice::Iter<Label> {
+    fn iter(&self) -> std::slice::Iter<'_, Label> {
         self.labels().iter()
     }
 }

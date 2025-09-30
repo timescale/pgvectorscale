@@ -232,7 +232,7 @@ fn get_meta_page(
     }
 
     let meta_page =
-        unsafe { MetaPage::create(&index_relation, dimensions as _, distance_type, opt) };
+        unsafe { MetaPage::create(index_relation, dimensions as _, distance_type, opt) };
 
     if meta_page.get_num_dimensions_to_index() == 0 {
         error!("No dimensions to index");
