@@ -30,6 +30,13 @@ jobs:
             runs_on: ubuntu-22.04
           - type: arm64
             runs_on: cloud-image-runner-arm64
+        parallel_build:
+          - enabled: true
+            name: "parallel"
+            features: "pg_test"
+          - enabled: false
+            name: "sequential" 
+            features: "pg_test"
 
     env:
       PG_SRC_DIR: pgbuild
@@ -66,14 +73,14 @@ jobs:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
         pgrx-version: 0.16.1
 
-    - name: Run Clippy
+    - name: Run Clippy (${{ matrix.parallel_build.name }})
       id: clippy
       run: |
         cd pgvectorscale
-        cargo clippy --all-targets --no-default-features --features 'pg_test pg${{ matrix.pg.major }}'
+        cargo clippy --all-targets --no-default-features --features '${{ matrix.parallel_build.features }} pg${{ matrix.pg.major }}${{ matrix.parallel_build.enabled && ' build_parallel' || '' }}'
 
-    - name: Run tests
+    - name: Run tests (${{ matrix.parallel_build.name }})
       id: runtests 
       run: |
         cd pgvectorscale
-        cargo pgrx test -- pg${{ matrix.pg.major }}
+        cargo pgrx test --no-default-features --features '${{ matrix.parallel_build.features }} pg${{ matrix.pg.major }}${{ matrix.parallel_build.enabled && ' build_parallel' || '' }}' -- pg${{ matrix.pg.major }}
