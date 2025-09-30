@@ -3,7 +3,9 @@ use std::time::Instant;
 
 use pg_sys::{FunctionCall0Coll, InvalidOid};
 use pgrx::ffi::c_char;
-use pgrx::pg_sys::{index_getprocinfo, pgstat_progress_update_param, AsPgCStr, Oid};
+use pgrx::pg_sys::{
+    index_getprocinfo, pgstat_progress_update_param, AsPgCStr, ConditionVariable, Oid,
+};
 use pgrx::*;
 
 use crate::access_method::distance::DistanceType;
@@ -113,10 +115,22 @@ impl<'a> BuildStateParallel<'a> {
         // Only update shared counter for the initializing worker until threshold is reached
         if self.is_initializing_worker && self.local_ntuples <= parallel::INITIAL_START_NODES_COUNT
         {
-            self.shared_state
+            let new_count = self
+                .shared_state
                 .build_state
                 .ntuples
-                .fetch_add(1, Ordering::Relaxed);
+                .fetch_add(1, Ordering::Relaxed)
+                + 1;
+
+            // Signal waiting workers when threshold is reached
+            if new_count >= parallel::INITIAL_START_NODES_COUNT {
+                unsafe {
+                    let cv_ptr = self.shared_state as *const ParallelShared as *mut ParallelShared;
+                    pg_sys::ConditionVariableBroadcast(
+                        &raw mut (*cv_ptr).build_state.initialization_cv,
+                    );
+                }
+            }
         }
     }
 
@@ -127,6 +141,14 @@ impl<'a> BuildStateParallel<'a> {
                 .build_state
                 .initializing_worker_done
                 .store(true, Ordering::Relaxed);
+
+            // Signal waiting workers that initialization is done
+            unsafe {
+                let cv_ptr = self.shared_state as *const ParallelShared as *mut ParallelShared;
+                pg_sys::ConditionVariableBroadcast(
+                    &raw mut (*cv_ptr).build_state.initialization_cv,
+                );
+            }
         }
 
         self.update_shared_ntuples();
@@ -192,6 +214,7 @@ struct ParallelBuildState {
     ntuples: AtomicUsize,
     start_nodes_initialized: AtomicBool,
     initializing_worker_done: AtomicBool,
+    initialization_cv: ConditionVariable,
 }
 
 /// Status data for parallel index builds, shared among all parallel workers.
@@ -331,7 +354,7 @@ pub extern "C-unwind" fn ambuild(
                 let parallel_shared =
                     pg_sys::shm_toc_allocate((*pcxt).toc, size_of::<ParallelShared>())
                         .cast::<ParallelShared>();
-                parallel_shared.write(ParallelShared {
+                let shared_state = ParallelShared {
                     params: ParallelSharedParams {
                         heaprelid: heap_relation.rd_id,
                         indexrelid: index_relation.rd_id,
@@ -342,8 +365,15 @@ pub extern "C-unwind" fn ambuild(
                         ntuples: AtomicUsize::new(0),
                         start_nodes_initialized: AtomicBool::new(false),
                         initializing_worker_done: AtomicBool::new(false),
+                        initialization_cv: std::mem::zeroed(), // Will be initialized below
                     },
-                });
+                };
+                parallel_shared.write(shared_state);
+
+                // Initialize the condition variable
+                pg_sys::ConditionVariableInit(
+                    &raw mut (*parallel_shared).build_state.initialization_cv,
+                );
                 let tablescandesc =
                     pg_sys::shm_toc_allocate((*pcxt).toc, tablescandesc_size_estimate)
                         .cast::<pg_sys::ParallelTableScanDescData>();
@@ -620,23 +650,27 @@ pub extern "C-unwind" fn _vectorscale_build_main(
     };
 
     if !should_initialize {
-        loop {
-            let ntuples = unsafe {
-                (*parallel_shared)
+        unsafe {
+            loop {
+                let ntuples = (*parallel_shared)
                     .build_state
                     .ntuples
-                    .load(Ordering::Relaxed)
-            };
-            let init_done = unsafe {
-                (*parallel_shared)
+                    .load(Ordering::Relaxed);
+                let init_done = (*parallel_shared)
                     .build_state
                     .initializing_worker_done
-                    .load(Ordering::Relaxed)
-            };
-            if ntuples >= parallel::INITIAL_START_NODES_COUNT || init_done {
-                break;
+                    .load(Ordering::Relaxed);
+
+                if ntuples >= parallel::INITIAL_START_NODES_COUNT || init_done {
+                    break;
+                }
+
+                // Wait on condition variable
+                pg_sys::ConditionVariableSleep(
+                    &raw mut (*parallel_shared).build_state.initialization_cv,
+                    pg_sys::PG_WAIT_EXTENSION,
+                );
             }
-            std::thread::sleep(std::time::Duration::from_millis(10));
         }
     }
     debug1!("Worker should initialize: {}", should_initialize);
