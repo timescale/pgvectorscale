@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::num::NonZero;
 
 use pgrx::debug1;
@@ -60,14 +61,17 @@ impl BuilderNeighborCache {
         stats: &mut PruneNeighborStats,
     ) -> Vec<NeighborWithDistance> {
         let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
-        let mut all_neighbors = cached_neighbors;
-        for disk_neighbor in disk_neighbors {
-            if !all_neighbors.iter().any(|n: &NeighborWithDistance| {
-                n.get_index_pointer_to_neighbor() == disk_neighbor.get_index_pointer_to_neighbor()
-            }) {
-                all_neighbors.push(disk_neighbor);
-            }
-        }
+        let mut all_neighbors = Vec::with_capacity(cached_neighbors.len() + disk_neighbors.len());
+
+        let cached_pointers: HashSet<_> = cached_neighbors
+            .iter()
+            .map(|n| n.get_index_pointer_to_neighbor())
+            .collect();
+        all_neighbors.extend(cached_neighbors);
+        all_neighbors.extend(disk_neighbors.into_iter().filter(|disk_neighbor| {
+            !cached_pointers.contains(&disk_neighbor.get_index_pointer_to_neighbor())
+        }));
+
         all_neighbors
     }
 
