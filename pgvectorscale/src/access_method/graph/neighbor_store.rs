@@ -64,7 +64,7 @@ impl BuilderNeighborCache {
         };
 
         Self {
-            neighbor_map: RefCell::new(LruCacheWithStats::new_mru(
+            neighbor_map: RefCell::new(LruCacheWithStats::new(
                 NonZero::new(capacity).unwrap(),
                 "Builder neighbor",
             )),

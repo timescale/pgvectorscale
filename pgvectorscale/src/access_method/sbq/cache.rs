@@ -26,7 +26,7 @@ impl QuantizedVectorCache {
         let capacity = std::cmp::max(memory_budget / Self::entry_size(sbq_vec_len), min_capacity);
 
         Self {
-            cache: LruCacheWithStats::new_mru(NonZero::new(capacity).unwrap(), "Quantized vector"),
+            cache: LruCacheWithStats::new(NonZero::new(capacity).unwrap(), "Quantized vector"),
         }
     }
 

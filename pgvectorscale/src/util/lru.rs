@@ -19,7 +19,6 @@ pub struct LruCacheWithStats<K: Hash + Eq + Clone, V> {
     cache: LruCache<K, V>,
     cache_name: String,
     stats: CacheStats,
-    use_mru: bool,
 }
 
 impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
@@ -29,16 +28,6 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
             cache: LruCache::new(capacity),
             cache_name: cache_name.to_string(),
             stats: CacheStats::default(),
-            use_mru: false,
-        }
-    }
-
-    pub fn new_mru(capacity: NonZero<usize>, cache_name: &str) -> Self {
-        LruCacheWithStats {
-            cache: LruCache::new(capacity),
-            cache_name: cache_name.to_string(),
-            stats: CacheStats::default(),
-            use_mru: true,
         }
     }
 
@@ -73,50 +62,7 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
     /// This differs from the underlying `LruCache::push` method, which returns:
     /// * The old value when updating an existing key
     /// * The evicted key-value pair when inserting a new key
-    ///
-    /// When use_mru is true, implements MRU (Most Recently Used) eviction by
-    /// manually evicting the most recently used item before insertion when the cache is full.
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
-        if self.use_mru && self.cache.len() == self.cache.cap().get() && !self.cache.contains(&key)
-        {
-            // For MRU behavior: we need to evict the most recently used item
-            // The lru crate doesn't have a direct way to get MRU, so we'll simulate it by
-            // first getting the MRU key (which is the last accessed), then removing it
-            let mut mru_key_to_evict = None;
-
-            // Find the MRU key by iterating and taking the last one (most recent)
-            for (k, _) in self.cache.iter() {
-                mru_key_to_evict = Some(k.clone());
-                break; // The first item in iter() is actually the MRU in lru crate
-            }
-
-            if let Some(mru_key) = mru_key_to_evict {
-                if let Some(mru_value) = self.cache.pop(&mru_key) {
-                    // Now insert the new item
-                    self.cache.push(key, value);
-                    self.stats.inserts += 1;
-                    if self.stats.evictions == 0 {
-                        warning!(
-                            "{} cache is full after processing {} vectors; consider increasing maintenance_work_mem",
-                            self.cache_name,
-                            self.stats.inserts
-                        );
-                    }
-                    self.stats.evictions += 1;
-                    if self.stats.evictions % 10000 == 0 {
-                        pgrx::debug1!(
-                            "{} cache capacity {}, stats: {:?}",
-                            self.cache_name,
-                            self.cache.cap(),
-                            self.stats,
-                        );
-                    }
-                    return Some((mru_key, mru_value));
-                }
-            }
-        }
-
-        // Standard LRU behavior or MRU when cache not full
         let result = self.cache.push(key.clone(), value);
         if let Some((old_key, _)) = &result {
             if old_key == &key {
@@ -166,27 +112,13 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
         (self.cache, self.stats)
     }
 
-    /// Remove and return the least recently used key-value pair (LRU mode)
-    /// or the most recently used key-value pair (MRU mode)
+    /// Remove and return the least recently used key-value pair
     pub fn pop_lru(&mut self) -> Option<(K, V)> {
-        if self.use_mru {
-            // For MRU: evict the most recently used item
-            let mru_key_to_evict = self.cache.iter().next().map(|(k, _)| k.clone());
-            if let Some(mru_key) = mru_key_to_evict {
-                if let Some(mru_value) = self.cache.pop(&mru_key) {
-                    self.stats.evictions += 1;
-                    return Some((mru_key, mru_value));
-                }
-            }
-            None
+        if let Some((key, value)) = self.cache.pop_lru() {
+            self.stats.evictions += 1;
+            Some((key, value))
         } else {
-            // Standard LRU behavior
-            if let Some((key, value)) = self.cache.pop_lru() {
-                self.stats.evictions += 1;
-                Some((key, value))
-            } else {
-                None
-            }
+            None
         }
     }
 }
