@@ -1148,7 +1148,6 @@ fn build_callback_parallel_internal<S: Storage>(
         index,
         index_pointer,
         vector,
-        spare_vector,
         storage,
         &mut state.local_stats,
         true,
