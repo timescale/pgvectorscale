@@ -1,8 +1,13 @@
 use crate::util::ports;
 use pgrx::pg_sys;
 
-pub const FLUSH_RATE: usize = 4096;
-pub const INITIAL_START_NODES_COUNT: usize = 1024;
+pub fn flush_rate() -> usize {
+    crate::access_method::guc::TSV_PARALLEL_FLUSH_RATE.get() as usize
+}
+
+pub fn initial_start_nodes_count() -> usize {
+    crate::access_method::guc::TSV_PARALLEL_INITIAL_START_NODES_COUNT.get() as usize
+}
 
 pub const SHM_TOC_SHARED_KEY: u64 = 0xD000000000000001;
 pub const SHM_TOC_TABLESCANDESC_KEY: u64 = 0xD000000000000002;

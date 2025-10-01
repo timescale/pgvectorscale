@@ -113,7 +113,8 @@ impl<'a> BuildStateParallel<'a> {
     fn increment_ntuples(&mut self) {
         self.local_ntuples += 1;
         // Only update shared counter for the initializing worker until threshold is reached
-        if self.is_initializing_worker && self.local_ntuples <= parallel::INITIAL_START_NODES_COUNT
+        if self.is_initializing_worker
+            && self.local_ntuples <= parallel::initial_start_nodes_count()
         {
             let new_count = self
                 .shared_state
@@ -123,7 +124,7 @@ impl<'a> BuildStateParallel<'a> {
                 + 1;
 
             // Signal waiting workers when threshold is reached
-            if new_count >= parallel::INITIAL_START_NODES_COUNT {
+            if new_count >= parallel::initial_start_nodes_count() {
                 unsafe {
                     let cv_ptr = self.shared_state as *const ParallelShared as *mut ParallelShared;
                     pg_sys::ConditionVariableBroadcast(
@@ -169,7 +170,7 @@ impl<'a> BuildStateParallel<'a> {
             // For initializing worker, only add tuples beyond the initial threshold to avoid double counting
             let remaining = self
                 .local_ntuples
-                .saturating_sub(parallel::INITIAL_START_NODES_COUNT);
+                .saturating_sub(parallel::initial_start_nodes_count());
             if remaining > 0 {
                 self.shared_state
                     .build_state
@@ -195,7 +196,16 @@ pub const MAX_DIMENSION: u32 = 16000;
 pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
 /// Minimum number of vectors required to enable parallel building.
-pub const MIN_VECTORS_FOR_PARALLEL_BUILD: usize = 65536; // 2^16
+pub fn min_vectors_for_parallel_build() -> usize {
+    #[cfg(test)]
+    {
+        1
+    }
+    #[cfg(not(test))]
+    {
+        crate::access_method::guc::TSV_MIN_VECTORS_FOR_PARALLEL_BUILD.get() as usize
+    }
+}
 
 /// Data about parallel index build that never changes.
 #[derive(Debug, Copy, Clone)]
@@ -314,7 +324,7 @@ pub extern "C-unwind" fn ambuild(
     {
         // Only use parallel building if we have enough vectors to justify it
         let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
-        if heap_tuples >= MIN_VECTORS_FOR_PARALLEL_BUILD {
+        if heap_tuples >= min_vectors_for_parallel_build() {
             unsafe { (*index_info).ii_ParallelWorkers }
         } else {
             0
@@ -661,7 +671,7 @@ pub extern "C-unwind" fn _vectorscale_build_main(
                     .initializing_worker_done
                     .load(Ordering::Relaxed);
 
-                if ntuples >= parallel::INITIAL_START_NODES_COUNT || init_done {
+                if ntuples >= parallel::initial_start_nodes_count() || init_done {
                     break;
                 }
 
@@ -1144,7 +1154,7 @@ fn build_callback_parallel_internal<S: Storage>(
         true,
     );
 
-    if state.local_ntuples % parallel::FLUSH_RATE == 0 {
+    if state.local_ntuples % parallel::flush_rate() == 0 {
         state
             .graph
             .maybe_flush_neighbor_cache(storage, &mut state.local_stats);
