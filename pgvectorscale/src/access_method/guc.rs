@@ -69,7 +69,7 @@ pub fn init() {
         "If the table has fewer vectors than this threshold, parallel building will be disabled and serial building will be used instead.",
         &TSV_MIN_VECTORS_FOR_PARALLEL_BUILD,
         1,
-        10000000,
+        i32::MAX,
         GucContext::Suset,
         GucFlags::default(),
     );
