@@ -410,7 +410,7 @@ pub mod tests {
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
         // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
-        #[cfg(feature = "pg17")]
+        #[cfg(any(feature = "pg17", feature = "pg18"))]
         {
             let res = Spi::explain(
                 "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
@@ -464,7 +464,7 @@ pub mod tests {
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
         // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
-        #[cfg(feature = "pg17")]
+        #[cfg(any(feature = "pg17", feature = "pg18"))]
         {
             let res = Spi::explain(
                 "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
@@ -876,7 +876,7 @@ pub mod tests {
 
     // For simplicity, only run this test on pg version 16 and above.  Otherwise, we have
     // to choose different seeds for different pg versions to get the test to pass.
-    #[cfg(any(feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
     #[pg_test]
     pub unsafe fn test_labeled_recall() -> spi::Result<()> {
         // Ensure clean environment

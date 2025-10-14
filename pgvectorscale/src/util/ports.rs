@@ -6,7 +6,7 @@ use std::os::raw::c_int;
 
 use memoffset::*;
 
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
 use pg_sys::pgstat_assoc_relation;
 
 use pgrx::pg_sys::{Datum, ItemId, OffsetNumber, Pointer, TupleTableSlot};
@@ -132,13 +132,13 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
         {
             (*tmp).t_counts.t_numscans += 1;
         }
-        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
         {
             (*tmp).counts.numscans += 1;
         }
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
     if indexrel.pgstat_info.is_null() && indexrel.pgstat_enabled {
         pgstat_assoc_relation(index_relation);
         assert!(!indexrel.pgstat_info.is_null());
@@ -147,7 +147,7 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
         {
             (*tmp).t_counts.t_numscans += 1;
         }
-        #[cfg(any(feature = "pg16", feature = "pg17"))]
+        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
         {
             (*tmp).counts.numscans += 1;
         }

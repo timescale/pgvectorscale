@@ -23,7 +23,8 @@ jobs:
             minor: 3
           - major: 17
             minor: 0
-    
+          - major: 18
+            minor: 0
     env:
       PG_SRC_DIR: pgbuild
       PG_INSTALL_DIR: postgresql
@@ -69,7 +70,7 @@ jobs:
         uses: ./.github/actions/install-pgrx
         with:
           pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-          pgrx-version: 0.12.9
+          pgrx-version: 0.16.1
 
       - name: Build and install pgvectorscale
         run: |

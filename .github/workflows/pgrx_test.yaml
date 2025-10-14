@@ -23,6 +23,8 @@ jobs:
             minor: 3
           - major: 17
             minor: 0
+          - major: 18
+            minor: 0
         platform:
           - type: amd64
             runs_on: ubuntu-22.04
@@ -62,7 +64,7 @@ jobs:
       uses: ./.github/actions/install-pgrx
       with:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-        pgrx-version: 0.12.9
+        pgrx-version: 0.16.1
 
     - name: Run Clippy
       id: clippy
