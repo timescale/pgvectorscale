@@ -68,6 +68,8 @@ jobs:
       id: clippy
       run: |
         cd pgvectorscale
+        # Exclude examples (--lib --bins --tests instead of --all-targets) because examples
+        # that use pgrx functions fail to link on ARM64 CI runners
         cargo clippy --lib --bins --tests --no-default-features --features 'pg_test pg${{ matrix.pg.major }}'
 
     - name: Run tests

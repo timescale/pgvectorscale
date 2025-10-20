@@ -5,6 +5,11 @@ use std::thread;
 use rkyv::{Archive, Deserialize, Serialize};
 use vectorscale::lru::{MockAllocator, SharedMemoryLru};
 
+// Cache size constants - can be modified to test different configurations
+const LARGE_CACHE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+const MEDIUM_CACHE_SIZE: usize = 1024 * 1024; // 1MB
+const SMALL_CACHE_SIZE: usize = 10 * 1024; // 10KB - triggers evictions
+
 #[derive(Archive, Serialize, Deserialize, Hash, Eq, PartialEq, Clone, Debug)]
 #[archive(compare(PartialEq))]
 #[archive_attr(derive(Debug))]
@@ -27,7 +32,7 @@ fn bench_insert(c: &mut Criterion) {
             let allocator = MockAllocator::new();
             let cache = SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
                 allocator,
-                10 * 1024 * 1024, // 10MB cache
+                LARGE_CACHE_SIZE,
                 "bench".to_string(),
                 None,
             );
@@ -56,7 +61,7 @@ fn bench_get(c: &mut Criterion) {
         let allocator = MockAllocator::new();
         let cache = SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
             allocator,
-            1024 * 1024, // 1MB cache
+            MEDIUM_CACHE_SIZE,
             "bench".to_string(),
             None,
         );
@@ -80,7 +85,7 @@ fn bench_get(c: &mut Criterion) {
         let allocator = MockAllocator::new();
         let cache = SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
             allocator,
-            1024 * 1024, // 1MB cache
+            MEDIUM_CACHE_SIZE,
             "bench".to_string(),
             None,
         );
@@ -108,7 +113,7 @@ fn bench_eviction(c: &mut Criterion) {
         let allocator = MockAllocator::new();
         let cache = SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
             allocator,
-            10 * 1024, // Small 10KB cache to trigger evictions
+            SMALL_CACHE_SIZE, // Small cache to trigger evictions
             "bench".to_string(),
             None,
         );
@@ -139,7 +144,7 @@ fn bench_concurrent(c: &mut Criterion) {
                 let allocator = MockAllocator::new();
                 let cache = Arc::new(SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
                     allocator,
-                    10 * 1024 * 1024, // 10MB cache
+                    LARGE_CACHE_SIZE,
                     "bench".to_string(),
                     None,
                 ));
@@ -181,7 +186,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
         let allocator = MockAllocator::new();
         let cache = SharedMemoryLru::<BenchKey, BenchValue, MockAllocator>::new(
             allocator,
-            1024 * 1024, // 1MB cache
+            MEDIUM_CACHE_SIZE,
             "bench".to_string(),
             None,
         );

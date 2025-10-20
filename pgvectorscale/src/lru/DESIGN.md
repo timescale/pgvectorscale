@@ -2,7 +2,7 @@
 
 ## Overview
 
-A high-performance, concurrent LRU (Least Recently Used) cache designed for Postgres shared memory environments. The cache stores serialized objects using rkyv for zero-copy access and supports multiple readers/writers with safe entry pinning.
+A high-performance, concurrent LRU (Least Recently Used) cache designed for Postgres shared memory environments. The cache stores serialized objects using rkyv for zero-copy access and supports multiple readers/writers.
 
 ## Key Requirements
 

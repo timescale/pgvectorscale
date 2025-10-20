@@ -297,8 +297,8 @@ fn xor_unoptimized_u128_fixed_size(v1: &[u128], v2: &[u128]) -> usize {
 }
 
 fn benchmark_distance_xor(c: &mut Criterion) {
-    let r: Vec<bool> = (0..1536).map(|v| (v as u64).is_multiple_of(2)).collect();
-    let l: Vec<bool> = (0..1536).map(|v| (v as u64).is_multiple_of(3)).collect();
+    let r: Vec<bool> = (0..1536).map(|v| v as u64 % 2 == 0).collect();
+    let l: Vec<bool> = (0..1536).map(|v| v as u64 % 3 == 0).collect();
     let r_u8 = pack_bools_to_u8(r.clone());
     let l_u8 = pack_bools_to_u8(l.clone());
     let r_u64 = pack_bools_to_u64(r.clone());
