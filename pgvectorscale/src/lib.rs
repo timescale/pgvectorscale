@@ -4,6 +4,7 @@ use pgrx::prelude::*;
 pgrx::pg_module_magic!();
 
 pub mod access_method;
+pub mod lru;
 mod util;
 
 #[allow(non_snake_case)]

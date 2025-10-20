@@ -50,3 +50,7 @@ harness = false
 [[bench]]
 name = "lsr"
 harness = false
+
+[[bench]]
+name = "lru_cache"
+harness = false
