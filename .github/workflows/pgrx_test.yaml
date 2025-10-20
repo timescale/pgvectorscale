@@ -68,7 +68,7 @@ jobs:
       id: clippy
       run: |
         cd pgvectorscale
-        cargo clippy --all-targets --no-default-features --features 'pg_test pg${{ matrix.pg.major }}'
+        cargo clippy --lib --bins --tests --no-default-features --features 'pg_test pg${{ matrix.pg.major }}'
 
     - name: Run tests
       id: runtests 
