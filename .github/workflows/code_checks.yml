@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Run LRU cache tests
-        run: cd pgvectorscale && cargo test -p vectorscale lru::
+        run: cd pgvectorscale && cargo test -p vectorscale lru
 
       - name: Run all unit tests
         run: cd pgvectorscale && cargo test --lib
