@@ -203,7 +203,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
         let mut ops = 0u64;
         b.iter(|| {
             ops += 1;
-            if ops % 5 == 0 {
+            if ops.is_multiple_of(5) {
                 // 20% writes
                 let key = BenchKey { id: counter };
                 counter += 1;

@@ -79,7 +79,7 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
                 );
             }
             self.stats.evictions += 1;
-            if self.stats.evictions % 10000 == 0 {
+            if self.stats.evictions.is_multiple_of(10000) {
                 pgrx::debug1!(
                     "{} cache capacity {}, stats: {:?}",
                     self.cache_name,

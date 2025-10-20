@@ -37,7 +37,7 @@ impl SbqQuantizer {
     pub fn quantized_size_internal(full_vector_size: usize, num_bits_per_dimension: u8) -> usize {
         let num_bits = full_vector_size * num_bits_per_dimension as usize;
 
-        if num_bits % BITS_STORE_TYPE_SIZE == 0 {
+        if num_bits.is_multiple_of(BITS_STORE_TYPE_SIZE) {
             num_bits / BITS_STORE_TYPE_SIZE
         } else {
             (num_bits / BITS_STORE_TYPE_SIZE) + 1
