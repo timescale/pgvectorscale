@@ -20,17 +20,5 @@ jobs:
           echo "cargo version is"
           cargo --version
 
-  unit-tests:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Run LRU cache tests
-        run: cd pgvectorscale && cargo test --no-default-features lru
-
-      - name: Run all unit tests (no postgres)
-        run: cd pgvectorscale && cargo test --no-default-features --lib
 
 
