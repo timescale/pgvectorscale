@@ -26,7 +26,7 @@
 //! - **Fixed hash table size**: Uses 1024 buckets regardless of cache size.
 
 use pgrx::pg_sys;
-use pgrx::pg_sys::LWLockMode::{LW_EXCLUSIVE, LW_SHARED};
+use pgrx::pg_sys::LWLockMode::LW_EXCLUSIVE;
 use pgrx::prelude::*;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::mem::size_of;
@@ -261,9 +261,10 @@ impl PgSharedLru {
         let key_bytes = rkyv::to_bytes::<_, 256>(key).ok()?;
 
         // Acquire structure lock for reading the hash chain
+        // We need exclusive lock because we'll be updating LRU order
         pg_sys::LWLockAcquire(
             &mut (*self.header).structure_lock as *mut _ as _,
-            LW_SHARED as _,
+            LW_EXCLUSIVE as _,
         );
 
         let mut current_offset = (*self.header).hash_buckets[bucket_idx];
@@ -277,18 +278,19 @@ impl PgSharedLru {
                 if (*entry).key_bytes() == key_bytes.as_ref() {
                     // Try to pin the entry
                     if (*entry).try_pin() {
-                        pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
-
-                        // Copy value bytes while pinned
+                        // Copy value bytes while pinned and lock held
                         let value_bytes = (*entry).value_bytes();
                         let mut aligned_value = vec![0u8; value_bytes.len()];
                         aligned_value.copy_from_slice(value_bytes);
 
-                        // Move to head of LRU (requires exclusive lock)
-                        self.move_to_head(current_offset);
+                        // Move to head of LRU (we already have exclusive lock)
+                        self.move_to_head_locked(current_offset);
 
                         // Unpin
                         (*entry).unpin();
+
+                        // Release lock
+                        pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
 
                         // Deserialize and return
                         let archived = rkyv::archived_root::<V>(&aligned_value);
@@ -305,22 +307,19 @@ impl PgSharedLru {
     }
 
     /// Move an entry to the head of the LRU list
-    unsafe fn move_to_head(&self, entry_offset: Offset) {
-        pg_sys::LWLockAcquire(
-            &mut (*self.header).structure_lock as *mut _ as _,
-            LW_EXCLUSIVE as _,
-        );
-
+    /// Assumes exclusive lock is already held by caller
+    unsafe fn move_to_head_locked(&self, entry_offset: Offset) {
         let entry = self.offset_to_ptr::<LruEntry>(entry_offset);
+
+        // Already at head? Nothing to do
+        if (*self.header).head_offset == entry_offset {
+            return;
+        }
 
         // Remove from current position
         if (*entry).prev_offset != INVALID_OFFSET {
             let prev = self.offset_to_ptr::<LruEntry>((*entry).prev_offset);
             (*prev).next_offset = (*entry).next_offset;
-        } else if (*self.header).head_offset == entry_offset {
-            // Already at head
-            pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
-            return;
         }
 
         if (*entry).next_offset != INVALID_OFFSET {
@@ -345,8 +344,6 @@ impl PgSharedLru {
         if (*self.header).tail_offset == INVALID_OFFSET {
             (*self.header).tail_offset = entry_offset;
         }
-
-        pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
     }
 
     /// Insert a key-value pair into the cache
@@ -375,7 +372,7 @@ impl PgSharedLru {
         );
 
         // Check if we need to evict entries to make room
-        while (*self.header).next_free_offset.load(Ordering::Relaxed) + entry_size
+        while (*self.header).next_free_offset.load(Ordering::Acquire) + entry_size
             > (*self.header).memory_total
         {
             if !self.evict_lru() {
@@ -435,10 +432,10 @@ impl PgSharedLru {
             (*self.header).tail_offset = offset as Offset;
         }
 
-        (*self.header).entry_count.fetch_add(1, Ordering::Relaxed);
+        (*self.header).entry_count.fetch_add(1, Ordering::Release);
         (*self.header)
             .memory_used
-            .fetch_add(entry_size, Ordering::Relaxed);
+            .fetch_add(entry_size, Ordering::Release);
 
         pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
 
@@ -501,13 +498,13 @@ impl PgSharedLru {
         }
 
         // Update counts
-        (*self.header).entry_count.fetch_sub(1, Ordering::Relaxed);
+        (*self.header).entry_count.fetch_sub(1, Ordering::Release);
         let entry_size = size_of::<LruEntry>()
             + (*tail_entry).key_size as usize
             + (*tail_entry).value_size as usize;
         (*self.header)
             .memory_used
-            .fetch_sub(entry_size, Ordering::Relaxed);
+            .fetch_sub(entry_size, Ordering::Release);
 
         // Note: In a real implementation with proper memory management,
         // we'd need to handle memory reclamation here. With bump allocation,
@@ -522,8 +519,8 @@ impl PgSharedLru {
     pub fn stats(&self) -> CacheStats {
         unsafe {
             CacheStats {
-                entry_count: (*self.header).entry_count.load(Ordering::Relaxed),
-                memory_used: (*self.header).memory_used.load(Ordering::Relaxed),
+                entry_count: (*self.header).entry_count.load(Ordering::Acquire),
+                memory_used: (*self.header).memory_used.load(Ordering::Acquire),
                 memory_total: (*self.header).memory_total,
             }
         }
