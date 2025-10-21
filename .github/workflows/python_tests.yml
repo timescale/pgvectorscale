@@ -101,7 +101,7 @@ jobs:
           # Initialize the database with trust authentication for all connections
           initdb -D ${{ env.PGDATA }} --auth-local=trust --auth-host=trust
           # Configure shared_preload_libraries for vectorscale
-          echo "shared_preload_libraries = 'vectorscale'" >> ${{ env.PGDATA }}/postgresql.conf
+          echo "shared_preload_libraries = 'vectorscale-0.8.0'" >> ${{ env.PGDATA }}/postgresql.conf
           # Start PostgreSQL server
           pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start || {
             echo "PostgreSQL failed to start. Log contents:"
