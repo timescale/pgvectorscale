@@ -147,7 +147,11 @@ impl LruDsmLeader {
         // Store query string if available
         if query_len > 0 {
             let shared_query = pg_sys::shm_toc_allocate((*pcxt).toc, query_len) as *mut i8;
-            ptr::copy_nonoverlapping(pg_sys::debug_query_string, shared_query, query_len);
+            ptr::copy_nonoverlapping(
+                pg_sys::debug_query_string as *const u8,
+                shared_query as *mut u8,
+                query_len,
+            );
             pg_sys::shm_toc_insert((*pcxt).toc, DSM_KEY_QUERY_TEXT, shared_query as *mut _);
         }
 
