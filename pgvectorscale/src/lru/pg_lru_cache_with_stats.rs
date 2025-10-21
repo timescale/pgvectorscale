@@ -61,11 +61,10 @@ where
     V::Archived: Deserialize<V, rkyv::Infallible>,
 {
     pub fn new(capacity: NonZero<usize>, cache_name: &str) -> Self {
-        // Ensure shared memory is initialized
-        unsafe {
-            if !shared_memory::is_initialized() {
-                shared_memory::init_shared_memory();
-            }
+        // Shared memory should have been initialized by shmem_startup_hook
+        // If it's not initialized, something went wrong during PostgreSQL startup
+        if !shared_memory::is_initialized() {
+            panic!("Shared memory not initialized - shmem_startup_hook may not have been called");
         }
 
         // Determine cache type from name
