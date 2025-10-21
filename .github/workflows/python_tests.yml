@@ -86,7 +86,15 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install -r tests/requirements.txt
-          
+
+      - name: Verify vectorscale installation
+        run: |
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
+          echo "PostgreSQL lib directory:"
+          pg_config --pkglibdir
+          echo "Contents:"
+          ls -la $(pg_config --pkglibdir) | grep -i vector || echo "No vectorscale library found"
+
       - name: Initialize and start PostgreSQL
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
