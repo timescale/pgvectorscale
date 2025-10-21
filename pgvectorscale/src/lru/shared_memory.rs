@@ -14,8 +14,9 @@ use super::pg_lru::PgSharedLru;
 static SHARED_MEMORY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
 /// Size of shared memory to request for each cache type
-const QUANTIZED_VECTOR_CACHE_SHMEM_SIZE: usize = 10 * 1024 * 1024; // 10MB
-const BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE: usize = 10 * 1024 * 1024; // 10MB
+// Reduced size for test environments with limited shared memory
+const QUANTIZED_VECTOR_CACHE_SHMEM_SIZE: usize = 1024 * 1024; // 1MB
+const BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE: usize = 1024 * 1024; // 1MB
 
 /// Total shared memory to request
 pub const TOTAL_SHMEM_SIZE: usize =
