@@ -26,7 +26,7 @@
 //! - **Fixed hash table size**: Uses 1024 buckets regardless of cache size.
 
 use pgrx::pg_sys;
-use pgrx::pg_sys::LWLockMode::LW_EXCLUSIVE;
+use pgrx::pg_sys::LWLockMode::{LW_EXCLUSIVE, LW_SHARED};
 use pgrx::prelude::*;
 use rkyv::{Archive, Deserialize, Serialize};
 use std::mem::size_of;
@@ -260,11 +260,11 @@ impl PgSharedLru {
         // Serialize key for comparison
         let key_bytes = rkyv::to_bytes::<_, 256>(key).ok()?;
 
-        // Acquire structure lock for reading the hash chain
-        // We need exclusive lock because we'll be updating LRU order
+        // Acquire shared lock for reading
+        // We don't update LRU on reads to avoid lock contention and race conditions
         pg_sys::LWLockAcquire(
             &mut (*self.header).structure_lock as *mut _ as _,
-            LW_EXCLUSIVE as _,
+            LW_SHARED as _,
         );
 
         let mut current_offset = (*self.header).hash_buckets[bucket_idx];
@@ -276,15 +276,12 @@ impl PgSharedLru {
             if (*entry).key_hash == hash {
                 // Check if keys match
                 if (*entry).key_bytes() == key_bytes.as_ref() {
-                    // Try to pin the entry
+                    // Try to pin the entry to prevent eviction while we read
                     if (*entry).try_pin() {
                         // Copy value bytes while pinned and lock held
                         let value_bytes = (*entry).value_bytes();
                         let mut aligned_value = vec![0u8; value_bytes.len()];
                         aligned_value.copy_from_slice(value_bytes);
-
-                        // Move to head of LRU (we already have exclusive lock)
-                        self.move_to_head_locked(current_offset);
 
                         // Unpin
                         (*entry).unpin();
@@ -304,46 +301,6 @@ impl PgSharedLru {
 
         pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
         None
-    }
-
-    /// Move an entry to the head of the LRU list
-    /// Assumes exclusive lock is already held by caller
-    unsafe fn move_to_head_locked(&self, entry_offset: Offset) {
-        let entry = self.offset_to_ptr::<LruEntry>(entry_offset);
-
-        // Already at head? Nothing to do
-        if (*self.header).head_offset == entry_offset {
-            return;
-        }
-
-        // Remove from current position
-        if (*entry).prev_offset != INVALID_OFFSET {
-            let prev = self.offset_to_ptr::<LruEntry>((*entry).prev_offset);
-            (*prev).next_offset = (*entry).next_offset;
-        }
-
-        if (*entry).next_offset != INVALID_OFFSET {
-            let next = self.offset_to_ptr::<LruEntry>((*entry).next_offset);
-            (*next).prev_offset = (*entry).prev_offset;
-        } else {
-            // Was at tail
-            (*self.header).tail_offset = (*entry).prev_offset;
-        }
-
-        // Add to head
-        (*entry).prev_offset = INVALID_OFFSET;
-        (*entry).next_offset = (*self.header).head_offset;
-
-        if (*self.header).head_offset != INVALID_OFFSET {
-            let old_head = self.offset_to_ptr::<LruEntry>((*self.header).head_offset);
-            (*old_head).prev_offset = entry_offset;
-        }
-
-        (*self.header).head_offset = entry_offset;
-
-        if (*self.header).tail_offset == INVALID_OFFSET {
-            (*self.header).tail_offset = entry_offset;
-        }
     }
 
     /// Insert a key-value pair into the cache
