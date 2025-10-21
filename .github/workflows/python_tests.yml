@@ -95,7 +95,11 @@ jobs:
           # Configure shared_preload_libraries for vectorscale
           echo "shared_preload_libraries = 'vectorscale'" >> ${{ env.PGDATA }}/postgresql.conf
           # Start PostgreSQL server
-          pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start
+          pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start || {
+            echo "PostgreSQL failed to start. Log contents:"
+            cat /tmp/postgres.log
+            exit 1
+          }
           # Wait for PostgreSQL to start
           sleep 5
           # Create test user and database (using current user, no password needed with trust auth)
