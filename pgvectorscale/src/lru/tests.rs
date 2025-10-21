@@ -1,6 +1,7 @@
 #![allow(clippy::len_zero)]
 #![allow(clippy::type_complexity)]
 #![allow(clippy::unnecessary_cast)]
+#![allow(unused_imports)]
 
 use rkyv::{Archive, Deserialize, Serialize};
 use std::collections::hash_map::DefaultHasher;
@@ -27,6 +28,7 @@ struct TestValue {
     data: Vec<u8>,
 }
 
+#[allow(dead_code)]
 struct TestEvictionHandler {
     evicted: Arc<std::sync::Mutex<Vec<(TestKey, TestValue)>>>,
 }
@@ -38,12 +40,14 @@ impl EvictionHandler<TestKey, TestValue> for TestEvictionHandler {
 }
 
 /// Helper to create a test cache
+#[allow(dead_code)]
 fn create_test_cache(capacity: usize) -> SharedMemoryLru<TestKey, TestValue, MockAllocator> {
     let allocator = MockAllocator::new();
     SharedMemoryLru::new(allocator, capacity, "test".to_string(), None)
 }
 
 /// Helper to create a test cache with eviction handler
+#[allow(dead_code)]
 fn create_test_cache_with_handler(
     capacity: usize,
 ) -> (
@@ -798,7 +802,7 @@ fn test_concurrent_stress_test() {
 
     let start = std::time::Instant::now();
 
-    for thread_id in 0..num_threads {
+    for thread_id in 0..num_threads as u32 {
         let cache = cache.clone();
         let barrier = barrier.clone();
         let handle = thread::spawn(move || {

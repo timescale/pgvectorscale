@@ -15,7 +15,8 @@ use self::{
 };
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[archive(check_bytes)]
+#[archive(compare(PartialEq), check_bytes)]
+#[archive_attr(derive(Debug, PartialEq))]
 #[repr(C)] // Added this so we can compute size via sizeof
 pub struct ItemPointer {
     pub block_number: pgrx::pg_sys::BlockNumber,
@@ -39,12 +40,6 @@ impl Ord for ItemPointer {
 impl ArchivedItemPointer {
     pub fn deserialize_item_pointer(&self) -> ItemPointer {
         self.deserialize(&mut rkyv::Infallible).unwrap()
-    }
-}
-
-impl PartialEq for ArchivedItemPointer {
-    fn eq(&self, other: &Self) -> bool {
-        self.block_number == other.block_number && self.offset == other.offset
     }
 }
 

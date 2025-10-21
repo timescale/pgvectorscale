@@ -4,16 +4,48 @@ use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::labels::LabelSet;
 
+use rkyv::{Archive, Deserialize, Serialize};
+
 //TODO is this right?
 pub type Distance = f32;
 
 // implements a distance with a lazy tie break
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Archive, Deserialize, Serialize)]
+#[archive(check_bytes)]
 pub struct DistanceWithTieBreak {
     distance: Distance,
     from: IndexPointer,
     to: IndexPointer,
+    #[with(Skip)]
     distance_tie_break: OnceCell<usize>,
+}
+
+// Helper for skipping OnceCell in serialization
+struct Skip;
+
+impl rkyv::with::ArchiveWith<OnceCell<usize>> for Skip {
+    type Archived = ();
+    type Resolver = ();
+
+    unsafe fn resolve_with(
+        _: &OnceCell<usize>,
+        _: usize,
+        _: Self::Resolver,
+        _: *mut Self::Archived,
+    ) {
+    }
+}
+
+impl<S: rkyv::Fallible + ?Sized> rkyv::with::SerializeWith<OnceCell<usize>, S> for Skip {
+    fn serialize_with(_: &OnceCell<usize>, _: &mut S) -> Result<Self::Resolver, S::Error> {
+        Ok(())
+    }
+}
+
+impl<D: rkyv::Fallible + ?Sized> rkyv::with::DeserializeWith<(), OnceCell<usize>, D> for Skip {
+    fn deserialize_with(_: &(), _: &mut D) -> Result<OnceCell<usize>, D::Error> {
+        Ok(OnceCell::new())
+    }
 }
 
 impl DistanceWithTieBreak {
@@ -94,7 +126,8 @@ impl PartialEq for DistanceWithTieBreak {
 //promise that PartialEq is reflexive
 impl Eq for DistanceWithTieBreak {}
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Archive, Deserialize, Serialize)]
+#[archive(check_bytes)]
 pub struct NeighborWithDistance {
     index_pointer: IndexPointer,
     distance: DistanceWithTieBreak,
