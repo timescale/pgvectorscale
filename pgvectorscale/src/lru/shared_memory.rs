@@ -13,6 +13,13 @@ use super::pg_lru::PgSharedLru;
 /// Global flag to track if shared memory has been initialized
 static SHARED_MEMORY_INITIALIZED: AtomicBool = AtomicBool::new(false);
 
+/// Previous shmem_request_hook (PG15+)
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+static mut PREV_SHMEM_REQUEST_HOOK: Option<unsafe extern "C" fn()> = None;
+
+/// Previous shmem_startup_hook
+static mut PREV_SHMEM_STARTUP_HOOK: Option<unsafe extern "C" fn()> = None;
+
 /// Size of shared memory to request for each cache type
 // Reduced size for test environments with limited shared memory
 const QUANTIZED_VECTOR_CACHE_SHMEM_SIZE: usize = 1024 * 1024; // 1MB
@@ -32,14 +39,16 @@ pub struct SharedLruCaches {
 /// Global pointer to shared caches (set during initialization)
 static mut SHARED_CACHES: *mut SharedLruCaches = ptr::null_mut();
 
-/// Request shared memory space during _PG_init
+/// Hook callback for shmem_request_hook (PG15+)
 ///
-/// This must be called during _PG_init to reserve shared memory
-/// that will be allocated during PostgreSQL startup.
-///
-/// # Safety
-/// Must be called during PostgreSQL extension initialization
-pub unsafe fn request_shared_memory() {
+/// This is called during PostgreSQL startup to request shared memory
+#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+unsafe extern "C" fn pgvectorscale_shmem_request() {
+    // Call previous hook if it exists
+    if let Some(prev_hook) = PREV_SHMEM_REQUEST_HOOK {
+        prev_hook();
+    }
+
     // Request shared memory for our caches
     pg_sys::RequestAddinShmemSpace(TOTAL_SHMEM_SIZE as _);
 
@@ -52,6 +61,54 @@ pub unsafe fn request_shared_memory() {
         c"pgvectorscale_bn_cache".as_ptr(),
         2, // Two locks per cache
     );
+}
+
+/// Hook callback for shmem_startup_hook
+///
+/// This is called during PostgreSQL startup to initialize shared memory
+unsafe extern "C" fn pgvectorscale_shmem_startup() {
+    // Call previous hook if it exists
+    if let Some(prev_hook) = PREV_SHMEM_STARTUP_HOOK {
+        prev_hook();
+    }
+
+    // Initialize our shared memory structures
+    init_shared_memory();
+}
+
+/// Register shared memory hooks during _PG_init
+///
+/// For PG15+, this sets up the shmem_request_hook
+/// For older versions, it calls RequestAddinShmemSpace directly
+///
+/// # Safety
+/// Must be called during PostgreSQL extension initialization
+pub unsafe fn register_hooks() {
+    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17"))]
+    {
+        // PG15+: Use shmem_request_hook
+        PREV_SHMEM_REQUEST_HOOK = pg_sys::shmem_request_hook;
+        pg_sys::shmem_request_hook = Some(pgvectorscale_shmem_request);
+    }
+
+    #[cfg(not(any(feature = "pg15", feature = "pg16", feature = "pg17")))]
+    {
+        // PG < 15: Call directly in _PG_init
+        pg_sys::RequestAddinShmemSpace(TOTAL_SHMEM_SIZE as _);
+
+        pg_sys::RequestNamedLWLockTranche(
+            c"pgvectorscale_qv_cache".as_ptr(),
+            2, // Two locks per cache
+        );
+        pg_sys::RequestNamedLWLockTranche(
+            c"pgvectorscale_bn_cache".as_ptr(),
+            2, // Two locks per cache
+        );
+    }
+
+    // Register shmem_startup_hook for all versions
+    PREV_SHMEM_STARTUP_HOOK = pg_sys::shmem_startup_hook;
+    pg_sys::shmem_startup_hook = Some(pgvectorscale_shmem_startup);
 }
 
 /// Initialize shared memory structures

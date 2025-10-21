@@ -14,12 +14,10 @@ pub unsafe extern "C" fn _PG_init() {
     access_method::options::init();
     access_method::guc::init();
 
-    // Request shared memory for LRU caches
-    lru::shared_memory::request_shared_memory();
-
-    // Initialize shared memory (will be called later by PostgreSQL)
-    // We'll set up a hook for this
-    lru::shared_memory::init_shared_memory();
+    // Register shared memory hooks for LRU caches
+    // For PG15+, this sets up shmem_request_hook and shmem_startup_hook
+    // For older versions, it requests shared memory directly and sets up shmem_startup_hook
+    lru::shared_memory::register_hooks();
 }
 
 #[allow(non_snake_case)]
