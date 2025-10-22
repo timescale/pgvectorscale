@@ -306,7 +306,7 @@ impl<QDM, PD> TSVResponseIterator<QDM, PD> {
 }
 
 #[pg_guard]
-pub extern "C" fn ambeginscan(
+pub extern "C-unwind" fn ambeginscan(
     index_relation: pg_sys::Relation,
     nkeys: ::std::os::raw::c_int,
     norderbys: ::std::os::raw::c_int,
@@ -333,7 +333,7 @@ pub extern "C" fn ambeginscan(
 }
 
 #[pg_guard]
-pub extern "C" fn amrescan(
+pub extern "C-unwind" fn amrescan(
     scan: pg_sys::IndexScanDesc,
     keys: pg_sys::ScanKey,
     nkeys: ::std::os::raw::c_int,
@@ -367,7 +367,7 @@ pub extern "C" fn amrescan(
 }
 
 #[pg_guard]
-pub extern "C" fn amgettuple(
+pub extern "C-unwind" fn amgettuple(
     scan: pg_sys::IndexScanDesc,
     _direction: pg_sys::ScanDirection::Type,
 ) -> bool {
@@ -436,7 +436,7 @@ fn get_tuple(
 }
 
 #[pg_guard]
-pub extern "C" fn amendscan(scan: pg_sys::IndexScanDesc) {
+pub extern "C-unwind" fn amendscan(scan: pg_sys::IndexScanDesc) {
     let min_level = unsafe {
         let l = pg_sys::log_min_messages;
         let c = pg_sys::client_min_messages;

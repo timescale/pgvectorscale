@@ -99,7 +99,7 @@ static mut RELOPT_KIND_TSV: pg_sys::relopt_kind::Type = 0;
 // so when displaying the info, they'll show the old options and their values as set when the index was created.
 #[allow(clippy::unneeded_field_pattern)] // b/c of offset_of!()
 #[pg_guard]
-pub unsafe extern "C" fn amoptions(
+pub unsafe extern "C-unwind" fn amoptions(
     reloptions: pg_sys::Datum,
     validate: bool,
 ) -> *mut pg_sys::bytea {
@@ -109,31 +109,37 @@ pub unsafe extern "C" fn amoptions(
             optname: "storage_layout".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
             offset: offset_of!(TSVIndexOptions, storage_layout_offset) as i32,
+            isset_offset: 0,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_neighbors".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_neighbors) as i32,
+            isset_offset: 0,
         },
         pg_sys::relopt_parse_elt {
             optname: "search_list_size".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, search_list_size) as i32,
+            isset_offset: 0,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_dimensions".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, num_dimensions) as i32,
+            isset_offset: 0,
         },
         pg_sys::relopt_parse_elt {
             optname: "num_bits_per_dimension".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
             offset: offset_of!(TSVIndexOptions, bq_num_bits_per_dimension) as i32,
+            isset_offset: 0,
         },
         pg_sys::relopt_parse_elt {
             optname: "max_alpha".as_pg_cstr(),
             opttype: pg_sys::relopt_type::RELOPT_TYPE_REAL,
             offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
+            isset_offset: 0,
         },
     ];
 
@@ -159,7 +165,7 @@ unsafe fn build_relopts(
 }
 
 #[pg_guard]
-extern "C" fn validate_storage_layout(value: *const std::os::raw::c_char) {
+extern "C-unwind" fn validate_storage_layout(value: *const std::os::raw::c_char) {
     if value.is_null() {
         // use a default value
         return;

@@ -158,7 +158,7 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
 /// operations. The lock is managed by Postgres, so no RAII/Drop implementation is needed.
 #[allow(non_snake_case)]
 pub fn acquire_index_lock(index: &PgRelation) {
-    let oid = index.oid().as_u32();
+    let oid = u32::from(index.oid());
 
     unsafe {
         // Use PostgreSQL's transaction-level advisory lock with relation OID as key

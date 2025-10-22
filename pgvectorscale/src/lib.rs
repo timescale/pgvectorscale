@@ -8,7 +8,7 @@ mod util;
 
 #[allow(non_snake_case)]
 #[pg_guard]
-pub unsafe extern "C" fn _PG_init() {
+pub unsafe extern "C-unwind" fn _PG_init() {
     access_method::distance::init();
     access_method::options::init();
     access_method::guc::init();
@@ -16,7 +16,7 @@ pub unsafe extern "C" fn _PG_init() {
 
 #[allow(non_snake_case)]
 #[pg_guard]
-pub extern "C" fn _PG_fini() {
+pub extern "C-unwind" fn _PG_fini() {
     // noop
 }
 

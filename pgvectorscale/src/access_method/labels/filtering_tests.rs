@@ -456,10 +456,12 @@ pub mod tests {
             ORDER BY embedding <=> $1::vector, labels
         )
         SELECT COUNT(*) FROM cte;",
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                vector.clone().into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(
+                    vector.clone().into_datum(),
+                    pgrx::pg_sys::FLOAT4ARRAYOID,
+                )
+            }],
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
@@ -486,10 +488,9 @@ pub mod tests {
             ORDER BY labels, embedding <=> $1::vector
         )
         SELECT COUNT(*) FROM cte;",
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                vector.into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(vector.into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID)
+            }],
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
