@@ -404,7 +404,9 @@ impl PgSharedLru {
         );
 
         // Check if we need to evict entries to make room
-        while (*self.header).next_free_offset.load(Ordering::Acquire) + entry_size
+        // Use memory_used instead of next_free_offset because bump allocation
+        // means next_free_offset never decreases, but eviction does decrease memory_used
+        while (*self.header).memory_used.load(Ordering::Acquire) + entry_size
             > (*self.header).memory_total
         {
             pgrx::debug2!(
