@@ -196,6 +196,20 @@ impl PgSharedLru {
     /// The memory at base must already be initialized with a valid cache
     pub unsafe fn from_existing(base: *mut u8, _size: usize) -> PgSharedLru {
         let header = base as *mut LruSharedHeader;
+
+        pgrx::debug2!(
+            "LRU from_existing: creating handle for base={:p}, header={:p}",
+            base,
+            header
+        );
+        pgrx::debug2!(
+            "LRU from_existing: header state - head={}, tail={}, entry_count={}, memory_used={}",
+            (*header).head_offset,
+            (*header).tail_offset,
+            (*header).entry_count.load(Ordering::Acquire),
+            (*header).memory_used.load(Ordering::Acquire)
+        );
+
         PgSharedLru { base, header }
     }
 
@@ -204,6 +218,12 @@ impl PgSharedLru {
     /// # Safety
     /// The provided memory must be valid and large enough
     pub unsafe fn new_in_memory(base: *mut u8, size: usize) -> PgSharedLru {
+        pgrx::debug2!(
+            "LRU new_in_memory: initializing cache at base={:p}, size={}",
+            base,
+            size
+        );
+
         // Initialize header
         let header = base as *mut LruSharedHeader;
         ptr::write_bytes(header, 0, 1);
@@ -224,6 +244,9 @@ impl PgSharedLru {
         for bucket in &mut (*header).hash_buckets {
             *bucket = INVALID_OFFSET;
         }
+
+        pgrx::debug2!("LRU new_in_memory: initialized cache at base={:p}, header={:p}, header_size={}, available={}",
+            base, header, size_of::<LruSharedHeader>(), size - size_of::<LruSharedHeader>());
 
         PgSharedLru { base, header }
     }
@@ -269,6 +292,14 @@ impl PgSharedLru {
         // Serialize key for comparison
         let key_bytes = rkyv::to_bytes::<_, 256>(key).ok()?;
 
+        pgrx::debug2!(
+            "LRU get: hash={:x}, bucket={}, base={:p}, header={:p}",
+            hash,
+            bucket_idx,
+            self.base,
+            self.header
+        );
+
         // Acquire shared lock for reading
         // We don't update LRU on reads to avoid lock contention and race conditions
         pg_sys::LWLockAcquire(
@@ -277,9 +308,17 @@ impl PgSharedLru {
         );
 
         let mut current_offset = (*self.header).hash_buckets[bucket_idx];
+        pgrx::debug2!("LRU get: chain start offset={}", current_offset);
 
         while current_offset != INVALID_OFFSET {
             let entry = self.offset_to_ptr::<LruEntry>(current_offset);
+
+            pgrx::debug2!(
+                "LRU get: checking entry at offset={}, ptr={:p}, hash={:x}",
+                current_offset,
+                entry,
+                (*entry).key_hash
+            );
 
             // Check hash first
             if (*entry).key_hash == hash {
@@ -287,6 +326,11 @@ impl PgSharedLru {
                 if (*entry).key_bytes() == key_bytes.as_ref() {
                     // Try to pin the entry to prevent eviction while we read
                     if (*entry).try_pin() {
+                        pgrx::debug2!(
+                            "LRU get: found and pinned entry at offset={}",
+                            current_offset
+                        );
+
                         // Copy value bytes while pinned and lock held
                         let value_bytes = (*entry).value_bytes();
                         let mut aligned_value = vec![0u8; value_bytes.len()];
@@ -301,6 +345,11 @@ impl PgSharedLru {
                         // Deserialize and return
                         let archived = rkyv::archived_root::<V>(&aligned_value);
                         return Some(archived.deserialize(&mut rkyv::Infallible).unwrap());
+                    } else {
+                        pgrx::debug2!(
+                            "LRU get: entry at offset={} could not be pinned (being deleted)",
+                            current_offset
+                        );
                     }
                 }
             }
@@ -308,6 +357,7 @@ impl PgSharedLru {
             current_offset = (*entry).hash_next_offset;
         }
 
+        pgrx::debug2!("LRU get: miss for hash={:x}", hash);
         pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
         None
     }
@@ -331,16 +381,39 @@ impl PgSharedLru {
         let hash = self.hash_key(&key);
         let bucket_idx = (hash % (*self.header).hash_buckets.len() as u64) as usize;
 
+        pgrx::debug2!(
+            "LRU insert: hash={:x}, bucket={}, entry_size={}, base={:p}",
+            hash,
+            bucket_idx,
+            entry_size,
+            self.base
+        );
+
         // Check if we have space
         pg_sys::LWLockAcquire(
             &mut (*self.header).structure_lock as *mut _ as _,
             LW_EXCLUSIVE as _,
         );
 
+        let before_free = (*self.header).next_free_offset.load(Ordering::Acquire);
+        pgrx::debug2!(
+            "LRU insert: before insert - next_free={}, total={}, need={}",
+            before_free,
+            (*self.header).memory_total,
+            entry_size
+        );
+
         // Check if we need to evict entries to make room
         while (*self.header).next_free_offset.load(Ordering::Acquire) + entry_size
             > (*self.header).memory_total
         {
+            pgrx::debug2!(
+                "LRU insert: need to evict - free={}, total={}, need={}",
+                (*self.header).next_free_offset.load(Ordering::Acquire),
+                (*self.header).memory_total,
+                entry_size
+            );
+
             if !self.evict_lru() {
                 pg_sys::LWLockRelease(&mut (*self.header).structure_lock as *mut _ as _);
                 return Err("Cannot evict enough memory - all entries are pinned".to_string());
@@ -351,6 +424,12 @@ impl PgSharedLru {
         let offset = (*self.header)
             .next_free_offset
             .fetch_add(entry_size, Ordering::SeqCst);
+
+        pgrx::debug2!(
+            "LRU insert: allocated at offset={}, size={}",
+            offset,
+            entry_size
+        );
 
         // Initialize entry
         let entry = self.offset_to_ptr::<LruEntry>(offset as Offset);
@@ -414,14 +493,33 @@ impl PgSharedLru {
         // Must be called with exclusive lock held
         let tail_offset = (*self.header).tail_offset;
 
+        pgrx::debug2!(
+            "LRU evict: attempting eviction, tail_offset={}",
+            tail_offset
+        );
+
         if tail_offset == INVALID_OFFSET {
+            pgrx::debug2!("LRU evict: cache is empty, cannot evict");
             return false; // Empty cache
         }
 
         let tail_entry = self.offset_to_ptr::<LruEntry>(tail_offset);
+        let pin_count = (*tail_entry).pin_count.load(Ordering::Acquire);
+
+        pgrx::debug2!(
+            "LRU evict: tail entry at offset={}, ptr={:p}, pin_count={}, hash={:x}",
+            tail_offset,
+            tail_entry,
+            pin_count,
+            (*tail_entry).key_hash
+        );
 
         // Check if entry is pinned
-        if (*tail_entry).pin_count.load(Ordering::Acquire) > 0 {
+        if pin_count > 0 {
+            pgrx::debug2!(
+                "LRU evict: tail entry is pinned (count={}), cannot evict",
+                pin_count
+            );
             // Can't evict pinned entries
             // In a more sophisticated implementation, we'd walk the list
             // to find an unpinned entry
@@ -430,6 +528,11 @@ impl PgSharedLru {
 
         // Remove from LRU list
         let prev_offset = (*tail_entry).prev_offset;
+        pgrx::debug2!(
+            "LRU evict: removing from LRU list, prev_offset={}",
+            prev_offset
+        );
+
         (*self.header).tail_offset = prev_offset;
 
         if prev_offset != INVALID_OFFSET {
@@ -437,6 +540,7 @@ impl PgSharedLru {
             (*prev).next_offset = INVALID_OFFSET;
         } else {
             // Was the only entry
+            pgrx::debug2!("LRU evict: was the only entry, clearing head");
             (*self.header).head_offset = INVALID_OFFSET;
         }
 
@@ -445,6 +549,12 @@ impl PgSharedLru {
         let bucket_idx = (hash % (*self.header).hash_buckets.len() as u64) as usize;
         let mut current_offset = (*self.header).hash_buckets[bucket_idx];
         let mut prev_hash_offset = INVALID_OFFSET;
+
+        pgrx::debug2!(
+            "LRU evict: removing from hash bucket {}, chain start={}",
+            bucket_idx,
+            current_offset
+        );
 
         while current_offset != INVALID_OFFSET {
             if current_offset == tail_offset {
@@ -455,6 +565,7 @@ impl PgSharedLru {
                     let prev = self.offset_to_ptr::<LruEntry>(prev_hash_offset);
                     (*prev).hash_next_offset = (*tail_entry).hash_next_offset;
                 }
+                pgrx::debug2!("LRU evict: removed from hash chain");
                 break;
             }
 
@@ -471,6 +582,12 @@ impl PgSharedLru {
         (*self.header)
             .memory_used
             .fetch_sub(entry_size, Ordering::Release);
+
+        pgrx::debug2!(
+            "LRU evict: successfully evicted entry at offset={}, freed {} bytes",
+            tail_offset,
+            entry_size
+        );
 
         // Note: In a real implementation with proper memory management,
         // we'd need to handle memory reclamation here. With bump allocation,
