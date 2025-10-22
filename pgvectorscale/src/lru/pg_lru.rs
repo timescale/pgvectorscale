@@ -60,7 +60,7 @@ unsafe fn initialize_lock_tranche() {
 }
 
 /// Shared memory header for the LRU cache
-#[repr(C)]
+#[repr(C, align(8))]
 struct LruSharedHeader {
     /// Lock for the entire structure
     structure_lock: pg_sys::LWLock,

@@ -149,12 +149,12 @@ pub unsafe fn init_shared_memory() {
     ) as *mut u8;
 
     if !found_qv {
-        // Initialize the cache structure in shared memory
+        // First time initialization
         PgSharedLru::new_in_memory(qv_cache_mem, QUANTIZED_VECTOR_CACHE_SHMEM_SIZE);
-
-        // Store the base pointer (same for all processes)
-        (*SHARED_CACHE_DATA).quantized_vector_cache_base = qv_cache_mem;
     }
+
+    // Always store the base pointer (same for all processes)
+    (*SHARED_CACHE_DATA).quantized_vector_cache_base = qv_cache_mem;
 
     // Allocate shared memory for builder neighbor cache
     let bn_cache_mem = pg_sys::ShmemInitStruct(
@@ -164,12 +164,12 @@ pub unsafe fn init_shared_memory() {
     ) as *mut u8;
 
     if !found_bn {
-        // Initialize the cache structure in shared memory
+        // First time initialization
         PgSharedLru::new_in_memory(bn_cache_mem, BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE);
-
-        // Store the base pointer (same for all processes)
-        (*SHARED_CACHE_DATA).builder_neighbor_cache_base = bn_cache_mem;
     }
+
+    // Always store the base pointer (same for all processes)
+    (*SHARED_CACHE_DATA).builder_neighbor_cache_base = bn_cache_mem;
 
     // Mark as initialized
     SHARED_MEMORY_INITIALIZED.store(true, Ordering::Release);
