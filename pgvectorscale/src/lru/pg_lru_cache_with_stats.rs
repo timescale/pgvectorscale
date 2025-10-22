@@ -41,7 +41,7 @@ where
     K::Archived: PartialEq<K>,
     V::Archived: Deserialize<V, rkyv::Infallible>,
 {
-    cache: &'static PgSharedLru,
+    cache: PgSharedLru,
     cache_name: String,
     capacity: usize,
     stats: CacheStats,

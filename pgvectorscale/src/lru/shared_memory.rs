@@ -29,15 +29,15 @@ const BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE: usize = 1024 * 1024; // 1MB
 pub const TOTAL_SHMEM_SIZE: usize =
     QUANTIZED_VECTOR_CACHE_SHMEM_SIZE + BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE;
 
-/// Structure to hold pointers to our shared memory caches
+/// Structure to hold pointers to our shared memory cache data
 #[repr(C)]
-pub struct SharedLruCaches {
-    pub quantized_vector_cache: *mut PgSharedLru,
-    pub builder_neighbor_cache: *mut PgSharedLru,
+pub struct SharedLruCacheData {
+    pub quantized_vector_cache_base: *mut u8,
+    pub builder_neighbor_cache_base: *mut u8,
 }
 
-/// Global pointer to shared caches (set during initialization)
-static mut SHARED_CACHES: *mut SharedLruCaches = ptr::null_mut();
+/// Global pointer to shared cache data pointers (set during initialization)
+static mut SHARED_CACHE_DATA: *mut SharedLruCacheData = ptr::null_mut();
 
 /// Hook callback for shmem_request_hook (PG15+)
 ///
@@ -125,20 +125,20 @@ pub unsafe fn init_shared_memory() {
         return;
     }
 
-    let mut found_caches = false;
+    let mut found_data = false;
     let mut found_qv = false;
     let mut found_bn = false;
 
-    // Allocate shared structure for cache pointers
-    SHARED_CACHES = pg_sys::ShmemInitStruct(
-        c"pgvectorscale_lru_caches".as_ptr(),
-        size_of::<SharedLruCaches>() as _,
-        &mut found_caches as *mut bool,
-    ) as *mut SharedLruCaches;
+    // Allocate shared structure for cache data pointers
+    SHARED_CACHE_DATA = pg_sys::ShmemInitStruct(
+        c"pgvectorscale_lru_cache_data".as_ptr(),
+        size_of::<SharedLruCacheData>() as _,
+        &mut found_data as *mut bool,
+    ) as *mut SharedLruCacheData;
 
-    if !found_caches {
+    if !found_data {
         // First time initialization
-        ptr::write_bytes(SHARED_CACHES, 0, 1);
+        ptr::write_bytes(SHARED_CACHE_DATA, 0, 1);
     }
 
     // Allocate shared memory for quantized vector cache
@@ -149,17 +149,11 @@ pub unsafe fn init_shared_memory() {
     ) as *mut u8;
 
     if !found_qv {
-        // Initialize the cache structure
-        let qv_cache = PgSharedLru::new_in_memory(qv_cache_mem, QUANTIZED_VECTOR_CACHE_SHMEM_SIZE);
+        // Initialize the cache structure in shared memory
+        PgSharedLru::new_in_memory(qv_cache_mem, QUANTIZED_VECTOR_CACHE_SHMEM_SIZE);
 
-        // Allocate space for the cache handle in shared memory
-        (*SHARED_CACHES).quantized_vector_cache = pg_sys::ShmemInitStruct(
-            c"pgvectorscale_qv_cache_handle".as_ptr(),
-            size_of::<PgSharedLru>() as _,
-            &mut found_qv as *mut bool,
-        ) as *mut PgSharedLru;
-
-        ptr::write((*SHARED_CACHES).quantized_vector_cache, qv_cache);
+        // Store the base pointer (same for all processes)
+        (*SHARED_CACHE_DATA).quantized_vector_cache_base = qv_cache_mem;
     }
 
     // Allocate shared memory for builder neighbor cache
@@ -170,17 +164,11 @@ pub unsafe fn init_shared_memory() {
     ) as *mut u8;
 
     if !found_bn {
-        // Initialize the cache structure
-        let bn_cache = PgSharedLru::new_in_memory(bn_cache_mem, BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE);
+        // Initialize the cache structure in shared memory
+        PgSharedLru::new_in_memory(bn_cache_mem, BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE);
 
-        // Allocate space for the cache handle in shared memory
-        (*SHARED_CACHES).builder_neighbor_cache = pg_sys::ShmemInitStruct(
-            c"pgvectorscale_bn_cache_handle".as_ptr(),
-            size_of::<PgSharedLru>() as _,
-            &mut found_bn as *mut bool,
-        ) as *mut PgSharedLru;
-
-        ptr::write((*SHARED_CACHES).builder_neighbor_cache, bn_cache);
+        // Store the base pointer (same for all processes)
+        (*SHARED_CACHE_DATA).builder_neighbor_cache_base = bn_cache_mem;
     }
 
     // Mark as initialized
@@ -190,16 +178,23 @@ pub unsafe fn init_shared_memory() {
 /// Get the shared quantized vector cache
 ///
 /// Returns None if shared memory has not been initialized.
-pub fn get_quantized_vector_cache() -> Option<&'static PgSharedLru> {
+/// Creates a per-process handle pointing to the shared cache data.
+pub fn get_quantized_vector_cache() -> Option<PgSharedLru> {
     if !SHARED_MEMORY_INITIALIZED.load(Ordering::Acquire) {
         return None;
     }
 
     unsafe {
-        if SHARED_CACHES.is_null() || (*SHARED_CACHES).quantized_vector_cache.is_null() {
+        if SHARED_CACHE_DATA.is_null() || (*SHARED_CACHE_DATA).quantized_vector_cache_base.is_null()
+        {
             None
         } else {
-            Some(&*(*SHARED_CACHES).quantized_vector_cache)
+            // Create a per-process handle pointing to shared memory
+            let base = (*SHARED_CACHE_DATA).quantized_vector_cache_base;
+            Some(PgSharedLru::from_existing(
+                base,
+                QUANTIZED_VECTOR_CACHE_SHMEM_SIZE,
+            ))
         }
     }
 }
@@ -207,16 +202,23 @@ pub fn get_quantized_vector_cache() -> Option<&'static PgSharedLru> {
 /// Get the shared builder neighbor cache
 ///
 /// Returns None if shared memory has not been initialized.
-pub fn get_builder_neighbor_cache() -> Option<&'static PgSharedLru> {
+/// Creates a per-process handle pointing to the shared cache data.
+pub fn get_builder_neighbor_cache() -> Option<PgSharedLru> {
     if !SHARED_MEMORY_INITIALIZED.load(Ordering::Acquire) {
         return None;
     }
 
     unsafe {
-        if SHARED_CACHES.is_null() || (*SHARED_CACHES).builder_neighbor_cache.is_null() {
+        if SHARED_CACHE_DATA.is_null() || (*SHARED_CACHE_DATA).builder_neighbor_cache_base.is_null()
+        {
             None
         } else {
-            Some(&*(*SHARED_CACHES).builder_neighbor_cache)
+            // Create a per-process handle pointing to shared memory
+            let base = (*SHARED_CACHE_DATA).builder_neighbor_cache_base;
+            Some(PgSharedLru::from_existing(
+                base,
+                BUILDER_NEIGHBOR_CACHE_SHMEM_SIZE,
+            ))
         }
     }
 }

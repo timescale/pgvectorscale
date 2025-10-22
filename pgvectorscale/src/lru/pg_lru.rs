@@ -190,6 +190,15 @@ impl PgSharedLru {
         Self::new_in_memory(base, size)
     }
 
+    /// Create a handle to an existing shared memory LRU cache
+    ///
+    /// # Safety
+    /// The memory at base must already be initialized with a valid cache
+    pub unsafe fn from_existing(base: *mut u8, _size: usize) -> PgSharedLru {
+        let header = base as *mut LruSharedHeader;
+        PgSharedLru { base, header }
+    }
+
     /// Create a new shared memory LRU cache in pre-allocated memory
     ///
     /// # Safety
