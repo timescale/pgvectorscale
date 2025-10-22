@@ -521,7 +521,7 @@ fn build_callback_internal<S: Storage>(
 
     state.ntuples += 1;
 
-    if state.ntuples % 1000 == 0 {
+    if state.ntuples.is_multiple_of(1000) {
         debug1!(
             "Processed {} tuples in {}s which is {}s/tuple. Dist/tuple: Prune: {} search: {}. Stats: {:?}",
             state.ntuples,

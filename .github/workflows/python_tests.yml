@@ -86,14 +86,31 @@ jobs:
       - name: Install Python dependencies
         run: |
           pip install -r tests/requirements.txt
-          
+
+      - name: Verify vectorscale installation
+        run: |
+          export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
+          echo "PostgreSQL lib directory:"
+          pg_config --pkglibdir
+          echo "Contents:"
+          ls -la $(pg_config --pkglibdir) | grep -i vector || echo "No vectorscale library found"
+
       - name: Initialize and start PostgreSQL
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           # Initialize the database with trust authentication for all connections
           initdb -D ${{ env.PGDATA }} --auth-local=trust --auth-host=trust
+          # Configure shared_preload_libraries for vectorscale
+          echo "shared_preload_libraries = 'vectorscale-0.8.0'" >> ${{ env.PGDATA }}/postgresql.conf
+          # Enable DEBUG2 logging to capture LRU debug messages
+          echo "log_min_messages = DEBUG2" >> ${{ env.PGDATA }}/postgresql.conf
+          echo "client_min_messages = DEBUG2" >> ${{ env.PGDATA }}/postgresql.conf
           # Start PostgreSQL server
-          pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start
+          pg_ctl -D ${{ env.PGDATA }} -l /tmp/postgres.log start || {
+            echo "PostgreSQL failed to start. Log contents:"
+            cat /tmp/postgres.log
+            exit 1
+          }
           # Wait for PostgreSQL to start
           sleep 5
           # Create test user and database (using current user, no password needed with trust auth)
@@ -113,6 +130,14 @@ jobs:
         run: |
           export PATH=~/${{ env.PG_INSTALL_DIR }}/bin:$PATH
           pytest tests/ -v --tb=short
+
+      - name: Dump PostgreSQL logs on failure
+        if: failure()
+        run: |
+          echo "=== PostgreSQL Log (last 200 lines) ==="
+          tail -200 /tmp/postgres.log || echo "Could not read postgres.log"
+          echo "=== Checking if PostgreSQL is still running ==="
+          ps aux | grep postgres || true
 
       - name: Upload test results
         uses: actions/upload-artifact@v4

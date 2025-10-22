@@ -8,20 +8,28 @@ use pgrx::warning;
 
 #[derive(Copy, Clone, Debug, Default)]
 pub struct CacheStats {
+    #[allow(dead_code)]
     pub inserts: usize,
+    #[allow(dead_code)]
     pub updates: usize,
+    #[allow(dead_code)]
     pub hits: usize,
+    #[allow(dead_code)]
     pub misses: usize,
+    #[allow(dead_code)]
     pub evictions: usize,
 }
 
 pub struct LruCacheWithStats<K: Hash + Eq + Clone, V> {
     cache: LruCache<K, V>,
+    #[allow(dead_code)]
     cache_name: String,
+    #[allow(dead_code)]
     stats: CacheStats,
 }
 
 impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
+    #[allow(dead_code)]
     pub fn new(capacity: NonZero<usize>, cache_name: &str) -> Self {
         LruCacheWithStats {
             cache: LruCache::new(capacity),
@@ -30,15 +38,17 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
         }
     }
 
+    #[allow(dead_code)]
     pub fn cap(&self) -> NonZero<usize> {
         self.cache.cap()
     }
 
-    #[allow(unused)]
+    #[allow(dead_code)]
     pub fn len(&self) -> usize {
         self.cache.len()
     }
 
+    #[allow(dead_code)]
     pub fn contains(&mut self, key: &K) -> bool {
         if self.cache.contains(key) {
             self.stats.hits += 1;
@@ -61,6 +71,7 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
     /// This differs from the underlying `LruCache::push` method, which returns:
     /// * The old value when updating an existing key
     /// * The evicted key-value pair when inserting a new key
+    #[allow(dead_code)]
     pub fn push(&mut self, key: K, value: V) -> Option<(K, V)> {
         let result = self.cache.push(key.clone(), value);
         if let Some((old_key, _)) = &result {
@@ -79,7 +90,7 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
                 );
             }
             self.stats.evictions += 1;
-            if self.stats.evictions % 10000 == 0 {
+            if self.stats.evictions.is_multiple_of(10000) {
                 pgrx::debug1!(
                     "{} cache capacity {}, stats: {:?}",
                     self.cache_name,
@@ -93,6 +104,7 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
         result
     }
 
+    #[allow(dead_code)]
     pub fn get(&mut self, key: &K) -> Option<&V> {
         let result = self.cache.get(key);
         if result.is_some() {
@@ -103,10 +115,17 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
         result
     }
 
+    #[allow(dead_code)]
     pub fn stats(&self) -> &CacheStats {
         &self.stats
     }
 
+    #[allow(dead_code)]
+    pub fn stats_clone(&self) -> CacheStats {
+        self.stats
+    }
+
+    #[allow(dead_code)]
     pub fn into_parts(self) -> (LruCache<K, V>, CacheStats) {
         (self.cache, self.stats)
     }

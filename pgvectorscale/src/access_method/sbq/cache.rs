@@ -3,7 +3,8 @@ use std::num::NonZero;
 use pgrx::debug1;
 
 use crate::access_method::storage::Storage;
-use crate::util::lru::LruCacheWithStats;
+// Use the PostgreSQL-native version
+use crate::lru::pg_lru_cache_with_stats::PgLruCacheWithStats;
 
 use crate::{
     access_method::{
@@ -16,7 +17,9 @@ use crate::{
 use super::{node::SbqNode, SbqSpeedupStorage, SbqVectorElement};
 
 pub struct QuantizedVectorCache {
-    cache: LruCacheWithStats<ItemPointer, Vec<SbqVectorElement>>,
+    cache: PgLruCacheWithStats<ItemPointer, Vec<SbqVectorElement>>,
+    // Cache the last accessed value to return references
+    last_value: Option<Vec<SbqVectorElement>>,
 }
 
 impl QuantizedVectorCache {
@@ -26,7 +29,8 @@ impl QuantizedVectorCache {
         let capacity = std::cmp::max(memory_budget / Self::entry_size(sbq_vec_len), min_capacity);
 
         Self {
-            cache: LruCacheWithStats::new(NonZero::new(capacity).unwrap(), "Quantized vector"),
+            cache: PgLruCacheWithStats::new(NonZero::new(capacity).unwrap(), "Quantized vector"),
+            last_value: None,
         }
     }
 
@@ -43,26 +47,51 @@ impl QuantizedVectorCache {
         storage: &SbqSpeedupStorage,
         stats: &mut S,
     ) -> &[SbqVectorElement] {
-        // TODO this probes the cache twice in the case of a hit, figure out
-        // how to do this in a single probe without running afoul of the Rust
-        // borrow checker
-        if !self.cache.contains(&index_pointer) {
-            // Not in cache, need to read from storage
-            let node = unsafe {
-                SbqNode::read(
-                    storage.index,
-                    index_pointer,
-                    storage.get_has_labels(),
-                    stats,
-                )
-            };
-            let vector = node.get_archived_node().get_bq_vector().to_vec();
+        // Try to get from cache first
+        #[cfg(not(test))]
+        {
+            if let Some(value) = self.cache.get(&index_pointer) {
+                self.last_value = Some(value);
+            } else {
+                // Not in cache, need to read from storage
+                let node = unsafe {
+                    SbqNode::read(
+                        storage.index,
+                        index_pointer,
+                        storage.get_has_labels(),
+                        stats,
+                    )
+                };
+                let vector = node.get_archived_node().get_bq_vector().to_vec();
 
-            // Insert into cache and handle evicted item
-            self.cache.push(index_pointer, vector);
+                // Insert into cache
+                self.cache.push(index_pointer, vector.clone());
+                self.last_value = Some(vector);
+            }
+        }
+        #[cfg(test)]
+        {
+            if let Some(value) = self.cache.get(&index_pointer) {
+                self.last_value = Some(value.clone());
+            } else {
+                // Not in cache, need to read from storage
+                let node = unsafe {
+                    SbqNode::read(
+                        storage.index,
+                        index_pointer,
+                        storage.get_has_labels(),
+                        stats,
+                    )
+                };
+                let vector = node.get_archived_node().get_bq_vector().to_vec();
+
+                // Insert into cache
+                self.cache.push(index_pointer, vector.clone());
+                self.last_value = Some(vector);
+            }
         }
 
-        self.cache.get(&index_pointer).unwrap()
+        self.last_value.as_ref().unwrap()
     }
 
     pub fn preload<I: Iterator<Item = IndexPointer>, S: StatsNodeRead>(

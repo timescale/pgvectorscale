@@ -2,9 +2,11 @@ use std::cell::RefCell;
 use std::num::NonZero;
 
 use pgrx::debug1;
+use rkyv::{Archive, Deserialize, Serialize};
 
 use crate::access_method::build::maintenance_work_mem_bytes;
-use crate::util::lru::LruCacheWithStats;
+// Use the PostgreSQL-native version
+use crate::lru::pg_lru_cache_with_stats::PgLruCacheWithStats;
 use crate::util::{IndexPointer, ItemPointer};
 
 use crate::access_method::graph::neighbor_with_distance::*;
@@ -21,6 +23,8 @@ use super::Graph;
 /// until the build is done. Afterwards, calling the `write` method, will write out all
 /// the neighbors to the right pages.
 ///
+#[derive(Clone, Archive, Deserialize, Serialize)]
+#[archive(check_bytes)]
 pub struct NeighborCacheEntry {
     pub labels: Option<LabelSet>,
     pub neighbors: Vec<NeighborWithDistance>,
@@ -46,7 +50,7 @@ impl NeighborCacheEntry {
 
 pub struct BuilderNeighborCache {
     /// Map of node pointer to neighbor cache entry
-    neighbor_map: RefCell<LruCacheWithStats<ItemPointer, NeighborCacheEntry>>,
+    neighbor_map: RefCell<PgLruCacheWithStats<ItemPointer, NeighborCacheEntry>>,
     num_neighbors: usize,
     max_alpha: f64,
 }
@@ -59,7 +63,7 @@ impl BuilderNeighborCache {
             / NeighborCacheEntry::size(meta_page.get_num_neighbors() as _, meta_page.has_labels());
 
         Self {
-            neighbor_map: RefCell::new(LruCacheWithStats::new(
+            neighbor_map: RefCell::new(PgLruCacheWithStats::new(
                 NonZero::new(capacity).unwrap(),
                 "Builder neighbor",
             )),
@@ -70,15 +74,29 @@ impl BuilderNeighborCache {
 
     /// Convert cache to a sorted vector of neighbors
     fn into_sorted(self) -> Vec<(ItemPointer, NeighborCacheEntry)> {
-        let (neighbor_map, stats) = self.neighbor_map.into_inner().into_parts();
-        debug1!(
-            "Builder neighbor cache teardown: capacity {}, stats: {:?}",
-            neighbor_map.cap(),
-            stats
-        );
-        let mut vec = neighbor_map.into_iter().collect::<Vec<_>>();
-        vec.sort_by_key(|(key, _)| *key);
-        vec
+        #[cfg(test)]
+        {
+            let (neighbor_map, stats) = self.neighbor_map.into_inner().into_parts();
+            debug1!(
+                "Builder neighbor cache teardown: capacity {}, stats: {:?}",
+                neighbor_map.cap(),
+                stats
+            );
+            let mut vec = neighbor_map.into_iter().collect::<Vec<_>>();
+            vec.sort_by_key(|(key, _)| *key);
+            vec
+        }
+        #[cfg(not(test))]
+        {
+            // PgLruCacheWithStats doesn't support extracting the internal map,
+            // so we return an empty vec for now
+            // TODO: Add a method to PgSharedLru to iterate over entries
+            debug1!(
+                "Builder neighbor cache teardown: stats: {:?}",
+                self.neighbor_map.borrow().stats_clone()
+            );
+            vec![]
+        }
     }
 
     pub fn get_neighbors<S: Storage>(

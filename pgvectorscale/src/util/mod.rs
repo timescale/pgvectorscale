@@ -15,7 +15,8 @@ use self::{
 };
 
 #[derive(Archive, Deserialize, Serialize, Debug, PartialEq, Eq, Hash, Clone, Copy)]
-#[archive(check_bytes)]
+#[archive(compare(PartialEq), check_bytes)]
+#[archive_attr(derive(Debug, PartialEq))]
 #[repr(C)] // Added this so we can compute size via sizeof
 pub struct ItemPointer {
     pub block_number: pgrx::pg_sys::BlockNumber,
@@ -39,12 +40,6 @@ impl Ord for ItemPointer {
 impl ArchivedItemPointer {
     pub fn deserialize_item_pointer(&self) -> ItemPointer {
         self.deserialize(&mut rkyv::Infallible).unwrap()
-    }
-}
-
-impl PartialEq for ArchivedItemPointer {
-    fn eq(&self, other: &Self) -> bool {
-        self.block_number == other.block_number && self.offset == other.offset
     }
 }
 
@@ -146,12 +141,12 @@ impl ItemPointer {
         pgrx::itemptr::item_pointer_set_all(ctid, self.block_number, self.offset)
     }
 
-    pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer {
+    pub unsafe fn read_bytes(self, index: &PgRelation) -> ReadableBuffer<'_> {
         let page = ReadablePage::read(index, self.block_number);
         page.get_item_unchecked(self.offset)
     }
 
-    pub unsafe fn modify_bytes(self, index: &PgRelation) -> WritableBuffer {
+    pub unsafe fn modify_bytes(self, index: &PgRelation) -> WritableBuffer<'_> {
         let page = WritablePage::modify(index, self.block_number);
         let item_id = PageGetItemId(*page, self.offset);
         let item = PageGetItem(*page, item_id) as *mut u8;
