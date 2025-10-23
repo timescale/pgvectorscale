@@ -104,43 +104,61 @@ pub unsafe extern "C-unwind" fn amoptions(
     validate: bool,
 ) -> *mut pg_sys::bytea {
     // TODO:  how to make this const?  we can't use offset_of!() macro in const definitions, apparently
+
+    fn make_relopt_parse_elt(
+        optname: &str,
+        opttype: pg_sys::relopt_type::Type,
+        offset: i32,
+    ) -> pg_sys::relopt_parse_elt {
+        #[cfg(not(feature = "pg18"))]
+        {
+            pg_sys::relopt_parse_elt {
+                optname: optname.as_pg_cstr(),
+                opttype: opttype,
+                offset,
+            }
+        }
+        #[cfg(feature = "pg18")]
+        {
+            pg_sys::relopt_parse_elt {
+                optname: optname.as_pg_cstr(),
+                opttype: opttype,
+                offset,
+                isset_offset: 0,
+            }
+        }
+    }
     let tab: [pg_sys::relopt_parse_elt; 6] = [
-        pg_sys::relopt_parse_elt {
-            optname: "storage_layout".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_STRING,
-            offset: offset_of!(TSVIndexOptions, storage_layout_offset) as i32,
-            isset_offset: 0,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "num_neighbors".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, num_neighbors) as i32,
-            isset_offset: 0,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "search_list_size".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, search_list_size) as i32,
-            isset_offset: 0,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "num_dimensions".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, num_dimensions) as i32,
-            isset_offset: 0,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "num_bits_per_dimension".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_INT,
-            offset: offset_of!(TSVIndexOptions, bq_num_bits_per_dimension) as i32,
-            isset_offset: 0,
-        },
-        pg_sys::relopt_parse_elt {
-            optname: "max_alpha".as_pg_cstr(),
-            opttype: pg_sys::relopt_type::RELOPT_TYPE_REAL,
-            offset: offset_of!(TSVIndexOptions, max_alpha) as i32,
-            isset_offset: 0,
-        },
+        make_relopt_parse_elt(
+            "storage_layout",
+            pg_sys::relopt_type::RELOPT_TYPE_STRING,
+            offset_of!(TSVIndexOptions, storage_layout_offset) as i32,
+        ),
+        make_relopt_parse_elt(
+            "num_neighbors",
+            pg_sys::relopt_type::RELOPT_TYPE_INT,
+            offset_of!(TSVIndexOptions, num_neighbors) as i32,
+        ),
+        make_relopt_parse_elt(
+            "search_list_size",
+            pg_sys::relopt_type::RELOPT_TYPE_INT,
+            offset_of!(TSVIndexOptions, search_list_size) as i32,
+        ),
+        make_relopt_parse_elt(
+            "num_dimensions",
+            pg_sys::relopt_type::RELOPT_TYPE_INT,
+            offset_of!(TSVIndexOptions, num_dimensions) as i32,
+        ),
+        make_relopt_parse_elt(
+            "num_bits_per_dimension",
+            pg_sys::relopt_type::RELOPT_TYPE_INT,
+            offset_of!(TSVIndexOptions, bq_num_bits_per_dimension) as i32,
+        ),
+        make_relopt_parse_elt(
+            "max_alpha",
+            pg_sys::relopt_type::RELOPT_TYPE_REAL,
+            offset_of!(TSVIndexOptions, max_alpha) as i32,
+        ),
     ];
 
     build_relopts(reloptions, validate, &tab)
