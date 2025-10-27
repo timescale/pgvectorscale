@@ -5,6 +5,7 @@ pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(50);
 pub static TSV_PARALLEL_FLUSH_RATE: GucSetting<i32> = GucSetting::<i32>::new(4096);
 pub static TSV_PARALLEL_INITIAL_START_NODES_COUNT: GucSetting<i32> = GucSetting::<i32>::new(1024);
 pub static TSV_MIN_VECTORS_FOR_PARALLEL_BUILD: GucSetting<i32> = GucSetting::<i32>::new(65536);
+pub static TSV_FORCE_PARALLEL_WORKERS: GucSetting<i32> = GucSetting::<i32>::new(-1);
 
 pub fn init() {
     GucRegistry::define_int_guc(
@@ -70,6 +71,17 @@ pub fn init() {
         &TSV_MIN_VECTORS_FOR_PARALLEL_BUILD,
         1,
         i32::MAX,
+        GucContext::Suset,
+        GucFlags::default(),
+    );
+
+    GucRegistry::define_int_guc(
+        "diskann.force_parallel_workers",
+        "Force a specific number of parallel workers for index builds",
+        "When set to a positive value, this overrides PostgreSQL's automatic worker count determination. Set to -1 to use automatic determination (default).",
+        &TSV_FORCE_PARALLEL_WORKERS,
+        -1,
+        1024,
         GucContext::Suset,
         GucFlags::default(),
     );

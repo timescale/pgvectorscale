@@ -322,12 +322,18 @@ pub extern "C-unwind" fn ambuild(
         && !meta_page.has_labels()
         && meta_page.get_storage_type() == StorageType::SbqCompression
     {
-        // Only use parallel building if we have enough vectors to justify it
-        let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
-        if heap_tuples >= min_vectors_for_parallel_build() {
-            unsafe { (*index_info).ii_ParallelWorkers }
+        // Check if we have a forced worker count setting
+        let forced_workers = crate::access_method::guc::TSV_FORCE_PARALLEL_WORKERS.get();
+        if forced_workers >= 0 {
+            forced_workers as usize
         } else {
-            0
+            // Only use parallel building if we have enough vectors to justify it
+            let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
+            if heap_tuples >= min_vectors_for_parallel_build() {
+                unsafe { (*index_info).ii_ParallelWorkers }
+            } else {
+                0
+            }
         }
     } else {
         0
