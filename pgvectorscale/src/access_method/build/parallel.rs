@@ -1,8 +1,11 @@
 use crate::util::ports;
 use pgrx::pg_sys;
 
-pub fn flush_rate() -> usize {
-    crate::access_method::guc::TSV_PARALLEL_FLUSH_RATE.get() as usize
+pub fn flush_rate(total_vectors: usize) -> usize {
+    let rate = crate::access_method::guc::TSV_PARALLEL_FLUSH_RATE.get();
+    let result = (total_vectors as f64 * rate) as usize;
+    // Ensure we have at least 1 to avoid division by zero or infinite loops
+    result.max(1)
 }
 
 pub fn initial_start_nodes_count() -> usize {

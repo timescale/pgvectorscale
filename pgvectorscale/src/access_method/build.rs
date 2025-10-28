@@ -215,6 +215,7 @@ struct ParallelSharedParams {
     indexrelid: Oid,
     is_concurrent: bool,
     worker_count: usize,
+    total_vectors: usize,
 }
 
 /// Shared build state for parallel index builds.
@@ -376,6 +377,7 @@ pub extern "C-unwind" fn ambuild(
                         indexrelid: index_relation.rd_id,
                         is_concurrent,
                         worker_count: workers as usize,
+                        total_vectors: heap_tuples,
                     },
                     build_state: ParallelBuildState {
                         ntuples: AtomicUsize::new(0),
@@ -1159,7 +1161,8 @@ fn build_callback_parallel_internal<S: Storage>(
         true,
     );
 
-    if state.local_ntuples % parallel::flush_rate() == 0 {
+    let flush_interval = parallel::flush_rate(state.shared_state.params.total_vectors);
+    if state.local_ntuples % flush_interval == 0 {
         state
             .graph
             .maybe_flush_neighbor_cache(storage, &mut state.local_stats);

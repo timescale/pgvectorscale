@@ -2,7 +2,7 @@ use pgrx::{pg_sys::AsPgCStr, *};
 
 pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(50);
-pub static TSV_PARALLEL_FLUSH_RATE: GucSetting<i32> = GucSetting::<i32>::new(4096);
+pub static TSV_PARALLEL_FLUSH_RATE: GucSetting<f64> = GucSetting::<f64>::new(0.1);
 pub static TSV_PARALLEL_INITIAL_START_NODES_COUNT: GucSetting<i32> = GucSetting::<i32>::new(1024);
 pub static TSV_MIN_VECTORS_FOR_PARALLEL_BUILD: GucSetting<i32> = GucSetting::<i32>::new(65536);
 pub static TSV_FORCE_PARALLEL_WORKERS: GucSetting<i32> = GucSetting::<i32>::new(-1);
@@ -42,13 +42,13 @@ pub fn init() {
         GucFlags::default(),
     );
 
-    GucRegistry::define_int_guc(
+    GucRegistry::define_float_guc(
         "diskann.parallel_flush_rate",
-        "The number of tuples processed before flushing neighbor cache in parallel builds",
-        "Controls how often the neighbor cache is flushed during parallel index builds. Higher values use more memory but may improve performance.",
+        "The fraction of total vectors processed before flushing neighbor cache in parallel builds",
+        "Controls how often the neighbor cache is flushed during parallel index builds as a fraction of total vectors (0.0-1.0). Higher values use more memory but may improve performance.",
         &TSV_PARALLEL_FLUSH_RATE,
-        1,
-        100000,
+        0.0,
+        1.0,
         GucContext::Suset,
         GucFlags::default(),
     );
