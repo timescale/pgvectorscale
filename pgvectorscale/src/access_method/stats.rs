@@ -214,6 +214,31 @@ impl StatsNodeWrite for InsertStats {
     }
 }
 
+impl InsertStats {
+    pub fn merge(&mut self, other: &InsertStats) {
+        // Merge individual stats
+        self.prune_neighbor_stats.calls += other.prune_neighbor_stats.calls;
+        self.prune_neighbor_stats.distance_comparisons +=
+            other.prune_neighbor_stats.distance_comparisons;
+        self.prune_neighbor_stats.node_reads += other.prune_neighbor_stats.node_reads;
+        self.prune_neighbor_stats.node_modify += other.prune_neighbor_stats.node_modify;
+        self.prune_neighbor_stats.node_writes += other.prune_neighbor_stats.node_writes;
+        self.prune_neighbor_stats.num_neighbors_before_prune +=
+            other.prune_neighbor_stats.num_neighbors_before_prune;
+        self.prune_neighbor_stats.num_neighbors_after_prune +=
+            other.prune_neighbor_stats.num_neighbors_after_prune;
+
+        self.greedy_search_stats.combine(&other.greedy_search_stats);
+
+        self.quantizer_stats.node_reads += other.quantizer_stats.node_reads;
+        self.quantizer_stats.node_writes += other.quantizer_stats.node_writes;
+
+        self.node_reads += other.node_reads;
+        self.node_modify += other.node_modify;
+        self.node_writes += other.node_writes;
+    }
+}
+
 #[derive(Debug)]
 pub struct WriteStats {
     pub started: Instant,

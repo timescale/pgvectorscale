@@ -735,4 +735,14 @@ digraph G {
         let (_pruned, n) = self.add_neighbors(storage, from, from_labels, new.clone(), prune_stats);
         n.contains(&new[0])
     }
+
+    /// In parallel builds, periodically flush cached neighbor data to disk
+    /// to communicate changed neighbors to other workers.
+    pub fn maybe_flush_neighbor_cache<S: Storage>(&mut self, storage: &S, stats: &mut InsertStats) {
+        if let GraphNeighborStore::Builder(ref cache) = self.neighbor_store {
+            // Flush cache when it's getting full to avoid memory pressure
+            // and ensure nodes get written to disk during parallel processing
+            cache.flush_if_above_threshold(storage, &mut stats.prune_neighbor_stats, 0.8);
+        }
+    }
 }
