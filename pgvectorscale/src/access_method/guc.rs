@@ -43,9 +43,13 @@ pub fn init() {
     );
 
     GucRegistry::define_float_guc(
-        "diskann.parallel_flush_rate",
-        "The fraction of total vectors processed before flushing neighbor cache in parallel builds",
-        "Controls how often the neighbor cache is flushed during parallel index builds as a fraction of total vectors (0.0-1.0). Higher values use more memory but may improve performance.",
+        unsafe { std::ffi::CStr::from_ptr("diskann.parallel_flush_rate".as_pg_cstr()) },
+        unsafe {
+            std::ffi::CStr::from_ptr("The fraction of total vectors processed before flushing neighbor cache in parallel builds".as_pg_cstr())
+        },
+        unsafe {
+            std::ffi::CStr::from_ptr("Controls how often the neighbor cache is flushed during parallel index builds as a fraction of total vectors (0.0-1.0).".as_pg_cstr())
+        },
         &TSV_PARALLEL_FLUSH_RATE,
         0.0,
         1.0,
@@ -54,9 +58,18 @@ pub fn init() {
     );
 
     GucRegistry::define_int_guc(
-        "diskann.parallel_initial_start_nodes_count",
-        "The number of initial start nodes to process before starting parallel workers",
-        "Determines how many nodes the initializing worker processes before other workers begin. Affects parallel build coordination.",
+        unsafe {
+            std::ffi::CStr::from_ptr("diskann.parallel_initial_start_nodes_count".as_pg_cstr())
+        },
+        unsafe {
+            std::ffi::CStr::from_ptr(
+                "The number of initial start nodes to process before starting parallel workers"
+                    .as_pg_cstr(),
+            )
+        },
+        unsafe {
+            std::ffi::CStr::from_ptr("Determines how many nodes the initializing worker processes before other workers begin. Affects parallel build coordination.".as_pg_cstr())
+        },
         &TSV_PARALLEL_INITIAL_START_NODES_COUNT,
         1,
         10000,
@@ -65,9 +78,15 @@ pub fn init() {
     );
 
     GucRegistry::define_int_guc(
-        "diskann.min_vectors_for_parallel_build",
-        "Minimum number of vectors required to enable parallel building",
-        "If the table has fewer vectors than this threshold, parallel building will be disabled and serial building will be used instead.",
+        unsafe { std::ffi::CStr::from_ptr("diskann.min_vectors_for_parallel_build".as_pg_cstr()) },
+        unsafe {
+            std::ffi::CStr::from_ptr(
+                "Minimum number of vectors required to enable parallel building".as_pg_cstr(),
+            )
+        },
+        unsafe {
+            std::ffi::CStr::from_ptr("If the table has fewer vectors than this threshold, parallel building will be disabled and serial building will be used instead.".as_pg_cstr())
+        },
         &TSV_MIN_VECTORS_FOR_PARALLEL_BUILD,
         1,
         i32::MAX,
@@ -76,9 +95,15 @@ pub fn init() {
     );
 
     GucRegistry::define_int_guc(
-        "diskann.force_parallel_workers",
-        "Force a specific number of parallel workers for index builds",
-        "When set to a positive value, this overrides PostgreSQL's automatic worker count determination. Set to -1 to use automatic determination (default).",
+        unsafe { std::ffi::CStr::from_ptr("diskann.force_parallel_workers".as_pg_cstr()) },
+        unsafe {
+            std::ffi::CStr::from_ptr(
+                "Force a specific number of parallel workers for index builds".as_pg_cstr(),
+            )
+        },
+        unsafe {
+            std::ffi::CStr::from_ptr("When set to a positive value, this overrides PostgreSQL's automatic worker count determination. Set to -1 to use automatic determination (default).".as_pg_cstr())
+        },
         &TSV_FORCE_PARALLEL_WORKERS,
         -1,
         1024,

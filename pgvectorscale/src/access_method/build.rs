@@ -319,6 +319,7 @@ pub extern "C-unwind" fn ambuild(
         meta_page.store(&index_relation, false);
     };
 
+    let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
     let workers = if cfg!(feature = "build_parallel")
         && !meta_page.has_labels()
         && meta_page.get_storage_type() == StorageType::SbqCompression
@@ -329,9 +330,8 @@ pub extern "C-unwind" fn ambuild(
             forced_workers as usize
         } else {
             // Only use parallel building if we have enough vectors to justify it
-            let heap_tuples = unsafe { heap_relation.rd_rel.as_ref().unwrap().reltuples as usize };
             if heap_tuples >= min_vectors_for_parallel_build() {
-                unsafe { (*index_info).ii_ParallelWorkers }
+                unsafe { (*index_info).ii_ParallelWorkers as usize }
             } else {
                 0
             }
@@ -349,8 +349,11 @@ pub extern "C-unwind" fn ambuild(
         unsafe {
             pg_sys::EnterParallelMode();
 
-            let pcxt =
-                pg_sys::CreateParallelContext(crate::EXTENSION_NAME, PARALLEL_BUILD_MAIN, workers);
+            let pcxt = pg_sys::CreateParallelContext(
+                crate::EXTENSION_NAME,
+                PARALLEL_BUILD_MAIN,
+                workers as i32,
+            );
             let snapshot = if is_concurrent {
                 pg_sys::RegisterSnapshot(pg_sys::GetTransactionSnapshot())
             } else {
@@ -1021,7 +1024,7 @@ unsafe extern "C-unwind" fn build_callback(
 }
 
 #[pg_guard]
-unsafe extern "C" fn build_callback_parallel(
+unsafe extern "C-unwind" fn build_callback_parallel(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
     values: *mut pg_sys::Datum,
@@ -1132,7 +1135,7 @@ fn build_callback_parallel_internal<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
-    spare_vector: LabeledVector,
+    _spare_vector: LabeledVector,
     state: &mut BuildStateParallel,
     storage: &mut S,
 ) {
@@ -1158,7 +1161,6 @@ fn build_callback_parallel_internal<S: Storage>(
         vector,
         storage,
         &mut state.local_stats,
-        true,
     );
 
     let flush_interval = parallel::flush_rate(state.shared_state.params.total_vectors);
