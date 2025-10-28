@@ -73,7 +73,7 @@ pub const MAX_DIMENSION: u32 = 16000;
 pub const MAX_DIMENSION_NO_SBQ: u32 = 2000;
 
 #[pg_guard]
-pub extern "C" fn ambuild(
+pub extern "C-unwind" fn ambuild(
     heaprel: pg_sys::Relation,
     indexrel: pg_sys::Relation,
     index_info: *mut pg_sys::IndexInfo,
@@ -146,10 +146,16 @@ pub extern "C" fn ambuild(
     result.into_pg()
 }
 
-#[cfg(any(feature = "pg14", feature = "pg15", feature = "pg16", feature = "pg17"))]
+#[cfg(any(
+    feature = "pg14",
+    feature = "pg15",
+    feature = "pg16",
+    feature = "pg17",
+    feature = "pg18"
+))]
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn aminsert(
+pub unsafe extern "C-unwind" fn aminsert(
     indexrel: pg_sys::Relation,
     values: *mut pg_sys::Datum,
     isnull: *mut bool,
@@ -164,7 +170,7 @@ pub unsafe extern "C" fn aminsert(
 
 #[cfg(feature = "pg13")]
 #[pg_guard]
-pub unsafe extern "C" fn aminsert(
+pub unsafe extern "C-unwind" fn aminsert(
     indexrel: pg_sys::Relation,
     values: *mut pg_sys::Datum,
     isnull: *mut bool,
@@ -260,7 +266,7 @@ unsafe fn insert_storage<S: Storage>(
 }
 
 #[pg_guard]
-pub extern "C" fn ambuildempty(_index_relation: pg_sys::Relation) {
+pub extern "C-unwind" fn ambuildempty(_index_relation: pg_sys::Relation) {
     panic!("ambuildempty: not yet implemented")
 }
 
@@ -450,7 +456,7 @@ fn finalize_index_build<S: Storage>(
 }
 
 #[pg_guard]
-unsafe extern "C" fn build_callback_bq_train(
+unsafe extern "C-unwind" fn build_callback_bq_train(
     _index: pg_sys::Relation,
     _ctid: pg_sys::ItemPointer,
     values: *mut pg_sys::Datum,
@@ -466,7 +472,7 @@ unsafe extern "C" fn build_callback_bq_train(
 }
 
 #[pg_guard]
-unsafe extern "C" fn build_callback(
+unsafe extern "C-unwind" fn build_callback(
     index: pg_sys::Relation,
     ctid: pg_sys::ItemPointer,
     values: *mut pg_sys::Datum,
@@ -552,7 +558,7 @@ const BUILD_PHASE_BUILDING_GRAPH: i64 = 1;
 const BUILD_PHASE_FINALIZING_GRAPH: i64 = 2;
 
 #[pg_guard]
-pub unsafe extern "C" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
+pub unsafe extern "C-unwind" fn ambuildphasename(phasenum: i64) -> *mut ffi::c_char {
     match phasenum {
         BUILD_PHASE_TRAINING => "training quantizer".as_pg_cstr(),
         BUILD_PHASE_BUILDING_GRAPH => "building graph".as_pg_cstr(),
@@ -656,10 +662,7 @@ pub mod tests {
             WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
+                &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.clone().into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
             )?;
 
         //FIXME: should work in all cases
@@ -724,10 +727,12 @@ pub mod tests {
         )
         SELECT array_agg(ctid) from cte;"
             ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(
+                    test_vec.clone().into_datum(),
+                    pgrx::pg_sys::FLOAT4ARRAYOID,
+                )
+            }],
         )?;
 
         /* Test that the explain plan is generated ok */
@@ -747,10 +752,12 @@ pub mod tests {
         )
         SELECT array_agg(ctid) from cte;"
             ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(
+                    test_vec.clone().into_datum(),
+                    pgrx::pg_sys::FLOAT4ARRAYOID,
+                )
+            }],
         )?;
         assert!(explain.is_some());
         //warning!("explain: {}", explain.unwrap().0);
@@ -771,10 +778,12 @@ pub mod tests {
         )
         SELECT array_agg(ctid) from cte;"
             ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(
+                    test_vec.clone().into_datum(),
+                    pgrx::pg_sys::FLOAT4ARRAYOID,
+                )
+            }],
         )?
         .unwrap();
 
@@ -800,10 +809,7 @@ pub mod tests {
         WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.into_datum(),
-            )],
+            &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
         )?;
 
             assert_eq!(cnt.unwrap(), 312);
@@ -1066,10 +1072,7 @@ pub mod tests {
             WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
             ",
                 ),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
+                &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.clone().into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
             )?;
 
         assert!(cnt.unwrap() == expected_cnt, "initial count");
@@ -1105,10 +1108,7 @@ pub mod tests {
         WITH cte as (select * from {table_name} order by embedding {operator} $1::vector) SELECT count(*) from cte;
         ",
             ),
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                test_vec.clone().into_datum(),
-            )],
+            &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.clone().into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
         )?;
 
         assert!(cnt.unwrap() == expected_cnt, "after update count");
@@ -1133,10 +1133,7 @@ pub mod tests {
             SET diskann.query_search_list_size = 2;
             WITH cte as (select * from {table_name} order by embedding <=> $1::vector) SELECT count(*) from cte;
             "),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
+                &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.clone().into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
             )?;
 
         if cnt.unwrap() != expected_cnt {
@@ -1148,10 +1145,7 @@ pub mod tests {
             SET diskann.query_search_list_size = 2;
             WITH cte as (select id from {table_name} EXCEPT (select id from {table_name} order by embedding <=> $1::vector)) SELECT ctid::text || ' ' || id from {table_name} where id in (select id from cte limit 1);
             "),
-                vec![(
-                    pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                    test_vec.clone().into_datum(),
-                )],
+                &[unsafe { pgrx::datum::DatumWithOid::new(test_vec.clone().into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID) }],
             )?;
 
             assert_eq!(cnt.unwrap(), expected_cnt, "id is {}", id.unwrap());

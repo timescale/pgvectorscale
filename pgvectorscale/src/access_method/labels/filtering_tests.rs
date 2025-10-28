@@ -410,7 +410,7 @@ pub mod tests {
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
         // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
-        #[cfg(feature = "pg17")]
+        #[cfg(any(feature = "pg17", feature = "pg18"))]
         {
             let res = Spi::explain(
                 "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
@@ -456,15 +456,17 @@ pub mod tests {
             ORDER BY embedding <=> $1::vector, labels
         )
         SELECT COUNT(*) FROM cte;",
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                vector.clone().into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(
+                    vector.clone().into_datum(),
+                    pgrx::pg_sys::FLOAT4ARRAYOID,
+                )
+            }],
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
         // Ensure that the index is used.  Test seems to be unreliable pre-pg17.
-        #[cfg(feature = "pg17")]
+        #[cfg(any(feature = "pg17", feature = "pg18"))]
         {
             let res = Spi::explain(
                 "SELECT * FROM test_complex_order_by WHERE labels && '{1}' ORDER BY embedding <=> '[0,0,0]', labels;"
@@ -486,10 +488,9 @@ pub mod tests {
             ORDER BY labels, embedding <=> $1::vector
         )
         SELECT COUNT(*) FROM cte;",
-            vec![(
-                pgrx::PgOid::Custom(pgrx::pg_sys::FLOAT4ARRAYOID),
-                vector.into_datum(),
-            )],
+            &[unsafe {
+                pgrx::datum::DatumWithOid::new(vector.into_datum(), pgrx::pg_sys::FLOAT4ARRAYOID)
+            }],
         )?;
         assert_eq!(2, res.unwrap(), "Should find 2 documents with label 1");
 
@@ -876,7 +877,7 @@ pub mod tests {
 
     // For simplicity, only run this test on pg version 16 and above.  Otherwise, we have
     // to choose different seeds for different pg versions to get the test to pass.
-    #[cfg(any(feature = "pg16", feature = "pg17"))]
+    #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
     #[pg_test]
     pub unsafe fn test_labeled_recall() -> spi::Result<()> {
         // Ensure clean environment

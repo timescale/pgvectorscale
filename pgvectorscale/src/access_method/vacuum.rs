@@ -21,7 +21,7 @@ use crate::{
 use super::storage::{NodeVacuum, Storage, StorageType};
 
 #[pg_guard]
-pub extern "C" fn ambulkdelete(
+pub extern "C-unwind" fn ambulkdelete(
     info: *mut pg_sys::IndexVacuumInfo,
     stats: *mut pg_sys::IndexBulkDeleteResult,
     callback: pg_sys::IndexBulkDeleteCallback,
@@ -91,7 +91,14 @@ fn bulk_delete_for_storage<S: Storage, N: NodeVacuum>(
         }
         let mut modified = false;
 
-        unsafe { pg_sys::vacuum_delay_point() };
+        #[cfg(feature = "pg18")]
+        unsafe {
+            pg_sys::vacuum_delay_point(false)
+        };
+        #[cfg(not(feature = "pg18"))]
+        unsafe {
+            pg_sys::vacuum_delay_point()
+        };
 
         let max_offset = unsafe { PageGetMaxOffsetNumber(*page) };
         for offset_number in FirstOffsetNumber..(max_offset + 1) as _ {
@@ -129,7 +136,7 @@ fn bulk_delete_for_storage<S: Storage, N: NodeVacuum>(
 }
 
 #[pg_guard]
-pub extern "C" fn amvacuumcleanup(
+pub extern "C-unwind" fn amvacuumcleanup(
     vinfo: *mut pg_sys::IndexVacuumInfo,
     stats: *mut pg_sys::IndexBulkDeleteResult,
 ) -> *mut pg_sys::IndexBulkDeleteResult {

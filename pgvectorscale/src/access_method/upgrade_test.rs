@@ -30,9 +30,15 @@ pub mod tests {
         amname: &str,
     ) {
         if cfg!(feature = "pg17")
-            && semver::Version::parse(version).unwrap() < semver::Version::parse("0.4.0").unwrap()
+            || cfg!(feature = "pg18")
+                && semver::Version::parse(version).unwrap()
+                    < semver::Version::parse("0.4.0").unwrap()
         {
             // PG17 was not supported before 0.4.0
+            return;
+        }
+        if cfg!(feature = "pg18") {
+            // No release for PG18 yet
             return;
         }
         pgrx_tests::run_test(

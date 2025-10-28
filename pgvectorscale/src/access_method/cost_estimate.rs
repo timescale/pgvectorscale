@@ -3,7 +3,7 @@ use pgrx::*;
 /// cost estimate function loosely based on how ivfflat does things
 #[pg_guard(immutable, parallel_safe)]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn amcostestimate(
+pub unsafe extern "C-unwind" fn amcostestimate(
     root: *mut pg_sys::PlannerInfo,
     path: *mut pg_sys::IndexPath,
     loop_count: f64,
@@ -14,28 +14,21 @@ pub unsafe extern "C" fn amcostestimate(
     index_pages: *mut f64,
 ) {
     if (*path).indexorderbys.is_null() {
-        //can't use index without order bys
+        // Can't use index without order-bys
         *index_startup_cost = f64::MAX;
         *index_total_cost = f64::MAX;
         *index_selectivity = 0.;
         *index_correlation = 0.;
         *index_pages = 0.;
+        #[cfg(any(feature = "pg18"))]
+        {
+            // Following in the footsteps of pgvector's PG18+ cost estimate change
+            // https://github.com/pgvector/pgvector/commit/1291b12090bbb03bd92b92e42a1567ae5b1c96ad
+            (*path).path.disabled_nodes = 2;
+        }
         return;
     }
     let path_ref = path.as_ref().expect("path argument is NULL");
-    /*let indexinfo = path_ref
-        .indexinfo
-        .as_ref()
-        .expect("indexinfo in path is NULL");
-    let index_relation = unsafe {
-        PgRelation::with_lock(
-            indexinfo.indexoid,
-            pg_sys::AccessShareLock as pg_sys::LOCKMODE,
-        )
-    };
-    let heap_relation = index_relation
-    .heap_relation()
-    .expect("failed to get heap relation for index");*/
 
     let total_index_tuples = (*path_ref.indexinfo).tuples;
 
