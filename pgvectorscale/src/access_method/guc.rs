@@ -2,7 +2,7 @@ use pgrx::{pg_sys::AsPgCStr, *};
 
 pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(50);
-pub static TSV_PARALLEL_FLUSH_RATE: GucSetting<f64> = GucSetting::<f64>::new(0.1);
+pub static TSV_PARALLEL_FLUSH_INTERVAL: GucSetting<f64> = GucSetting::<f64>::new(0.1);
 pub static TSV_PARALLEL_INITIAL_START_NODES_COUNT: GucSetting<i32> = GucSetting::<i32>::new(1024);
 pub static TSV_MIN_VECTORS_FOR_PARALLEL_BUILD: GucSetting<i32> = GucSetting::<i32>::new(65536);
 pub static TSV_FORCE_PARALLEL_WORKERS: GucSetting<i32> = GucSetting::<i32>::new(-1);
@@ -43,14 +43,14 @@ pub fn init() {
     );
 
     GucRegistry::define_float_guc(
-        unsafe { std::ffi::CStr::from_ptr("diskann.parallel_flush_rate".as_pg_cstr()) },
+        unsafe { std::ffi::CStr::from_ptr("diskann.parallel_flush_interval".as_pg_cstr()) },
         unsafe {
             std::ffi::CStr::from_ptr("The fraction of total vectors processed before flushing neighbor cache in parallel builds".as_pg_cstr())
         },
         unsafe {
             std::ffi::CStr::from_ptr("Controls how often the neighbor cache is flushed during parallel index builds as a fraction of total vectors (0.0-1.0).".as_pg_cstr())
         },
-        &TSV_PARALLEL_FLUSH_RATE,
+        &TSV_PARALLEL_FLUSH_INTERVAL,
         0.0,
         1.0,
         GucContext::Suset,
