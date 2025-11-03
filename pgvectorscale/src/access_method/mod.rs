@@ -83,7 +83,7 @@ fn amhandler(_fcinfo: pg_sys::FunctionCallInfo) -> PgBox<pg_sys::IndexAmRoutine>
 
     amroutine.ambuildphasename = Some(build::ambuildphasename);
 
-    #[cfg(all(feature = "pg17", feature = "build_parallel"))]
+    #[cfg(all(any(feature = "pg17", feature = "pg18"), feature = "build_parallel"))]
     {
         amroutine.amcanbuildparallel = true;
     }

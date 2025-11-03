@@ -16,7 +16,7 @@ pub const SHM_TOC_SHARED_KEY: u64 = 0xD000000000000001;
 pub const SHM_TOC_TABLESCANDESC_KEY: u64 = 0xD000000000000002;
 
 /// Cleans up a parallel context when we're done with it.
-pub unsafe fn cleanup_pcxt(
+pub unsafe fn cleanup_parallel_context(
     pcxt: *mut pg_sys::ParallelContext,
     snapshot: *mut pg_sys::SnapshotData,
 ) {

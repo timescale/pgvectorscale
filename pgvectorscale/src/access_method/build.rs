@@ -368,7 +368,7 @@ pub extern "C-unwind" fn ambuild(
 
             pg_sys::InitializeParallelDSM(pcxt);
             if (*pcxt).seg.is_null() {
-                parallel::cleanup_pcxt(pcxt, snapshot);
+                parallel::cleanup_parallel_context(pcxt, snapshot);
                 None
             } else {
                 let parallel_shared =
@@ -414,7 +414,7 @@ pub extern "C-unwind" fn ambuild(
                 pg_sys::LaunchParallelWorkers(pcxt);
                 if (*pcxt).nworkers_launched == 0 {
                     warning!("No workers launched");
-                    parallel::cleanup_pcxt(pcxt, snapshot);
+                    parallel::cleanup_parallel_context(pcxt, snapshot);
                     None
                 } else {
                     pg_sys::WaitForParallelWorkersToAttach(pcxt);
@@ -436,7 +436,7 @@ pub extern "C-unwind" fn ambuild(
                 .build_state
                 .ntuples
                 .load(Ordering::Relaxed);
-            parallel::cleanup_pcxt(pcxt, snapshot);
+            parallel::cleanup_parallel_context(pcxt, snapshot);
             ntuples
         }
     } else {

@@ -169,11 +169,7 @@ impl BuilderNeighborCache {
 
     /// Flush cached entries to disk if cache usage is above the given threshold.
     /// This helps prevent memory buildup during parallel builds.
-    pub fn flush_if_above_threshold<S: Storage>(
-        &self,
-        storage: &S,
-        stats: &mut PruneNeighborStats,
-    ) {
+    pub fn flush_neighbor_cache<S: Storage>(&self, storage: &S, stats: &mut PruneNeighborStats) {
         let mut cache = self.neighbor_map.borrow_mut();
         while cache.len() > 0 {
             let (neighbors_of, entry) = cache.pop_lru().unwrap();

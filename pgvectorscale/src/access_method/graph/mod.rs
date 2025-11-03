@@ -740,9 +740,7 @@ digraph G {
     /// to communicate changed neighbors to other workers.
     pub fn maybe_flush_neighbor_cache<S: Storage>(&mut self, storage: &S, stats: &mut InsertStats) {
         if let GraphNeighborStore::Builder(ref cache) = self.neighbor_store {
-            // Flush cache when it's getting full to avoid memory pressure
-            // and ensure nodes get written to disk during parallel processing
-            cache.flush_if_above_threshold(storage, &mut stats.prune_neighbor_stats);
+            cache.flush_neighbor_cache(storage, &mut stats.prune_neighbor_stats);
         }
     }
 }
