@@ -1114,7 +1114,7 @@ fn build_callback_parallel_internal<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
-    spare_vector: LabeledVector,
+    _spare_vector: LabeledVector,
     state: &mut BuildStateParallel,
     storage: &mut S,
 ) {
