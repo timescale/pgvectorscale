@@ -2,7 +2,7 @@ use pgrx::{pg_sys::AsPgCStr, *};
 
 pub static TSV_QUERY_SEARCH_LIST_SIZE: GucSetting<i32> = GucSetting::<i32>::new(100);
 pub static TSV_RESORT_SIZE: GucSetting<i32> = GucSetting::<i32>::new(50);
-pub static TSV_PARALLEL_FLUSH_INTERVAL: GucSetting<f64> = GucSetting::<f64>::new(0.1);
+pub static TSV_PARALLEL_FLUSH_INTERVAL: GucSetting<f64> = GucSetting::<f64>::new(0.05);
 pub static TSV_PARALLEL_INITIAL_START_NODES_COUNT: GucSetting<i32> = GucSetting::<i32>::new(1024);
 pub static TSV_MIN_VECTORS_FOR_PARALLEL_BUILD: GucSetting<i32> = GucSetting::<i32>::new(65536);
 pub static TSV_FORCE_PARALLEL_WORKERS: GucSetting<i32> = GucSetting::<i32>::new(-1);
