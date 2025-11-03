@@ -742,7 +742,7 @@ digraph G {
         if let GraphNeighborStore::Builder(ref cache) = self.neighbor_store {
             // Flush cache when it's getting full to avoid memory pressure
             // and ensure nodes get written to disk during parallel processing
-            cache.flush_if_above_threshold(storage, &mut stats.prune_neighbor_stats, 0.8);
+            cache.flush_if_above_threshold(storage, &mut stats.prune_neighbor_stats);
         }
     }
 }

@@ -173,7 +173,6 @@ impl BuilderNeighborCache {
         &self,
         storage: &S,
         stats: &mut PruneNeighborStats,
-        _threshold: f64,
     ) {
         let mut cache = self.neighbor_map.borrow_mut();
         while cache.len() > 0 {
