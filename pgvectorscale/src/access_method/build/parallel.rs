@@ -20,7 +20,6 @@ pub unsafe fn cleanup_parallel_context(
     pcxt: *mut pg_sys::ParallelContext,
     snapshot: *mut pg_sys::SnapshotData,
 ) {
-    // need DSM segment to do parallel build
     if ports::is_mvcc_snapshot(snapshot) {
         pg_sys::UnregisterSnapshot(snapshot);
     }

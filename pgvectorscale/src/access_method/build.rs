@@ -367,6 +367,7 @@ pub extern "C-unwind" fn ambuild(
             parallel::toc_estimate_single_chunk(pcxt, tablescandesc_size_estimate);
 
             pg_sys::InitializeParallelDSM(pcxt);
+            // need DSM segment to do parallel build
             if (*pcxt).seg.is_null() {
                 parallel::cleanup_parallel_context(pcxt, snapshot);
                 None
