@@ -19,8 +19,6 @@ jobs:
       fail-fast: false
       matrix:
         pg:
-          - major: 13
-            minor: 16
           - major: 14
             minor: 13
           - major: 15

@@ -13,8 +13,6 @@ jobs:
         pgvector:
           - version: 0.8.1
         pg:
-          - major: 13
-            minor: 16
           - major: 14
             minor: 13
           - major: 15

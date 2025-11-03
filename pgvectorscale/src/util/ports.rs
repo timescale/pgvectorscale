@@ -128,7 +128,7 @@ pub unsafe fn slot_getattr(
 pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
     if !indexrel.pgstat_info.is_null() {
         let tmp = indexrel.pgstat_info;
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
+        #[cfg(any(feature = "pg14", feature = "pg15"))]
         {
             (*tmp).t_counts.t_numscans += 1;
         }

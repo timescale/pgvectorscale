@@ -458,13 +458,6 @@ pub extern "C-unwind" fn ambuild(
     result.into_pg()
 }
 
-#[cfg(any(
-    feature = "pg14",
-    feature = "pg15",
-    feature = "pg16",
-    feature = "pg17",
-    feature = "pg18"
-))]
 #[pg_guard]
 #[allow(clippy::too_many_arguments)]
 pub unsafe extern "C-unwind" fn aminsert(
@@ -475,20 +468,6 @@ pub unsafe extern "C-unwind" fn aminsert(
     heaprel: pg_sys::Relation,
     _check_unique: pg_sys::IndexUniqueCheck::Type,
     _index_unchanged: bool,
-    _index_info: *mut pg_sys::IndexInfo,
-) -> bool {
-    aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
-}
-
-#[cfg(feature = "pg13")]
-#[pg_guard]
-pub unsafe extern "C-unwind" fn aminsert(
-    indexrel: pg_sys::Relation,
-    values: *mut pg_sys::Datum,
-    isnull: *mut bool,
-    heap_tid: pg_sys::ItemPointer,
-    heaprel: pg_sys::Relation,
-    _check_unique: pg_sys::IndexUniqueCheck::Type,
     _index_info: *mut pg_sys::IndexInfo,
 ) -> bool {
     aminsert_internal(indexrel, values, isnull, heap_tid, heaprel)
@@ -1135,7 +1114,7 @@ fn build_callback_parallel_internal<S: Storage>(
     index: &PgRelation,
     heap_pointer: ItemPointer,
     vector: LabeledVector,
-    _spare_vector: LabeledVector,
+    spare_vector: LabeledVector,
     state: &mut BuildStateParallel,
     storage: &mut S,
 ) {
