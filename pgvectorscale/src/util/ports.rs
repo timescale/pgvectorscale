@@ -128,7 +128,7 @@ pub unsafe fn slot_getattr(
 pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel: PgRelation) {
     if !indexrel.pgstat_info.is_null() {
         let tmp = indexrel.pgstat_info;
-        #[cfg(any(feature = "pg13", feature = "pg14", feature = "pg15"))]
+        #[cfg(any(feature = "pg14", feature = "pg15"))]
         {
             (*tmp).t_counts.t_numscans += 1;
         }
@@ -168,4 +168,49 @@ pub fn acquire_index_lock(index: &PgRelation) {
             &[Some(pgrx::pg_sys::Datum::from(oid as i64))],
         );
     }
+}
+
+/// Reimplementation of Postgres BUFFERALIGN macro.
+pub fn buffer_align(len: usize) -> usize {
+    unsafe {
+        // SAFETY: TYPEALIGN is just arithmetic, it shouldn't be marked as unsafe
+        pg_sys::TYPEALIGN(pg_sys::ALIGNOF_BUFFER as usize, len)
+    }
+}
+
+/// Custom IndexBuildHeapScan that uses parallel table scan descriptor
+#[allow(non_snake_case)]
+pub unsafe fn IndexBuildHeapScanParallel<T>(
+    heap_relation: pg_sys::Relation,
+    index_relation: pg_sys::Relation,
+    index_info: *mut pg_sys::IndexInfo,
+    build_callback: pg_sys::IndexBuildCallback,
+    build_callback_state: *mut T,
+    tablescandesc: *mut pg_sys::ParallelTableScanDescData,
+) {
+    let scan = pg_sys::table_beginscan_parallel(heap_relation, tablescandesc);
+
+    let heap_relation_ref = heap_relation.as_ref().unwrap();
+    let table_am = heap_relation_ref.rd_tableam.as_ref().unwrap();
+
+    table_am.index_build_range_scan.unwrap()(
+        heap_relation,
+        index_relation,
+        index_info,
+        true,                       // allow_sync
+        false,                      // anyvisible
+        true,                       // progress
+        0,                          // start_blockno
+        pg_sys::InvalidBlockNumber, // end_blockno
+        build_callback,
+        build_callback_state as *mut std::os::raw::c_void,
+        scan,
+    );
+}
+
+/// Is a snapshot MVCC-safe? (This should really be a part of pgrx)
+pub unsafe fn is_mvcc_snapshot(snapshot: *mut pg_sys::SnapshotData) -> bool {
+    let typ = (*snapshot).snapshot_type;
+    typ == pg_sys::SnapshotType::SNAPSHOT_MVCC
+        || typ == pg_sys::SnapshotType::SNAPSHOT_HISTORIC_MVCC
 }

@@ -22,6 +22,7 @@ pub struct LruCacheWithStats<K: Hash + Eq + Clone, V> {
 }
 
 impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
+    #[allow(dead_code)]
     pub fn new(capacity: NonZero<usize>, cache_name: &str) -> Self {
         LruCacheWithStats {
             cache: LruCache::new(capacity),
@@ -109,5 +110,15 @@ impl<K: Hash + Eq + Clone, V> LruCacheWithStats<K, V> {
 
     pub fn into_parts(self) -> (LruCache<K, V>, CacheStats) {
         (self.cache, self.stats)
+    }
+
+    /// Remove and return the least recently used key-value pair
+    pub fn pop_lru(&mut self) -> Option<(K, V)> {
+        if let Some((key, value)) = self.cache.pop_lru() {
+            self.stats.evictions += 1;
+            Some((key, value))
+        } else {
+            None
+        }
     }
 }

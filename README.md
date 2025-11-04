@@ -345,6 +345,38 @@ CREATE INDEX document_embedding_idx ON document_embedding
 USING diskann (embedding vector_cosine_ops, labels);
 ```
 
+#### Parallel Index Build Parameters
+
+pgvectorscale supports parallel index building to improve performance on large datasets. These parameters control parallel build behavior:
+
+| Parameter name   | Description                                                                                                                                                    | Default value |
+|------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------|
+| `diskann.parallel_flush_interval` | The fraction of total vectors (0.0-1.0) processed before flushing neighbor cache in parallel builds | 0.1 |
+| `diskann.parallel_initial_start_nodes_count` | The number of initial start nodes to process before starting parallel workers | 1024 |
+| `diskann.min_vectors_for_parallel_build` | Minimum number of vectors required to enable parallel building | 65536 |
+| `diskann.force_parallel_workers` | Force a specific number of parallel workers for index builds (-1 for automatic) | -1 |
+
+Parallel building is automatically enabled when:
+- The feature is compiled in (enabled by default)
+- The table has no labels (label-based filtering not yet supported in parallel)
+- Using SBQ compression storage layout
+- The number of vectors meets the `min_vectors_for_parallel_build` threshold
+
+You can set these parameters using `SET` before creating an index:
+
+```sql
+-- Enable parallel building for smaller datasets
+SET diskann.min_vectors_for_parallel_build = 10000;
+
+-- Use 4 parallel workers regardless of PostgreSQL's automatic determination
+SET diskann.force_parallel_workers = 4;
+
+-- Adjust cache flushing frequency for memory usage (flush after processing 5% of vectors)
+SET diskann.parallel_flush_interval = 0.05;
+
+CREATE INDEX ON my_table USING diskann (embedding vector_cosine_ops);
+```
+
 #### StreamingDiskANN query-time parameters
 
 You can also set two parameters to control the accuracy vs. query speed trade-off at query time. We suggest adjusting `diskann.query_rescore` to fine-tune accuracy.

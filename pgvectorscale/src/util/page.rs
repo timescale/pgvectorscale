@@ -184,7 +184,7 @@ impl<'a> WritablePage<'a> {
         }
     }
 
-    pub fn get_buffer(&self) -> &LockedBufferExclusive {
+    pub fn get_buffer(&self) -> &LockedBufferExclusive<'_> {
         &self.buffer
     }
 
@@ -269,7 +269,7 @@ impl<'a> ReadablePage<'a> {
         PageType::from_u8(opaque_data.page_type)
     }
 
-    pub fn get_buffer(&self) -> &LockedBufferShare {
+    pub fn get_buffer(&self) -> &LockedBufferShare<'_> {
         &self.buffer
     }
 

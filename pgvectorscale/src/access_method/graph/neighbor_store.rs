@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::num::NonZero;
 
 use pgrx::debug1;
@@ -52,11 +53,38 @@ pub struct BuilderNeighborCache {
 }
 
 impl BuilderNeighborCache {
-    pub fn new(memory_budget: f64, meta_page: &MetaPage) -> Self {
+    fn reconcile_with_disk_neighbors<S: Storage>(
+        &self,
+        neighbors_of: ItemPointer,
+        cached_neighbors: Vec<NeighborWithDistance>,
+        storage: &S,
+        stats: &mut PruneNeighborStats,
+    ) -> Vec<NeighborWithDistance> {
+        let disk_neighbors = storage.get_neighbors_with_distances_from_disk(neighbors_of, stats);
+        let mut all_neighbors = Vec::with_capacity(cached_neighbors.len() + disk_neighbors.len());
+
+        let cached_pointers: HashSet<_> = cached_neighbors
+            .iter()
+            .map(|n| n.get_index_pointer_to_neighbor())
+            .collect();
+        all_neighbors.extend(cached_neighbors);
+        all_neighbors.extend(disk_neighbors.into_iter().filter(|disk_neighbor| {
+            !cached_pointers.contains(&disk_neighbor.get_index_pointer_to_neighbor())
+        }));
+
+        all_neighbors
+    }
+
+    pub fn new(memory_budget: f64, meta_page: &MetaPage, worker_count: usize) -> Self {
         let total_memory = maintenance_work_mem_bytes() as f64;
         let memory_budget = (total_memory * memory_budget).ceil() as usize;
         let capacity = memory_budget
             / NeighborCacheEntry::size(meta_page.get_num_neighbors() as _, meta_page.has_labels());
+        let capacity = if worker_count > 0 {
+            capacity / worker_count
+        } else {
+            capacity
+        };
 
         Self {
             neighbor_map: RefCell::new(LruCacheWithStats::new(
@@ -125,15 +153,45 @@ impl BuilderNeighborCache {
         let evictee =
             neighbor_map.push(neighbors_of, NeighborCacheEntry::new(labels, new_neighbors));
         if let Some((key, value)) = evictee {
+            let all_neighbors =
+                self.reconcile_with_disk_neighbors(key, value.neighbors, storage, stats);
             let new_neighbors = Graph::prune_neighbors(
                 self.max_alpha,
                 self.num_neighbors,
                 value.labels.as_ref(),
-                value.neighbors,
+                all_neighbors,
                 storage,
                 stats,
             );
             storage.set_neighbors_on_disk(key, new_neighbors.as_slice(), stats);
+        }
+    }
+
+    /// Flush cached entries to disk if cache usage is above the given threshold.
+    /// This helps prevent memory buildup during parallel builds.
+    pub fn flush_neighbor_cache<S: Storage>(&self, storage: &S, stats: &mut PruneNeighborStats) {
+        let mut cache = self.neighbor_map.borrow_mut();
+        while cache.len() > 0 {
+            let (neighbors_of, entry) = cache.pop_lru().unwrap();
+            drop(cache);
+            let all_neighbors =
+                self.reconcile_with_disk_neighbors(neighbors_of, entry.neighbors, storage, stats);
+
+            let pruned_neighbors = if all_neighbors.len() > self.num_neighbors {
+                Graph::prune_neighbors(
+                    self.max_alpha,
+                    self.num_neighbors,
+                    entry.labels.as_ref(),
+                    all_neighbors,
+                    storage,
+                    stats,
+                )
+            } else {
+                all_neighbors
+            };
+
+            storage.set_neighbors_on_disk(neighbors_of, &pruned_neighbors, stats);
+            cache = self.neighbor_map.borrow_mut();
         }
     }
 }
