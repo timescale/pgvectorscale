@@ -44,6 +44,9 @@ jobs:
       TAG_DIR: pgvectorscale
       TAG_GIT_REF: ${{ github.event.inputs.TAG_GIT_REF == '' && github.event.inputs.tag || github.event.inputs.TAG_GIT_REF}}
 
+    permissions:
+      contents: write
+
     steps:
     - name: Install package_cloud
       run: |
