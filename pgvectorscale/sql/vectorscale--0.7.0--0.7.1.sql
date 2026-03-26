@@ -146,7 +146,7 @@ BEGIN
     
     -- First, check if the && operator exists for smallint[]
     IF NOT EXISTS (
-        SELECT 1 FROM pg_operator 
+        SELECT 1 FROM pg_catalog.pg_operator 
         WHERE oprname = '&&' 
         AND oprleft = 'smallint[]'::regtype 
         AND oprright = 'smallint[]'::regtype
