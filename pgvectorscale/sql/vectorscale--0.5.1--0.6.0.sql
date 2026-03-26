@@ -102,9 +102,9 @@ BEGIN
     ELSIF have_l2_ops = 0 THEN
         -- Upgrade from 0.4.0 to 0.5.0.  Update cosine opclass to include
         -- the distance_type_cosine function.
-        INSERT INTO pg_amproc (oid, amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
-        SELECT  (select (max(oid)::int + 1)::oid from pg_amproc), c.opcfamily, c.opcintype, c.opcintype, 1, '@extschema@.distance_type_l2'::regproc
-        FROM pg_opclass c, pg_am a
+        INSERT INTO pg_catalog.pg_amproc (oid, amprocfamily, amproclefttype, amprocrighttype, amprocnum, amproc)
+        SELECT  (select (max(oid)::int + 1)::oid from pg_catalog.pg_amproc), c.opcfamily, c.opcintype, c.opcintype, 1, '@extschema@.distance_type_l2'::regproc
+        FROM pg_catalog.pg_opclass c, pg_catalog.pg_am a
         WHERE a.oid = c.opcmethod AND c.opcname = 'vector_cosine_ops' AND a.amname = 'diskann';
     END IF;
 
