@@ -15,8 +15,8 @@ use crate::access_method::graph::start_nodes::StartNodes;
 use crate::access_method::node::{ReadableNode, WriteableNode};
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::stats::WriteStats;
-use crate::util::chain::{ChainItemReader, ChainTapeWriter};
-use crate::util::page::{self, PageType};
+use crate::util::chain::{write_chain_item_to_page, ChainItemReader};
+use crate::util::page::{self, PageType, WritablePage};
 use crate::util::*;
 
 const TSV_MAGIC_NUMBER: u32 = 768756476; //Magic number, random
@@ -365,22 +365,28 @@ impl MetaPage {
         assert!(header.magic_number == TSV_MAGIC_NUMBER);
         assert!(header.version == TSV_VERSION);
 
-        let mut stats = WriteStats::default();
-        let mut tape = if first_time {
-            ChainTapeWriter::new(index, PageType::Meta, &mut stats)
+        let header_bytes = header.serialize_to_vec();
+        let meta_bytes = self.serialize_to_vec();
+
+        // Hold the exclusive page lock across reinit, header, and meta
+        // writes so concurrent callers (e.g. parallel index-build workers
+        // all finalizing at once) can't interleave reinit and write and
+        // race on block 0. See issue #264.
+        let mut page = if first_time {
+            WritablePage::new(index, PageType::Meta)
         } else {
-            ChainTapeWriter::reinit(index, PageType::Meta, &mut stats, META_BLOCK_NUMBER)
+            let mut p = WritablePage::modify(index, META_BLOCK_NUMBER);
+            p.reinit(PageType::Meta);
+            p
         };
 
-        // Serialize the header
-        let bytes = header.serialize_to_vec();
-        let off = tape.write(&bytes);
-        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_HEADER_OFFSET));
+        let header_off = write_chain_item_to_page(&mut page, &header_bytes);
+        assert_eq!(header_off, META_HEADER_OFFSET);
 
-        // Serialize the meta
-        let bytes = self.serialize_to_vec();
-        let off = tape.write(&bytes);
-        assert_eq!(off, ItemPointer::new(META_BLOCK_NUMBER, META_OFFSET));
+        let meta_off = write_chain_item_to_page(&mut page, &meta_bytes);
+        assert_eq!(meta_off, META_OFFSET);
+
+        page.commit();
     }
 
     unsafe fn load(index: &PgRelation) -> MetaPage {
