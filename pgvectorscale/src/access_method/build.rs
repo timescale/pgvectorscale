@@ -14,7 +14,7 @@ use crate::access_method::graph::Graph;
 use crate::access_method::options::TSVIndexOptions;
 use crate::access_method::pg_vector::PgVector;
 use crate::access_method::stats::{InsertStats, WriteStats};
-use crate::util::ports::acquire_index_lock;
+use crate::util::ports::{PROGRESS_CREATE_IDX_TUPLES_DONE, PROGRESS_CREATE_IDX_TUPLES_TOTAL, acquire_index_lock};
 
 use crate::access_method::DISKANN_DISTANCE_TYPE_PROC;
 use crate::util::page::PageType;
@@ -441,7 +441,8 @@ pub extern "C-unwind" fn ambuild(
             ntuples
         }
     } else {
-        do_heap_scan(
+        pgstat_progress_update_param(PROGRESS_CREATE_IDX_TUPLES_TOTAL, heap_tuples as i64);
+        let ntuples = do_heap_scan(
             index_info,
             &heap_relation,
             &index_relation,
@@ -449,7 +450,9 @@ pub extern "C-unwind" fn ambuild(
             write_stats,
             None,
             workers as usize,
-        )
+        );
+        pgstat_progress_update_param(PROGRESS_CREATE_IDX_TUPLES_DONE, ntuples as i64);
+        ntuples
     };
 
     let mut result = unsafe { PgBox::<pg_sys::IndexBuildResult>::alloc0() };
@@ -1078,6 +1081,10 @@ fn build_callback_internal<S: Storage>(
     check_for_interrupts!();
 
     state.ntuples += 1;
+    // Only call update every few tuples
+    if state.ntuples % 1000 == 0 {
+        pgstat_progress_update_param(PROGRESS_CREATE_IDX_TUPLES_DONE, state.ntuples as i64);
+    }
 
     let index_pointer = storage.create_node(
         vector.vec().to_index_slice(),

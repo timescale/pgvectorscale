@@ -42,6 +42,8 @@ pub unsafe fn PageValidateSpecialPointer(page: pgrx::pg_sys::Page) {
 #[allow(non_upper_case_globals)]
 const SizeOfPageHeaderData: usize = offset_of!(pgrx::pg_sys::PageHeaderData, pd_linp);
 pub const PROGRESS_CREATE_IDX_SUBPHASE: c_int = 10;
+pub const PROGRESS_CREATE_IDX_TUPLES_TOTAL: c_int = 11;
+pub const PROGRESS_CREATE_IDX_TUPLES_DONE: c_int = 12;
 
 #[allow(non_snake_case)]
 pub unsafe fn PageGetContents(page: pgrx::pg_sys::Page) -> *mut std::os::raw::c_char {
