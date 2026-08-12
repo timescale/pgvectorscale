@@ -291,10 +291,8 @@ $$;
 #[pg_guard]
 pub extern "C-unwind" fn amvalidate(opclassoid: pg_sys::Oid) -> bool {
     unsafe {
-        let tup = pg_sys::SearchSysCache1(
-            pg_sys::SysCacheIdentifier::CLAOID as i32,
-            opclassoid.into(),
-        );
+        let tup =
+            pg_sys::SearchSysCache1(pg_sys::SysCacheIdentifier::CLAOID as i32, opclassoid.into());
         if tup.is_null() {
             return false;
         }
