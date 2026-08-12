@@ -21,8 +21,10 @@ unsafe fn lookup_pgvector_vector_oid() -> pg_sys::Oid {
         error!("diskann: required extension \"vector\" is not installed");
     }
 
-    let ext_tup =
-        pg_sys::SearchSysCache1(pg_sys::SysCacheIdentifier::EXTENSIONOID as i32, ext_oid.into());
+    let ext_tup = pg_sys::SearchSysCache1(
+        pg_sys::SysCacheIdentifier::EXTENSIONOID as i32,
+        ext_oid.into(),
+    );
     if ext_tup.is_null() {
         error!("diskann: could not look up pg_extension entry for \"vector\"");
     }
@@ -31,10 +33,7 @@ unsafe fn lookup_pgvector_vector_oid() -> pg_sys::Oid {
     pg_sys::ReleaseSysCache(ext_tup);
 
     let mut typname = pg_sys::NameData::default();
-    pg_sys::namestrcpy(
-        &mut typname as *mut pg_sys::NameData,
-        c"vector".as_ptr(),
-    );
+    pg_sys::namestrcpy(&mut typname as *mut pg_sys::NameData, c"vector".as_ptr());
 
     let typ_tup = pg_sys::SearchSysCache2(
         pg_sys::SysCacheIdentifier::TYPENAMENSP as i32,
