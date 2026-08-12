@@ -20,6 +20,7 @@ mod storage;
 mod storage_common;
 mod upgrade_test;
 mod vacuum;
+mod vector_type;
 
 /// Access method support function numbers
 pub const DISKANN_DISTANCE_TYPE_PROC: u16 = 1;
@@ -206,8 +207,8 @@ BEGIN
 
     IF have_cos_ops = 0 THEN
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-        FOR TYPE vector USING diskann AS
-	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
+        FOR TYPE @extschema:vector@.vector USING diskann AS
+	        OPERATOR 1 @extschema:vector@.<=> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
             FUNCTION 1 distance_type_cosine();
     ELSIF have_l2_ops = 0 THEN
         -- Upgrade from 0.4.0 to 0.5.0.  Update cosine opclass to include
@@ -220,16 +221,29 @@ BEGIN
 
     IF have_l2_ops = 0 THEN
         CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
+        FOR TYPE @extschema:vector@.vector USING diskann AS
+            OPERATOR 1 @extschema:vector@.<-> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
             FUNCTION 1 distance_type_l2();
     END IF;
 
     IF have_ip_ops = 0 THEN
         CREATE OPERATOR CLASS vector_ip_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <#> (vector, vector) FOR ORDER BY float_ops,
+        FOR TYPE @extschema:vector@.vector USING diskann AS
+            OPERATOR 1 @extschema:vector@.<#> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
             FUNCTION 1 distance_type_inner_product();
+    END IF;
+
+    -- Refuse wrongly bound DiskANN vector opclasses left behind by older installs.
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_opclass c
+        JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
+        WHERE am.amname = 'diskann'
+          AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '@extschema@')
+          AND c.opcname IN ('vector_cosine_ops', 'vector_l2_ops', 'vector_ip_ops')
+          AND c.opcintype IS DISTINCT FROM '@extschema:vector@.vector'::pg_catalog.regtype
+    ) THEN
+        RAISE EXCEPTION 'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
     END IF;
     
     -- First, check if the && operator exists for smallint[]
@@ -275,8 +289,33 @@ $$;
 );
 
 #[pg_guard]
-pub extern "C-unwind" fn amvalidate(_opclassoid: pg_sys::Oid) -> bool {
-    true
+pub extern "C-unwind" fn amvalidate(opclassoid: pg_sys::Oid) -> bool {
+    unsafe {
+        let tup = pg_sys::SearchSysCache1(
+            pg_sys::SysCacheIdentifier::CLAOID as i32,
+            opclassoid.into(),
+        );
+        if tup.is_null() {
+            return false;
+        }
+        let form = pg_sys::GETSTRUCT(tup) as pg_sys::Form_pg_opclass;
+        let opcname = core::ffi::CStr::from_ptr((*form).opcname.data.as_ptr());
+        let opcintype = (*form).opcintype;
+        pg_sys::ReleaseSysCache(tup);
+
+        let Some(name) = opcname.to_str().ok() else {
+            return false;
+        };
+        if !matches!(
+            name,
+            "vector_cosine_ops" | "vector_l2_ops" | "vector_ip_ops"
+        ) {
+            return true;
+        }
+
+        let expected = vector_type::pgvector_vector_oid();
+        opcintype == expected
+    }
 }
 
 /// Implementation of the array overlap operator (&&) for smallint arrays

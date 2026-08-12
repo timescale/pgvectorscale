@@ -130,6 +130,9 @@ impl PgVector {
         //TODO: we are using a copy here to avoid lifetime issues and because in some cases we have to
         //modify the datum in preprocess_cosine. We should find a way to avoid the copy if the vector is
         //normalized and preprocess_cosine is a noop;
+        //
+        // Callers must have verified the index attribute is pgvector's vector type before reaching
+        // here. Detoast still assumes a well-formed varlena; layout is checked immediately after.
         let detoasted = pg_sys::pg_detoast_datum_copy(datum.cast_mut_ptr());
         let is_copy = !std::ptr::eq(
             detoasted.cast::<PgVectorInternal>(),
@@ -140,6 +143,9 @@ impl PgVector {
         assert!(is_copy, "Datum should be a copy");
         let casted = detoasted.cast::<PgVectorInternal>();
 
+        // Validate the on-disk/layout dimension before any slice is constructed.
+        let _ = super::vector_type::checked_vector_dim(casted);
+
         if is_index_distance
             && meta_page.get_num_dimensions() != meta_page.get_num_dimensions_to_index()
         {
@@ -147,8 +153,8 @@ impl PgVector {
             (*casted).dim = meta_page.get_num_dimensions_to_index() as _;
         }
 
-        let dim = (*casted).dim;
-        let raw_slice = unsafe { (*casted).x.as_mut_slice(dim as _) };
+        let dim = (*casted).dim as usize;
+        let raw_slice = unsafe { (*casted).x.as_mut_slice(dim) };
 
         if meta_page.get_distance_type() == DistanceType::Cosine {
             preprocess_cosine(raw_slice);
