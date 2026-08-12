@@ -344,7 +344,7 @@ mod tests {
 
     #[pg_test]
     unsafe fn test_index_options_custom() -> spi::Result<()> {
-        Spi::run("CREATE TABLE test(encoding vector(3));
+        Spi::run("CREATE TABLE test(encoding vector(30));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
@@ -368,7 +368,7 @@ mod tests {
 
     #[pg_test]
     unsafe fn test_index_options_custom_mem_optimized() -> spi::Result<()> {
-        Spi::run("CREATE TABLE test(encoding vector(3));
+        Spi::run("CREATE TABLE test(encoding vector(30));
         CREATE INDEX idxtest
                   ON test
                USING diskann(encoding)
