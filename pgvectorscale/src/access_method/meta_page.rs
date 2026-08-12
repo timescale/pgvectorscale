@@ -312,7 +312,8 @@ impl MetaPage {
         crate::access_method::vector_type::ensure_valid_dimensions(
             num_dimensions,
             num_dimensions_to_index,
-        );
+        )
+        .unwrap_or_else(|message| pgrx::error!("{}", message));
 
         let bq_num_bits_per_dimension =
             if opt.bq_num_bits_per_dimension == SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
@@ -424,7 +425,8 @@ impl MetaPage {
             crate::access_method::vector_type::ensure_valid_dimensions(
                 meta.get_num_dimensions(),
                 meta.get_num_dimensions_to_index(),
-            );
+            )
+            .unwrap_or_else(|message| pgrx::error!("{}", message));
             meta
         }
     }

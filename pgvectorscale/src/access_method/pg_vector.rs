@@ -21,6 +21,10 @@ impl PgVectorInternal {
         let raw_slice = unsafe { self.x.as_slice(dim as _) };
         raw_slice
     }
+
+    pub(crate) unsafe fn reserved(&self) -> i16 {
+        self.unused.assume_init()
+    }
 }
 
 #[derive(Debug)]
@@ -144,7 +148,10 @@ impl PgVector {
         let casted = detoasted.cast::<PgVectorInternal>();
 
         // Validate the on-disk/layout dimension before any slice is constructed.
-        let _ = super::vector_type::checked_vector_dim(casted);
+        let dim = super::vector_type::checked_vector_dim(casted)
+            .unwrap_or_else(|message| error!("{}", message));
+        super::vector_type::ensure_datum_dimension(dim, meta_page.get_num_dimensions())
+            .unwrap_or_else(|message| error!("{}", message));
 
         if is_index_distance
             && meta_page.get_num_dimensions() != meta_page.get_num_dimensions_to_index()

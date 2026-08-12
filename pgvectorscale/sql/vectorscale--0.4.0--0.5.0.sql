@@ -78,13 +78,13 @@ BEGIN
     IF have_cos_ops = 0 THEN
         -- Fresh install from scratch
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-	        OPERATOR 1 @extschema:vector@.<=> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
+        FOR TYPE vector USING diskann AS
+	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_cosine();
 
         CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-            OPERATOR 1 @extschema:vector@.<-> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
+        FOR TYPE vector USING diskann AS
+            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_l2();
     ELSIF have_l2_ops = 0 THEN
         -- Upgrade to add L2 distance support and update cosine opclass to
@@ -95,24 +95,10 @@ BEGIN
         WHERE a.oid = c.opcmethod AND c.opcname = 'vector_cosine_ops' AND a.amname = 'diskann';
 
         CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-            OPERATOR 1 @extschema:vector@.<-> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
+        FOR TYPE vector USING diskann AS
+            OPERATOR 1 <-> (vector, vector) FOR ORDER BY float_ops,
             FUNCTION 1 distance_type_l2();
     END IF;
-
-    -- Refuse wrongly bound DiskANN vector opclasses left behind by older installs.
-    IF EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_opclass c
-        JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
-        WHERE am.amname = 'diskann'
-          AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '@extschema@')
-          AND c.opcname IN ('vector_cosine_ops', 'vector_l2_ops', 'vector_ip_ops')
-          AND c.opcintype IS DISTINCT FROM '@extschema:vector@.vector'::pg_catalog.regtype
-    ) THEN
-        RAISE EXCEPTION 'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
-    END IF;
-
 END;
 $$;
 /* </end connected objects> */

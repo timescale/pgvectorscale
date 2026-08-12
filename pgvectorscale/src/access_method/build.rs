@@ -255,7 +255,8 @@ fn get_meta_page(
     }
 
     let typmod = index_relation.tuple_desc().get(0).unwrap().atttypmod;
-    let dimensions = crate::access_method::vector_type::dimension_from_typmod(typmod);
+    let dimensions = crate::access_method::vector_type::dimension_from_typmod(typmod)
+        .unwrap_or_else(|message| error!("{}", message));
 
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
