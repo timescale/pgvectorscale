@@ -250,7 +250,12 @@ fn get_meta_page(
     index_relation: &PgRelation,
     opt: PgBox<TSVIndexOptions>,
 ) -> MetaPage {
-    let dimensions = index_relation.tuple_desc().get(0).unwrap().atttypmod;
+    unsafe {
+        crate::access_method::vector_type::ensure_index_vector_type(index_relation);
+    }
+
+    let typmod = index_relation.tuple_desc().get(0).unwrap().atttypmod;
+    let dimensions = crate::access_method::vector_type::dimension_from_typmod(typmod);
 
     let distance_type = unsafe {
         let fmgr_info = index_getprocinfo(indexrel, 1, DISKANN_DISTANCE_TYPE_PROC);
@@ -265,16 +270,7 @@ fn get_meta_page(
         error!("Inner product distance type is not supported with plain storage");
     }
 
-    let meta_page =
-        unsafe { MetaPage::create(index_relation, dimensions as _, distance_type, opt) };
-
-    if meta_page.get_num_dimensions_to_index() == 0 {
-        error!("No dimensions to index");
-    }
-
-    if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION {
-        error!("Too many dimensions to index (max is {})", MAX_DIMENSION);
-    }
+    let meta_page = unsafe { MetaPage::create(index_relation, dimensions, distance_type, opt) };
 
     if meta_page.get_num_dimensions_to_index() > MAX_DIMENSION_NO_SBQ
         && meta_page.get_storage_type() == StorageType::Plain

@@ -309,6 +309,11 @@ impl MetaPage {
             opt.num_dimensions
         };
 
+        crate::access_method::vector_type::ensure_valid_dimensions(
+            num_dimensions,
+            num_dimensions_to_index,
+        );
+
         let bq_num_bits_per_dimension =
             if opt.bq_num_bits_per_dimension == SBQ_NUM_BITS_PER_DIMENSION_DEFAULT_SENTINEL {
                 if (*opt).get_storage_type() == StorageType::SbqCompression
@@ -398,9 +403,10 @@ impl MetaPage {
     /// Read the meta page for an index
     pub fn fetch(index: &PgRelation) -> MetaPage {
         unsafe {
+            crate::access_method::vector_type::ensure_index_vector_type(index);
             let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
             let page_type = page.get_type();
-            match page_type {
+            let meta = match page_type {
                 PageType::MetaV1 => {
                     let old_meta = MetaPageV1::page_get_meta(*page, *(*(page.get_buffer())));
                     let new_meta: MetaPage = (&*old_meta).into();
@@ -414,7 +420,12 @@ impl MetaPage {
                 PageType::MetaV2 => MetaPageV2::from_page(page).into(),
                 PageType::Meta => Self::load(index),
                 _ => pgrx::error!("Meta page is not of type Meta"),
-            }
+            };
+            crate::access_method::vector_type::ensure_valid_dimensions(
+                meta.get_num_dimensions(),
+                meta.get_num_dimensions_to_index(),
+            );
+            meta
         }
     }
 
