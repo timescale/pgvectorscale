@@ -46,23 +46,9 @@ BEGIN
 
     IF c = 0 THEN
         CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-            OPERATOR 1 @extschema:vector@.<=> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops;
+        FOR TYPE vector USING diskann AS
+	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY float_ops;
     END IF;
-
-    -- Refuse wrongly bound DiskANN vector opclasses left behind by older installs.
-    IF EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_opclass c
-        JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
-        WHERE am.amname = 'diskann'
-          AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '@extschema@')
-          AND c.opcname IN ('vector_cosine_ops', 'vector_l2_ops', 'vector_ip_ops')
-          AND c.opcintype IS DISTINCT FROM '@extschema:vector@.vector'::pg_catalog.regtype
-    ) THEN
-        RAISE EXCEPTION 'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
-    END IF;
-
 END;
 $$;
 /* </end connected objects> */

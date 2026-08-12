@@ -172,6 +172,8 @@ DECLARE
   have_l2_ops int;
   have_ip_ops int;
   have_label_ops int;
+  vector_schema text;
+  old_search_path text;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -205,11 +207,24 @@ BEGIN
     AND c.opcmethod = (SELECT oid FROM pg_catalog.pg_am am WHERE am.amname = 'diskann')
     AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace where nspname='@extschema@');
 
+    SELECT n.nspname
+    INTO STRICT vector_schema
+    FROM pg_catalog.pg_extension e
+    JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
+    WHERE e.extname = 'vector';
+
+    old_search_path := pg_catalog.current_setting('search_path');
+    PERFORM pg_catalog.set_config(
+        'search_path',
+        pg_catalog.format('%I, %I, pg_temp', vector_schema, '@extschema@'),
+        true
+    );
+
     IF have_cos_ops = 0 THEN
-        CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-	        OPERATOR 1 @extschema:vector@.<=> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 distance_type_cosine();
+        CREATE OPERATOR CLASS @extschema@.vector_cosine_ops DEFAULT
+        FOR TYPE vector USING diskann AS
+	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 @extschema@.distance_type_cosine();
     ELSIF have_l2_ops = 0 THEN
         -- Upgrade from 0.4.0 to 0.5.0.  Update cosine opclass to include
         -- the distance_type_cosine function.
@@ -220,18 +235,20 @@ BEGIN
     END IF;
 
     IF have_l2_ops = 0 THEN
-        CREATE OPERATOR CLASS vector_l2_ops
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-            OPERATOR 1 @extschema:vector@.<-> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 distance_type_l2();
+        CREATE OPERATOR CLASS @extschema@.vector_l2_ops
+        FOR TYPE vector USING diskann AS
+            OPERATOR 1 <-> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 @extschema@.distance_type_l2();
     END IF;
 
     IF have_ip_ops = 0 THEN
-        CREATE OPERATOR CLASS vector_ip_ops
-        FOR TYPE @extschema:vector@.vector USING diskann AS
-            OPERATOR 1 @extschema:vector@.<#> (@extschema:vector@.vector, @extschema:vector@.vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 distance_type_inner_product();
+        CREATE OPERATOR CLASS @extschema@.vector_ip_ops
+        FOR TYPE vector USING diskann AS
+            OPERATOR 1 <#> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
+            FUNCTION 1 @extschema@.distance_type_inner_product();
     END IF;
+
+    PERFORM pg_catalog.set_config('search_path', old_search_path, true);
 
     -- Refuse wrongly bound DiskANN vector opclasses left behind by older installs.
     IF EXISTS (
@@ -241,7 +258,14 @@ BEGIN
         WHERE am.amname = 'diskann'
           AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '@extschema@')
           AND c.opcname IN ('vector_cosine_ops', 'vector_l2_ops', 'vector_ip_ops')
-          AND c.opcintype IS DISTINCT FROM '@extschema:vector@.vector'::pg_catalog.regtype
+          AND c.opcintype IS DISTINCT FROM (
+              SELECT t.oid
+              FROM pg_catalog.pg_extension e
+              JOIN pg_catalog.pg_type t
+                ON t.typnamespace = e.extnamespace
+               AND t.typname = 'vector'
+              WHERE e.extname = 'vector'
+          )
     ) THEN
         RAISE EXCEPTION 'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
     END IF;
@@ -297,22 +321,20 @@ pub extern "C-unwind" fn amvalidate(opclassoid: pg_sys::Oid) -> bool {
             return false;
         }
         let form = pg_sys::GETSTRUCT(tup) as pg_sys::Form_pg_opclass;
-        let opcname = core::ffi::CStr::from_ptr((*form).opcname.data.as_ptr());
+        let opcname = core::ffi::CStr::from_ptr((*form).opcname.data.as_ptr())
+            .to_bytes()
+            .to_owned();
         let opcintype = (*form).opcintype;
         pg_sys::ReleaseSysCache(tup);
 
-        let Some(name) = opcname.to_str().ok() else {
-            return false;
-        };
         if !matches!(
-            name,
-            "vector_cosine_ops" | "vector_l2_ops" | "vector_ip_ops"
+            opcname.as_slice(),
+            b"vector_cosine_ops" | b"vector_l2_ops" | b"vector_ip_ops"
         ) {
             return true;
         }
 
-        let expected = vector_type::pgvector_vector_oid();
-        opcintype == expected
+        vector_type::pgvector_vector_base_oid(opcintype) == Some(opcintype)
     }
 }
 
@@ -357,6 +379,22 @@ pub fn smallint_array_overlap(left: Array<i16>, right: Array<i16>) -> bool {
 #[pgrx::pg_schema]
 mod tests {
     use super::*;
+
+    #[pg_test]
+    fn test_vector_opclasses_validate() -> spi::Result<()> {
+        for opclass in ["vector_cosine_ops", "vector_l2_ops", "vector_ip_ops"] {
+            let oid = Spi::get_one::<pg_sys::Oid>(&format!(
+                "SELECT c.oid
+                 FROM pg_catalog.pg_opclass c
+                 JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
+                 WHERE am.amname = 'diskann'
+                   AND c.opcname = '{opclass}'"
+            ))?
+            .expect("operator class was not installed");
+            assert!(amvalidate(oid), "{opclass} failed validation");
+        }
+        Ok(())
+    }
 
     #[pg_test]
     fn test_empty_overlap() -> spi::Result<()> {
