@@ -7,7 +7,8 @@ use super::build::MAX_DIMENSION;
 /// Return the pgvector-owned `vector` base type for `type_oid`.
 ///
 /// This verifies extension ownership and the type name without relying on
-/// `search_path` or a backend-lifetime cache.
+/// `search_path` or a backend-lifetime cache. Runtime verification is still
+/// required for opclasses and indexes created by vulnerable 0.9.0 installs.
 pub unsafe fn pgvector_vector_base_oid(type_oid: pg_sys::Oid) -> Option<pg_sys::Oid> {
     let base_oid = pg_sys::getBaseType(type_oid);
     let vector_extension_oid = pg_sys::get_extension_oid(c"vector".as_ptr(), true);
@@ -33,7 +34,7 @@ pub unsafe fn pgvector_vector_base_oid(type_oid: pg_sys::Oid) -> Option<pg_sys::
 
 /// Reject index attributes whose base type is not pgvector's `vector`.
 ///
-/// Must run before any detoast of index/query datums.
+/// Must run at index creation and open, before any detoast of index/query datums.
 pub unsafe fn ensure_index_vector_type(index: &PgRelation) {
     let tuple_desc = index.tuple_desc();
     let attribute = tuple_desc
