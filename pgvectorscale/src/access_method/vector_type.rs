@@ -7,8 +7,7 @@ use super::build::MAX_DIMENSION;
 /// Return the pgvector-owned `vector` base type for `type_oid`.
 ///
 /// This verifies extension ownership and the type name without relying on
-/// `search_path` or a backend-lifetime cache. Runtime verification is still
-/// required for opclasses and indexes created by vulnerable 0.9.0 installs.
+/// `search_path` or a backend-lifetime cache.
 pub unsafe fn pgvector_vector_base_oid(type_oid: pg_sys::Oid) -> Option<pg_sys::Oid> {
     let base_oid = pg_sys::getBaseType(type_oid);
     let vector_extension_oid = pg_sys::get_extension_oid(c"vector".as_ptr(), true);
@@ -30,23 +29,6 @@ pub unsafe fn pgvector_vector_base_oid(type_oid: pg_sys::Oid) -> Option<pg_sys::
     pg_sys::ReleaseSysCache(type_tuple);
 
     is_vector.then_some(base_oid)
-}
-
-/// Reject index attributes whose base type is not pgvector's `vector`.
-///
-/// Must run at index creation and open, before any detoast of index/query datums.
-pub unsafe fn ensure_index_vector_type(index: &PgRelation) {
-    let tuple_desc = index.tuple_desc();
-    let attribute = tuple_desc
-        .get(0)
-        .unwrap_or_else(|| error!("diskann: index is missing its vector attribute"));
-    let attribute_type_oid = attribute.atttypid;
-    if pgvector_vector_base_oid(attribute_type_oid).is_none() {
-        error!(
-            "diskann: index column type is not pgvector's vector type (found oid {})",
-            attribute_type_oid
-        );
-    }
 }
 
 /// Validate a signed typmod as a vector dimension and return it as u32.

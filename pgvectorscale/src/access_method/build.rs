@@ -250,12 +250,6 @@ fn get_meta_page(
     index_relation: &PgRelation,
     opt: PgBox<TSVIndexOptions>,
 ) -> MetaPage {
-    // This is the index-creation boundary. Reject an opclass bound to any other
-    // physical type before creating and persisting its metapage.
-    unsafe {
-        crate::access_method::vector_type::ensure_index_vector_type(index_relation);
-    }
-
     let typmod = index_relation.tuple_desc().get(0).unwrap().atttypmod;
     let dimensions = crate::access_method::vector_type::dimension_from_typmod(typmod)
         .unwrap_or_else(|message| error!("{}", message));
