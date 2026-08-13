@@ -173,7 +173,6 @@ DECLARE
   have_ip_ops int;
   have_label_ops int;
   vector_schema text;
-  old_search_path text;
 BEGIN
     -- Has cosine operator class been installed previously?
     SELECT count(*)
@@ -213,18 +212,16 @@ BEGIN
     JOIN pg_catalog.pg_namespace n ON n.oid = e.extnamespace
     WHERE e.extname = 'vector';
 
-    old_search_path := pg_catalog.current_setting('search_path');
-    PERFORM pg_catalog.set_config(
-        'search_path',
-        pg_catalog.format('%I, %I, pg_temp', vector_schema, '@extschema@'),
-        true
-    );
-
     IF have_cos_ops = 0 THEN
-        CREATE OPERATOR CLASS @extschema@.vector_cosine_ops DEFAULT
-        FOR TYPE vector USING diskann AS
-	        OPERATOR 1 <=> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 @extschema@.distance_type_cosine();
+        EXECUTE pg_catalog.format(
+            $opclass$
+            CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
+            FOR TYPE %1$I.vector USING diskann AS
+                OPERATOR 1 %1$I.<=> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
+                FUNCTION 1 distance_type_cosine()
+            $opclass$,
+            vector_schema
+        );
     ELSIF have_l2_ops = 0 THEN
         -- Upgrade from 0.4.0 to 0.5.0.  Update cosine opclass to include
         -- the distance_type_cosine function.
@@ -235,39 +232,27 @@ BEGIN
     END IF;
 
     IF have_l2_ops = 0 THEN
-        CREATE OPERATOR CLASS @extschema@.vector_l2_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <-> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 @extschema@.distance_type_l2();
+        EXECUTE pg_catalog.format(
+            $opclass$
+            CREATE OPERATOR CLASS vector_l2_ops
+            FOR TYPE %1$I.vector USING diskann AS
+                OPERATOR 1 %1$I.<-> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
+                FUNCTION 1 distance_type_l2()
+            $opclass$,
+            vector_schema
+        );
     END IF;
 
     IF have_ip_ops = 0 THEN
-        CREATE OPERATOR CLASS @extschema@.vector_ip_ops
-        FOR TYPE vector USING diskann AS
-            OPERATOR 1 <#> (vector, vector) FOR ORDER BY pg_catalog.float_ops,
-            FUNCTION 1 @extschema@.distance_type_inner_product();
-    END IF;
-
-    PERFORM pg_catalog.set_config('search_path', old_search_path, true);
-
-    -- Refuse wrongly bound DiskANN vector opclasses left behind by older installs.
-    IF EXISTS (
-        SELECT 1
-        FROM pg_catalog.pg_opclass c
-        JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
-        WHERE am.amname = 'diskann'
-          AND c.opcnamespace = (SELECT oid FROM pg_catalog.pg_namespace WHERE nspname = '@extschema@')
-          AND c.opcname IN ('vector_cosine_ops', 'vector_l2_ops', 'vector_ip_ops')
-          AND c.opcintype IS DISTINCT FROM (
-              SELECT t.oid
-              FROM pg_catalog.pg_extension e
-              JOIN pg_catalog.pg_type t
-                ON t.typnamespace = e.extnamespace
-               AND t.typname = 'vector'
-              WHERE e.extname = 'vector'
-          )
-    ) THEN
-        RAISE EXCEPTION 'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
+        EXECUTE pg_catalog.format(
+            $opclass$
+            CREATE OPERATOR CLASS vector_ip_ops
+            FOR TYPE %1$I.vector USING diskann AS
+                OPERATOR 1 %1$I.<#> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
+                FUNCTION 1 distance_type_inner_product()
+            $opclass$,
+            vector_schema
+        );
     END IF;
     
     -- First, check if the && operator exists for smallint[]

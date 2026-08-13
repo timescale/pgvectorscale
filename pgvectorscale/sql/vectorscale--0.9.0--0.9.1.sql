@@ -1,3 +1,4 @@
+-- Rebind the extension's C entry points to the versioned 0.9.1 shared library.
 CREATE OR REPLACE FUNCTION diskann_amhandler(internal)
 RETURNS index_am_handler
 PARALLEL SAFE IMMUTABLE STRICT COST 0.0001
