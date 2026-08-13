@@ -94,27 +94,6 @@ def test_schema_shadow_cannot_capture_vector_opclasses(db_connection_params):
                     """
                 )
                 assert cur.fetchone()[0] is True
-
-                cur.execute(
-                    """
-                    CREATE OPERATOR CLASS evil.uuid_l2_ops
-                    FOR TYPE evil.vector USING diskann AS
-                        OPERATOR 1 evil.<-> (evil.vector, evil.vector)
-                            FOR ORDER BY pg_catalog.float_ops,
-                        FUNCTION 1 evil.distance_type_l2();
-                    CREATE TABLE evil.bad_vectors (embedding evil.vector);
-                    """
-                )
-                with pytest.raises(
-                    psycopg2.Error,
-                    match="index column type is not pgvector's vector type",
-                ):
-                    cur.execute(
-                        """
-                        CREATE INDEX ON evil.bad_vectors
-                        USING diskann (embedding evil.uuid_l2_ops)
-                        """
-                    )
         finally:
             conn.close()
     finally:

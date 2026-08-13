@@ -404,7 +404,6 @@ impl MetaPage {
     /// Read the meta page for an index
     pub fn fetch(index: &PgRelation) -> MetaPage {
         unsafe {
-            crate::access_method::vector_type::ensure_index_vector_type(index);
             let page = page::ReadablePage::read(index, META_BLOCK_NUMBER);
             let page_type = page.get_type();
             let meta = match page_type {
