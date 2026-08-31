@@ -35,9 +35,10 @@ AS 'vectorscale-0.9.1', 'smallint_array_overlap_wrapper';
 DO $$
 DECLARE
     expected_vector_type oid;
+    vector_namespace oid;
 BEGIN
-    SELECT t.oid
-    INTO STRICT expected_vector_type
+    SELECT t.oid, e.extnamespace
+    INTO STRICT expected_vector_type, vector_namespace
     FROM pg_catalog.pg_extension e
     JOIN pg_catalog.pg_type t
       ON t.typnamespace = e.extnamespace
@@ -49,20 +50,25 @@ BEGIN
         FROM pg_catalog.pg_opclass c
         JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
         WHERE am.amname = 'diskann'
-          AND c.opcnamespace = (
-              SELECT oid
-              FROM pg_catalog.pg_namespace
-              WHERE nspname = '@extschema@'
-          )
+          AND c.opcnamespace = '@extschema@'::regnamespace
           AND c.opcname IN (
               'vector_cosine_ops',
               'vector_l2_ops',
               'vector_ip_ops'
           )
-          AND c.opcintype IS DISTINCT FROM expected_vector_type
+          AND (
+              c.opcintype IS DISTINCT FROM expected_vector_type
+              OR EXISTS (
+                  SELECT 1
+                  FROM pg_catalog.pg_amop amop
+                  JOIN pg_catalog.pg_operator opr ON opr.oid = amop.amopopr
+                  WHERE amop.amopfamily = c.opcfamily
+                    AND opr.oprnamespace IS DISTINCT FROM vector_namespace
+              )
+          )
     ) THEN
         RAISE EXCEPTION
-            'diskann: a vector operator class is not bound to pgvector''s vector type; drop the affected operator class and recreate the extension objects';
+            'diskann: a vector operator class is not bound to pgvector''s vector type and operators; drop the affected operator class and recreate the extension objects';
     END IF;
 END;
 $$;
