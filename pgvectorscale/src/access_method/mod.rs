@@ -215,10 +215,10 @@ BEGIN
     IF have_cos_ops = 0 THEN
         EXECUTE pg_catalog.format(
             $opclass$
-            CREATE OPERATOR CLASS vector_cosine_ops DEFAULT
+            CREATE OPERATOR CLASS @extschema@.vector_cosine_ops DEFAULT
             FOR TYPE %1$I.vector USING diskann AS
                 OPERATOR 1 %1$I.<=> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
-                FUNCTION 1 distance_type_cosine()
+                FUNCTION 1 @extschema@.distance_type_cosine()
             $opclass$,
             vector_schema
         );
@@ -234,10 +234,10 @@ BEGIN
     IF have_l2_ops = 0 THEN
         EXECUTE pg_catalog.format(
             $opclass$
-            CREATE OPERATOR CLASS vector_l2_ops
+            CREATE OPERATOR CLASS @extschema@.vector_l2_ops
             FOR TYPE %1$I.vector USING diskann AS
                 OPERATOR 1 %1$I.<-> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
-                FUNCTION 1 distance_type_l2()
+                FUNCTION 1 @extschema@.distance_type_l2()
             $opclass$,
             vector_schema
         );
@@ -246,43 +246,43 @@ BEGIN
     IF have_ip_ops = 0 THEN
         EXECUTE pg_catalog.format(
             $opclass$
-            CREATE OPERATOR CLASS vector_ip_ops
+            CREATE OPERATOR CLASS @extschema@.vector_ip_ops
             FOR TYPE %1$I.vector USING diskann AS
                 OPERATOR 1 %1$I.<#> (%1$I.vector, %1$I.vector) FOR ORDER BY pg_catalog.float_ops,
-                FUNCTION 1 distance_type_inner_product()
+                FUNCTION 1 @extschema@.distance_type_inner_product()
             $opclass$,
             vector_schema
         );
     END IF;
     
-    -- First, check if the && operator exists for smallint[]
+    -- First, check if the && operator exists for smallint[] in this extension schema
     IF NOT EXISTS (
-        SELECT 1 FROM pg_catalog.pg_operator 
-        WHERE oprname = '&&' 
-        AND oprleft = 'smallint[]'::regtype 
-        AND oprright = 'smallint[]'::regtype
+        SELECT 1 FROM pg_catalog.pg_operator
+        WHERE oprname = '&&'
+        AND oprnamespace = '@extschema@'::regnamespace
+        AND oprleft = 'pg_catalog.smallint[]'::regtype
+        AND oprright = 'pg_catalog.smallint[]'::regtype
     ) THEN
         -- Create the && operator for smallint[]
-        CREATE OPERATOR && (
-            LEFTARG = smallint[],
-            RIGHTARG = smallint[],
-            PROCEDURE = smallint_array_overlap,
+        CREATE OPERATOR @extschema@.&& (
+            LEFTARG = pg_catalog.smallint[],
+            RIGHTARG = pg_catalog.smallint[],
+            PROCEDURE = @extschema@.smallint_array_overlap,
             COMMUTATOR = &&,
-            RESTRICT = contsel,
-            JOIN = contjoinsel
+            RESTRICT = pg_catalog.contsel,
+            JOIN = pg_catalog.contjoinsel
         );
         
         -- Register the operator with the system catalogs for proper selectivity estimation
         -- This is done by adding entries to pg_amop for the array_ops operator class
-        EXECUTE format(
-            'ALTER OPERATOR FAMILY array_ops USING btree ADD OPERATOR 3 && (smallint[], smallint[]) FOR SEARCH'
-        );
+        ALTER OPERATOR FAMILY pg_catalog.array_ops USING btree
+            ADD OPERATOR 3 @extschema@.&& (pg_catalog.smallint[], pg_catalog.smallint[]) FOR SEARCH;
     END IF;
 
     IF have_label_ops = 0 THEN
-        CREATE OPERATOR CLASS vector_smallint_label_ops
-        DEFAULT FOR TYPE smallint[] USING diskann AS
-            OPERATOR 1 &&;
+        CREATE OPERATOR CLASS @extschema@.vector_smallint_label_ops
+        DEFAULT FOR TYPE pg_catalog.smallint[] USING diskann AS
+            OPERATOR 1 @extschema@.&&;
     END IF;
 END;
 $$;
@@ -297,6 +297,8 @@ $$;
     ]
 );
 
+// PostgreSQL does not call amvalidate during CREATE INDEX or CREATE OPERATOR CLASS.
+// It is invoked only by an explicit amvalidate(oid) call, which our tests use.
 #[pg_guard]
 pub extern "C-unwind" fn amvalidate(opclassoid: pg_sys::Oid) -> bool {
     unsafe {
