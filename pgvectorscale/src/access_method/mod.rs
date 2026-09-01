@@ -286,6 +286,50 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- Verify the vector opclasses are bound to pgvector's type and operators.  On a
+-- fresh install this is trivially true; on an upgrade it rejects opclasses that
+-- were captured by a shadow type before the new extension version activates.
+DO $$
+DECLARE
+    expected_vector_type oid;
+    vector_namespace oid;
+BEGIN
+    SELECT t.oid, e.extnamespace
+    INTO STRICT expected_vector_type, vector_namespace
+    FROM pg_catalog.pg_extension e
+    JOIN pg_catalog.pg_type t
+      ON t.typnamespace = e.extnamespace
+     AND t.typname = 'vector'
+    WHERE e.extname = 'vector';
+
+    IF EXISTS (
+        SELECT 1
+        FROM pg_catalog.pg_opclass c
+        JOIN pg_catalog.pg_am am ON am.oid = c.opcmethod
+        WHERE am.amname = 'diskann'
+          AND c.opcnamespace = '@extschema@'::regnamespace
+          AND c.opcname IN (
+              'vector_cosine_ops',
+              'vector_l2_ops',
+              'vector_ip_ops'
+          )
+          AND (
+              c.opcintype IS DISTINCT FROM expected_vector_type
+              OR EXISTS (
+                  SELECT 1
+                  FROM pg_catalog.pg_amop amop
+                  JOIN pg_catalog.pg_operator opr ON opr.oid = amop.amopopr
+                  WHERE amop.amopfamily = c.opcfamily
+                    AND opr.oprnamespace IS DISTINCT FROM vector_namespace
+              )
+          )
+    ) THEN
+        RAISE EXCEPTION
+            'diskann: a vector operator class is not bound to pgvector''s vector type and operators; drop the affected operator class and recreate the extension objects';
+    END IF;
+END;
+$$;
 "#,
     name = "diskann_ops_operator",
     requires = [
