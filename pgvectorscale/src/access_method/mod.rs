@@ -260,13 +260,13 @@ BEGIN
         SELECT 1 FROM pg_catalog.pg_operator
         WHERE oprname = '&&'
         AND oprnamespace = '@extschema@'::regnamespace
-        AND oprleft = 'pg_catalog.smallint[]'::regtype
-        AND oprright = 'pg_catalog.smallint[]'::regtype
+        AND oprleft = 'smallint[]'::regtype
+        AND oprright = 'smallint[]'::regtype
     ) THEN
         -- Create the && operator for smallint[]
         CREATE OPERATOR @extschema@.&& (
-            LEFTARG = pg_catalog.smallint[],
-            RIGHTARG = pg_catalog.smallint[],
+            LEFTARG = smallint[],
+            RIGHTARG = smallint[],
             PROCEDURE = @extschema@.smallint_array_overlap,
             COMMUTATOR = &&,
             RESTRICT = pg_catalog.contsel,
@@ -276,12 +276,12 @@ BEGIN
         -- Register the operator with the system catalogs for proper selectivity estimation
         -- This is done by adding entries to pg_amop for the array_ops operator class
         ALTER OPERATOR FAMILY pg_catalog.array_ops USING btree
-            ADD OPERATOR 3 @extschema@.&& (pg_catalog.smallint[], pg_catalog.smallint[]) FOR SEARCH;
+            ADD OPERATOR 3 @extschema@.&& (smallint[], smallint[]) FOR SEARCH;
     END IF;
 
     IF have_label_ops = 0 THEN
         CREATE OPERATOR CLASS @extschema@.vector_smallint_label_ops
-        DEFAULT FOR TYPE pg_catalog.smallint[] USING diskann AS
+        DEFAULT FOR TYPE smallint[] USING diskann AS
             OPERATOR 1 @extschema@.&&;
     END IF;
 END;
