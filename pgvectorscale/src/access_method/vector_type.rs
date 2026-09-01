@@ -1,6 +1,5 @@
 use pgrx::pg_sys::{self, GETSTRUCT};
 use pgrx::varlena::varsize_any;
-use pgrx::*;
 
 use super::build::MAX_DIMENSION;
 

@@ -425,7 +425,14 @@ impl MetaPage {
                 meta.get_num_dimensions(),
                 meta.get_num_dimensions_to_index(),
             )
-            .unwrap_or_else(|message| pgrx::error!("{}", message));
+            .unwrap_or_else(|message| {
+                pgrx::error!(
+                    "{}; the index was likely built by an older pgvectorscale version \
+                     without dimension validation (e.g. on a column without a vector(N) \
+                     typmod) and cannot be used; drop and recreate the index",
+                    message
+                )
+            });
             meta
         }
     }
