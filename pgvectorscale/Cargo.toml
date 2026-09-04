@@ -1,6 +1,6 @@
 [package]
 name = "vectorscale"
-version = "0.9.1"
+version = "0.9.2-dev"
 edition = "2021"
 
 [lib]
