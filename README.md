@@ -45,11 +45,11 @@ The fastest ways to run PostgreSQL with pgvectorscale are:
 
 * [Using a pre-built Docker container](#using-a-pre-built-docker-container)
 * [Installing from source](#installing-from-source)
-* [Enable pgvectorscale in a Timescale Cloud service](#enable-pgai-in-a-timescale-cloud-service)
+* [Enable pgvectorscale in a Timescale Cloud service](#enable-pgvectorscale-in-a-timescale-cloud-service)
 
 ### Using a pre-built Docker container
 
-1.  [Run the TimescaleDB Docker image](https://docs.timescale.com/self-hosted/latest/install/installation-docker/).
+1.  [Run the TimescaleDB HA Docker image](https://www.tigerdata.com/docs/get-started/choose-your-path/install-timescaledb#tab=docker).
 
 1. Connect to your database:
    ```bash
