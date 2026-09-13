@@ -11,7 +11,7 @@
 //! of the data.
 
 use pgrx::{
-    pg_sys::{BlockNumber, InvalidBlockNumber},
+    pg_sys::{BlockNumber, InvalidBlockNumber, OffsetNumber},
     PgRelation,
 };
 use rkyv::{Archive, Deserialize, Serialize};
@@ -31,6 +31,18 @@ struct ChainItemHeader {
 
 const CHAIN_ITEM_HEADER_SIZE: usize = std::mem::size_of::<ArchivedChainItemHeader>();
 
+/// Append a single chain-item to `page`. Caller retains the exclusive
+/// lock; the item must fit on this page (no chaining). Returns the
+/// offset number of the new item.
+pub fn write_chain_item_to_page(page: &mut WritablePage, data: &[u8]) -> OffsetNumber {
+    let header = ChainItemHeader {
+        next: ItemPointer::new_invalid(),
+    };
+    let header_bytes = rkyv::to_bytes::<_, 256>(&header).unwrap();
+    let combined = [header_bytes.as_slice(), data].concat();
+    page.add_item(&combined)
+}
+
 pub struct ChainTapeWriter<'a, S: StatsNodeWrite> {
     page_type: PageType,
     index: &'a PgRelation,
@@ -45,25 +57,6 @@ impl<'a, S: StatsNodeWrite> ChainTapeWriter<'a, S> {
         let page = WritablePage::new(index, page_type);
         let block_number = page.get_block_number();
         page.commit();
-        Self {
-            page_type,
-            index,
-            current: block_number,
-            stats,
-        }
-    }
-
-    pub fn reinit(
-        index: &'a PgRelation,
-        page_type: PageType,
-        stats: &'a mut S,
-        block_number: BlockNumber,
-    ) -> Self {
-        assert!(page_type.is_chained());
-        let mut page = WritablePage::modify(index, block_number);
-        page.reinit(page_type);
-        page.commit();
-
         Self {
             page_type,
             index,
