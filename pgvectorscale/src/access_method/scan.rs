@@ -438,7 +438,7 @@ fn get_tuple(
 #[pg_guard]
 pub extern "C-unwind" fn amendscan(scan: pg_sys::IndexScanDesc) {
     let min_level = unsafe {
-        let l = pg_sys::log_min_messages;
+        let l = crate::util::ports::log_min_messages();
         let c = pg_sys::client_min_messages;
         std::cmp::min(l, c)
     };

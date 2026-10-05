@@ -418,7 +418,13 @@ impl MetaPage {
                     new_meta
                 }
                 PageType::MetaV2 => MetaPageV2::from_page(page).into(),
-                PageType::Meta => Self::load(index),
+                PageType::Meta => {
+                    // Release the page: `load` reads the same block again, and
+                    // PG19 asserts that a backend does not already hold a
+                    // content lock on a buffer it is about to lock.
+                    std::mem::drop(page);
+                    Self::load(index)
+                }
                 _ => pgrx::error!("Meta page is not of type Meta"),
             };
             crate::access_method::vector_type::ensure_valid_dimensions(
