@@ -27,7 +27,11 @@ impl TableSlot {
         };
         heap_pointer.to_item_pointer_data(&mut ctid);
 
+        #[cfg(not(feature = "pg19"))]
         let scan = (*table_am).index_fetch_begin.unwrap()(heap_rel.as_ptr());
+        #[cfg(feature = "pg19")]
+        let scan =
+            (*table_am).index_fetch_begin.unwrap()(heap_rel.as_ptr(), pg_sys::ScanOptions::SO_NONE);
         let mut call_again = false;
         /* all_dead can be ignored, only used in optimizations we don't implement */
         let mut all_dead = false;

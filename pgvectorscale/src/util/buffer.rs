@@ -11,6 +11,8 @@ use pgrx::pg_sys::{
     BlockNumber, Buffer, BufferGetBlockNumber, ForkNumber, InvalidBlockNumber, ReadBufferMode,
 };
 
+use super::ports;
+
 pub struct LockRelationForExtension<'a> {
     relation: &'a PgRelation,
 }
@@ -83,7 +85,7 @@ impl<'a> LockedBufferExclusive<'a> {
             std::ptr::null_mut(),
         );
 
-        pg_sys::LockBuffer(buf, pg_sys::BUFFER_LOCK_EXCLUSIVE as i32);
+        pg_sys::LockBuffer(buf, ports::BUFFER_LOCK_EXCLUSIVE);
         LockedBufferExclusive {
             _relation: index,
             buffer: buf,
@@ -163,7 +165,7 @@ impl<'a> LockedBufferShare<'a> {
                 std::ptr::null_mut(),
             );
 
-            pg_sys::LockBuffer(buf, pg_sys::BUFFER_LOCK_SHARE as i32);
+            pg_sys::LockBuffer(buf, ports::BUFFER_LOCK_SHARE);
             LockedBufferShare {
                 _relation: index,
                 buffer: buf,

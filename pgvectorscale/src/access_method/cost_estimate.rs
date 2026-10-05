@@ -20,7 +20,7 @@ pub unsafe extern "C-unwind" fn amcostestimate(
         *index_selectivity = 0.;
         *index_correlation = 0.;
         *index_pages = 0.;
-        #[cfg(any(feature = "pg18"))]
+        #[cfg(any(feature = "pg18", feature = "pg19"))]
         {
             // Following in the footsteps of pgvector's PG18+ cost estimate change
             // https://github.com/pgvector/pgvector/commit/1291b12090bbb03bd92b92e42a1567ae5b1c96ad
