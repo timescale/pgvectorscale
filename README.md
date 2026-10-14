@@ -5,9 +5,11 @@
 
 <h3>pgvectorscale builds on pgvector with higher performance embedding search and cost-efficient storage for AI applications. </h3>
 
-[![Discord](https://img.shields.io/badge/Join_us_on_Discord-black?style=for-the-badge&logo=discord&logoColor=white)](https://discord.gg/KRdHVXAmkp)
 [![Try Timescale for free](https://img.shields.io/badge/Try_Timescale_for_free-black?style=for-the-badge&logo=timescale&logoColor=white)](https://tsdb.co/gh-pgvector-signup)
 </div>
+
+> [!NOTE]
+> **A new approach to vector search:** We're building [pg_vectorsearch](https://github.com/timescale/pg_vectorsearch), a next-generation PostgreSQL vector index that uses partitioning and compression instead of graph-based indexing to deliver faster searches with less memory. It's available in early alpha and isn't yet production-ready. [Learn more](https://www.tigerdata.com/blog/announcing-pg_vectorsearch-scalable-open-source-vector-search-postgresql).
 
 pgvectorscale complements [pgvector][pgvector], the open-source vector data extension for PostgreSQL, and introduces the following key innovations for pgvector data:
 - A new index type called StreamingDiskANN, inspired by the [DiskANN](https://github.com/microsoft/DiskANN) algorithm, based on research from Microsoft.
