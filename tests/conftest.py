@@ -67,10 +67,12 @@ def clean_db(db_conn):
             DROP TABLE IF EXISTS test_l2 CASCADE;
             DROP TABLE IF EXISTS test_ip CASCADE;
             DROP TABLE IF EXISTS documents CASCADE;
+            DROP TABLE IF EXISTS test_progress_inc CASCADE;
+            DROP TABLE IF EXISTS test_progress_done CASCADE;
         """)
-    
+
     yield
-    
+
     # Clean up after the test
     with db_conn.cursor() as cur:
         cur.execute("""
@@ -81,6 +83,8 @@ def clean_db(db_conn):
             DROP TABLE IF EXISTS test_l2 CASCADE;
             DROP TABLE IF EXISTS test_ip CASCADE;
             DROP TABLE IF EXISTS documents CASCADE;
+            DROP TABLE IF EXISTS test_progress_inc CASCADE;
+            DROP TABLE IF EXISTS test_progress_done CASCADE;
         """)
 
 
