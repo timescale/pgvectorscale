@@ -54,6 +54,24 @@ impl TSVScanState {
         }
     }
 
+    /// Release the current iteration's [`StorageState`], if any.
+    ///
+    /// The state is owned by this struct: `initialize` publishes it with
+    /// [`Box::into_raw`] and this reclaims it with [`Box::from_raw`]. Keeping it a
+    /// raw pointer (rather than an `Option<Box<_>>`) preserves the existing call
+    /// sites, which need `&mut TSVScanState` at the same time as the state itself.
+    ///
+    /// The pointer is nulled out immediately, so calling this repeatedly -- as
+    /// `amendscan` and then `Drop` do -- can never double free.
+    fn release_storage(&mut self) {
+        if !self.storage.is_null() {
+            // SAFETY: `storage` is null or a pointer from `Box::into_raw` in
+            // `initialize`; it is nulled below before any other code can observe it.
+            drop(unsafe { Box::from_raw(self.storage) });
+            self.storage = std::ptr::null_mut();
+        }
+    }
+
     fn initialize(
         &mut self,
         index: &PgRelation,
@@ -83,8 +101,24 @@ impl TSVScanState {
             }
         };
 
-        self.storage = PgMemoryContexts::CurrentMemoryContext.leak_and_drop_on_delete(store_type);
+        // Release the previous iteration before publishing the new one. `amrescan`
+        // re-enters `initialize` for every rescan (nested-loop / lateral joins);
+        // previously each call leaked a fresh `StorageState` -- a response iterator
+        // plus a cloned quantizer -- into the executor's per-query memory context
+        // without dropping the one it replaced, so those piled up for the lifetime
+        // of the whole query instead of the scan.
+        self.release_storage();
+        self.storage = Box::into_raw(Box::new(store_type));
         self.distance_fn = Some(distance);
+    }
+}
+
+impl Drop for TSVScanState {
+    fn drop(&mut self) {
+        // Backstop for scans torn down without `amendscan` (e.g. an aborted query):
+        // the state object itself is released when the per-query memory context is
+        // reset, and this releases the storage it owns.
+        self.release_storage();
     }
 }
 
@@ -437,22 +471,29 @@ fn get_tuple(
 
 #[pg_guard]
 pub extern "C-unwind" fn amendscan(scan: pg_sys::IndexScanDesc) {
+    let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
+    let state = unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
+
     let min_level = unsafe {
         let l = pg_sys::log_min_messages;
         let c = pg_sys::client_min_messages;
         std::cmp::min(l, c)
     };
     if min_level <= pg_sys::DEBUG1 as _ {
-        let scan: PgBox<pg_sys::IndexScanDescData> = unsafe { PgBox::from_pg(scan) };
-        let state =
-            unsafe { (scan.opaque as *mut TSVScanState).as_mut() }.expect("no scandesc state");
-
-        let mut storage = unsafe { state.storage.as_mut() }.expect("no storage in state");
-        match &mut storage {
-            StorageState::SbqSpeedup(_bq, iter) => end_scan::<SbqSpeedupStorage>(iter),
-            StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
+        // A scan that is ended without ever having been rescanned has no storage,
+        // which is not an error -- only report stats when there are some.
+        if let Some(storage) = unsafe { state.storage.as_mut() } {
+            match storage {
+                StorageState::SbqSpeedup(_bq, iter) => end_scan::<SbqSpeedupStorage>(iter),
+                StorageState::Plain(iter) => end_scan::<PlainStorage>(iter),
+            }
         }
     }
+
+    // Release the scan's state at end of scan instead of deferring to the
+    // executor's per-query context teardown, so a query that opens many scans does
+    // not hold every iterator (and cloned quantizer) alive until it completes.
+    state.release_storage();
 }
 
 fn end_scan<S: Storage>(
@@ -473,4 +514,62 @@ fn end_scan<S: Storage>(
 
     debug_assert_eq!(iter.quantizer_stats.node_reads, 1);
     debug_assert_eq!(iter.quantizer_stats.node_writes, 0);
+}
+
+#[cfg(any(test, feature = "pg_test"))]
+#[pgrx::pg_schema]
+mod tests {
+    use pgrx::{pg_test, spi, Spi};
+
+    /// Exercises repeated rescans of a diskann index inside a single statement.
+    ///
+    /// `amrescan` re-enters [`TSVScanState::initialize`] once per outer row of a
+    /// nested-loop / lateral join, and `amendscan` ends the scan. Each of those
+    /// must release the previous iteration's `StorageState` -- the response
+    /// iterator plus a cloned quantizer -- rather than letting one accumulate per
+    /// rescan until the whole query finishes.
+    ///
+    /// Beyond covering that path, this guards the release itself: an incorrect
+    /// ownership transfer would double free or use freed memory here and crash the
+    /// backend, not merely leak. The heap is deliberately churned first so the
+    /// rescore path also encounters dead / invisible tuples.
+    #[pg_test]
+    fn diskann_rescan_releases_state_each_iteration() -> spi::Result<()> {
+        Spi::run(
+            "CREATE TABLE rescan_test(id int, embedding vector(3));
+             INSERT INTO rescan_test(id, embedding)
+             SELECT g, ('[' || g || ',' || (g % 7) || ',' || (g % 5) || ']')::vector
+               FROM generate_series(1, 200) g;
+             CREATE INDEX ON rescan_test USING diskann (embedding);",
+        )?;
+
+        // Churn the heap so some index entries point at dead / superseded tuples.
+        Spi::run("UPDATE rescan_test SET embedding = embedding WHERE id % 3 = 0;")?;
+        Spi::run("DELETE FROM rescan_test WHERE id % 11 = 0;")?;
+
+        // Make the planner prefer the index so the lateral really does rescan it.
+        Spi::run("SET enable_seqscan = off;")?;
+
+        // One diskann rescan per outer row: 25 rescans in a single statement.
+        let neighbors = Spi::get_one::<i64>(
+            "SELECT count(*) FROM (
+                 SELECT o.id AS oid, n.id AS nid
+                   FROM (SELECT id, embedding FROM rescan_test ORDER BY id LIMIT 25) o
+                   CROSS JOIN LATERAL (
+                       SELECT i.id
+                         FROM rescan_test i
+                        ORDER BY i.embedding <=> o.embedding
+                        LIMIT 3
+                   ) n
+             ) s",
+        )?
+        .expect("count should not be null");
+
+        assert_eq!(
+            neighbors, 75,
+            "each of the 25 outer rows should contribute 3 neighbours across rescans"
+        );
+
+        Ok(())
+    }
 }
