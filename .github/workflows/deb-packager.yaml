@@ -20,15 +20,15 @@ jobs:
       matrix:
         pg:
           - major: 14
-            minor: 13
+            version: "14.13"
           - major: 15
-            minor: 7
+            version: "15.7"
           - major: 16
-            minor: 3
+            version: "16.3"
           - major: 17
-            minor: 0
+            version: "17.0"
           - major: 18
-            minor: 0
+            version: "18.0"
         platform:
           - type: amd64
             runs_on: ubuntu-latest
@@ -66,7 +66,7 @@ jobs:
     - name: Install PostgreSQL ${{ matrix.pg.major }}
       uses: ./.github/actions/install-postgres
       with:
-        pg-version: ${{ matrix.pg.major }}.${{ matrix.pg.minor }}
+        pg-version: ${{ matrix.pg.version }}
         pg-src-dir: ~/${{ env.PG_SRC_DIR }}
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
 
@@ -81,7 +81,7 @@ jobs:
       uses: ./.github/actions/install-pgrx
       with:
         pg-install-dir: ~/${{ env.PG_INSTALL_DIR }}
-        pgrx-version: 0.16.1
+        pgrx-version: 0.19.2
 
     - name: Build Deb
       id: debbuild

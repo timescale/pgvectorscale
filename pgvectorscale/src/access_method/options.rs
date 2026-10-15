@@ -110,6 +110,8 @@ pub unsafe extern "C-unwind" fn amoptions(
         opttype: pg_sys::relopt_type::Type,
         offset: i32,
     ) -> pg_sys::relopt_parse_elt {
+        // `isset_offset` exists only in PG18: it was added there and removed
+        // again in PG19.
         #[cfg(not(feature = "pg18"))]
         {
             pg_sys::relopt_parse_elt {

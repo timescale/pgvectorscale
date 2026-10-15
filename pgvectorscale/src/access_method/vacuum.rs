@@ -91,11 +91,11 @@ fn bulk_delete_for_storage<S: Storage, N: NodeVacuum>(
         }
         let mut modified = false;
 
-        #[cfg(feature = "pg18")]
+        #[cfg(any(feature = "pg18", feature = "pg19"))]
         unsafe {
             pg_sys::vacuum_delay_point(false)
         };
-        #[cfg(not(feature = "pg18"))]
+        #[cfg(not(any(feature = "pg18", feature = "pg19")))]
         unsafe {
             pg_sys::vacuum_delay_point()
         };

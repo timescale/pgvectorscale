@@ -99,8 +99,13 @@ impl SbqMeans {
             .get_quantizer_metadata_pointer()
             .unwrap_or_else(|| pgrx::error!("No SBQ pointer found in meta page"));
 
-        let page = ReadablePage::read(index, qip.block_number);
-        let page_type = page.get_type();
+        // Release the share lock before dispatching: both arms below read the
+        // same block again, and PG19 asserts that a backend does not already
+        // hold a content lock on a buffer it is about to lock.
+        let page_type = {
+            let page = ReadablePage::read(index, qip.block_number);
+            page.get_type()
+        };
         match page_type {
             PageType::SbqMeansV1 => SbqMeansV1::load(index, quantizer, qip, stats),
             PageType::SbqMeans => {

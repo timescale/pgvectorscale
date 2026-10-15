@@ -32,9 +32,15 @@ impl PlainDistanceMeasure {
     }
 }
 
-/* This is only applicable to plain, so keep here not in storage_common */
+/// This is only applicable to plain, so keep here not in storage_common.
+///
+/// The reference vector is copied out of the index rather than kept as a
+/// locked page.  Holding the page across `get_distance` would re-lock the same
+/// buffer whenever the compared node happens to live on the same page, which
+/// PG19 rejects.  (`SbqNodeDistanceMeasure` copies its vector out for the same
+/// reason.)
 pub struct IndexFullDistanceMeasure<'a> {
-    readable_node: ReadablePlainNode<'a>,
+    vector: Vec<f32>,
     storage: &'a PlainStorage<'a>,
 }
 
@@ -44,17 +50,13 @@ impl<'a> IndexFullDistanceMeasure<'a> {
     /// The caller must ensure that:
     /// 1. The index_pointer is valid and points to a properly initialized PlainNode
     /// 2. The storage reference remains valid for the lifetime 'a
-    /// 3. The node at index_pointer is not modified while this IndexFullDistanceMeasure exists
     pub unsafe fn with_index_pointer<T: StatsNodeRead>(
         storage: &'a PlainStorage<'a>,
         index_pointer: IndexPointer,
         stats: &mut T,
     ) -> Self {
         let rn = unsafe { PlainNode::read(storage.index, index_pointer, stats) };
-        Self {
-            readable_node: rn,
-            storage,
-        }
+        Self::with_readable_node(storage, rn)
     }
 
     /// # Safety
@@ -62,15 +64,12 @@ impl<'a> IndexFullDistanceMeasure<'a> {
     /// The caller must ensure that:
     /// 1. The readable_node is valid and points to a properly initialized PlainNode
     /// 2. The storage reference remains valid for the lifetime 'a
-    /// 3. The node at readable_node is not modified while this IndexFullDistanceMeasure exists
     pub unsafe fn with_readable_node(
         storage: &'a PlainStorage<'a>,
         readable_node: ReadablePlainNode<'a>,
     ) -> Self {
-        Self {
-            readable_node,
-            storage,
-        }
+        let vector = readable_node.get_archived_node().vector.as_slice().to_vec();
+        Self { vector, storage }
     }
 }
 
@@ -81,13 +80,10 @@ impl NodeDistanceMeasure for IndexFullDistanceMeasure<'_> {
         stats: &mut T,
     ) -> f32 {
         let rn1 = PlainNode::read(self.storage.index, index_pointer, stats);
-        let rn2 = &self.readable_node;
         let node1 = rn1.get_archived_node();
-        let node2 = rn2.get_archived_node();
         assert!(!node1.vector.is_empty());
-        assert!(node1.vector.len() == node2.vector.len());
+        assert!(node1.vector.len() == self.vector.len());
         let vec1 = node1.vector.as_slice();
-        let vec2 = node2.vector.as_slice();
-        (self.storage.get_distance_function())(vec1, vec2)
+        (self.storage.get_distance_function())(vec1, self.vector.as_slice())
     }
 }

@@ -6,10 +6,16 @@ use std::os::raw::c_int;
 
 use memoffset::*;
 
-#[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
+#[cfg(any(
+    feature = "pg15",
+    feature = "pg16",
+    feature = "pg17",
+    feature = "pg18",
+    feature = "pg19"
+))]
 use pg_sys::pgstat_assoc_relation;
 
-use pgrx::pg_sys::{Datum, ItemId, OffsetNumber, Pointer, TupleTableSlot};
+use pgrx::pg_sys::{Datum, ItemId, OffsetNumber, TupleTableSlot};
 use pgrx::{pg_sys, PgBox, PgRelation};
 
 /// Given a valid Page pointer, return address of the "Special Pointer" (custom info at end of page)
@@ -19,7 +25,7 @@ use pgrx::{pg_sys, PgBox, PgRelation};
 /// This function cannot determine if the `page` argument is really a non-null pointer to a [`Page`].
 #[inline(always)]
 #[allow(non_snake_case)]
-pub unsafe fn PageGetSpecialPointer(page: pgrx::pg_sys::Page) -> Pointer {
+pub unsafe fn PageGetSpecialPointer(page: pgrx::pg_sys::Page) -> *mut std::os::raw::c_char {
     // PageValidateSpecialPointer(page);
     // return (char *) page + ((PageHeader) page)->pd_special;
     PageValidateSpecialPointer(page);
@@ -91,6 +97,44 @@ pub unsafe fn PageGetMaxOffsetNumber(page: pgrx::pg_sys::Page) -> usize {
     }
 }
 
+/// PG19 turned `LockBuffer`'s mode argument into the `BufferLockMode` enum
+/// (which also renumbers the modes), so the lock modes have to be spelled
+/// differently per version.
+#[cfg(not(feature = "pg19"))]
+pub type BufferLockMode = c_int;
+#[cfg(feature = "pg19")]
+pub type BufferLockMode = pg_sys::BufferLockMode::Type;
+
+#[cfg(not(feature = "pg19"))]
+pub const BUFFER_LOCK_SHARE: BufferLockMode = pg_sys::BUFFER_LOCK_SHARE as BufferLockMode;
+#[cfg(feature = "pg19")]
+pub const BUFFER_LOCK_SHARE: BufferLockMode = pg_sys::BufferLockMode::BUFFER_LOCK_SHARE;
+
+#[cfg(not(feature = "pg19"))]
+pub const BUFFER_LOCK_EXCLUSIVE: BufferLockMode = pg_sys::BUFFER_LOCK_EXCLUSIVE as BufferLockMode;
+#[cfg(feature = "pg19")]
+pub const BUFFER_LOCK_EXCLUSIVE: BufferLockMode = pg_sys::BufferLockMode::BUFFER_LOCK_EXCLUSIVE;
+
+/// The effective `log_min_messages` setting for this backend.
+///
+/// PG19 made `log_min_messages` an array indexed by backend type, so it can no
+/// longer be read as a plain scalar GUC.
+///
+/// # Safety
+///
+/// Must be called from a backend, i.e. after `MyBackendType` is set.
+#[cfg(not(feature = "pg19"))]
+pub unsafe fn log_min_messages() -> c_int {
+    pg_sys::log_min_messages
+}
+
+#[cfg(feature = "pg19")]
+pub unsafe fn log_min_messages() -> c_int {
+    *std::ptr::addr_of!(pg_sys::log_min_messages)
+        .cast::<c_int>()
+        .add(pg_sys::MyBackendType as usize)
+}
+
 pub unsafe fn slot_getattr(
     slot: &PgBox<TupleTableSlot>,
     attnum: pg_sys::AttrNumber,
@@ -132,13 +176,19 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
         {
             (*tmp).t_counts.t_numscans += 1;
         }
-        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
+        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18", feature = "pg19"))]
         {
             (*tmp).counts.numscans += 1;
         }
     }
 
-    #[cfg(any(feature = "pg15", feature = "pg16", feature = "pg17", feature = "pg18"))]
+    #[cfg(any(
+        feature = "pg15",
+        feature = "pg16",
+        feature = "pg17",
+        feature = "pg18",
+        feature = "pg19"
+    ))]
     if indexrel.pgstat_info.is_null() && indexrel.pgstat_enabled {
         pgstat_assoc_relation(index_relation);
         assert!(!indexrel.pgstat_info.is_null());
@@ -147,7 +197,7 @@ pub unsafe fn pgstat_count_index_scan(index_relation: pg_sys::Relation, indexrel
         {
             (*tmp).t_counts.t_numscans += 1;
         }
-        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18"))]
+        #[cfg(any(feature = "pg16", feature = "pg17", feature = "pg18", feature = "pg19"))]
         {
             (*tmp).counts.numscans += 1;
         }
@@ -188,7 +238,14 @@ pub unsafe fn IndexBuildHeapScanParallel<T>(
     build_callback_state: *mut T,
     tablescandesc: *mut pg_sys::ParallelTableScanDescData,
 ) {
+    #[cfg(not(feature = "pg19"))]
     let scan = pg_sys::table_beginscan_parallel(heap_relation, tablescandesc);
+    #[cfg(feature = "pg19")]
+    let scan = pg_sys::table_beginscan_parallel(
+        heap_relation,
+        tablescandesc,
+        pg_sys::ScanOptions::SO_NONE,
+    );
 
     let heap_relation_ref = heap_relation.as_ref().unwrap();
     let table_am = heap_relation_ref.rd_tableam.as_ref().unwrap();

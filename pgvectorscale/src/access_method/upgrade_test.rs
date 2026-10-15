@@ -41,6 +41,10 @@ pub mod tests {
             // PG18 was not supported before 0.9.0
             return;
         }
+        if cfg!(feature = "pg19") {
+            // No release for PG19 yet
+            return;
+        }
         pgrx_tests::run_test(
             "test_delete_mock_fn",
             None,

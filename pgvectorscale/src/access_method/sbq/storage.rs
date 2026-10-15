@@ -134,18 +134,25 @@ impl<'a> SbqSpeedupStorage<'a> {
     ) {
         match gns {
             GraphNeighborStore::Disk => {
-                let rn_visiting = unsafe {
-                    SbqNode::read(
-                        self.index,
-                        lsn_index_pointer,
-                        self.has_labels,
-                        &mut lsr.stats,
-                    )
+                // Copy the neighbor list out and drop the visited node's page
+                // before reading any neighbor: neighbors commonly live on the
+                // same page, and a backend may not lock a buffer whose content
+                // lock it already holds.
+                let neighbors = {
+                    let rn_visiting = unsafe {
+                        SbqNode::read(
+                            self.index,
+                            lsn_index_pointer,
+                            self.has_labels,
+                            &mut lsr.stats,
+                        )
+                    };
+                    rn_visiting
+                        .get_archived_node()
+                        .get_index_pointer_to_neighbors()
                 };
-                let node_visiting = rn_visiting.get_archived_node();
-                let neighbors = node_visiting.get_index_pointer_to_neighbors();
 
-                for &neighbor_index_pointer in neighbors.iter() {
+                for neighbor_index_pointer in neighbors {
                     if !lsr.prepare_insert(neighbor_index_pointer) {
                         continue;
                     }
@@ -332,18 +339,26 @@ impl Storage for SbqSpeedupStorage<'_> {
         neighbors_of: ItemPointer,
         stats: &mut S,
     ) -> Vec<NeighborWithDistance> {
-        let rn = unsafe { SbqNode::read(self.index, neighbors_of, self.has_labels, stats) };
-        let archived = rn.get_archived_node();
-        let q = archived.get_bq_vector();
+        // Copy the vector and the neighbor list out, then drop the page: the
+        // neighbors read below commonly live on the same page, and a backend
+        // may not lock a buffer whose content lock it already holds.
+        let (q, neighbors) = {
+            let rn = unsafe { SbqNode::read(self.index, neighbors_of, self.has_labels, stats) };
+            let archived = rn.get_archived_node();
+            (
+                archived.get_bq_vector().to_vec(),
+                archived.get_index_pointer_to_neighbors(),
+            )
+        };
 
-        rn.get_archived_node()
-            .iter_neighbors()
+        neighbors
+            .into_iter()
             .map(|n| {
                 //OPT: we can optimize this if num_dimensions_for_neighbors == num_dimensions_to_index
                 let rn1 = unsafe { SbqNode::read(self.index, n, self.has_labels, stats) };
                 let arch = rn1.get_archived_node();
                 stats.record_quantized_distance_comparison();
-                let dist = distance_xor_optimized(q, arch.get_bq_vector());
+                let dist = distance_xor_optimized(&q, arch.get_bq_vector());
                 NeighborWithDistance::new(
                     n,
                     DistanceWithTieBreak::new(dist as f32, neighbors_of, n),

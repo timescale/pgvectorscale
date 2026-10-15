@@ -88,16 +88,20 @@ pub struct PlainStorageLsnPrivateData {
 }
 
 impl PlainStorageLsnPrivateData {
+    /// Takes the node's data by value rather than borrowing the archived node,
+    /// so that callers can release the node's page first.  With a `Builder`
+    /// store this reads other nodes, which may sit on that very page, and a
+    /// backend may not lock a buffer whose content lock it already holds.
     pub fn new(
         index_pointer_to_node: IndexPointer,
-        node: &ArchivedPlainNode,
+        heap_pointer: HeapPointer,
+        disk_neighbors: Vec<ItemPointer>,
         gns: &mut GraphNeighborStore,
         storage: &PlainStorage,
         stats: &mut PruneNeighborStats,
     ) -> Self {
-        let heap_pointer = node.heap_item_pointer.deserialize_item_pointer();
         let neighbors = match gns {
-            GraphNeighborStore::Disk => node.get_index_pointer_to_neighbors(),
+            GraphNeighborStore::Disk => disk_neighbors,
             GraphNeighborStore::Builder(b) => {
                 b.get_neighbors(index_pointer_to_node, storage, stats)
             }
@@ -231,22 +235,37 @@ impl Storage for PlainStorage<'_> {
             return None;
         }
 
-        let rn = unsafe { PlainNode::read(self.index, index_pointer, &mut lsr.stats) };
-        let node = rn.get_archived_node();
+        let (distance, heap_pointer, node_neighbors) = {
+            let rn = unsafe { PlainNode::read(self.index, index_pointer, &mut lsr.stats) };
+            let node = rn.get_archived_node();
 
-        let distance = match lsr.sdm.as_ref().unwrap() {
-            PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
-                self.distance_fn,
-                query.vec().to_index_slice(),
-                node.vector.as_slice(),
-                &mut lsr.stats,
-            ),
+            let distance = match lsr.sdm.as_ref().unwrap() {
+                PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
+                    self.distance_fn,
+                    query.vec().to_index_slice(),
+                    node.vector.as_slice(),
+                    &mut lsr.stats,
+                ),
+            };
+
+            (
+                distance,
+                node.heap_item_pointer.deserialize_item_pointer(),
+                node.get_index_pointer_to_neighbors(),
+            )
         };
 
         Some(ListSearchNeighbor::new(
             index_pointer,
             lsr.create_distance_with_tie_break(distance, index_pointer),
-            PlainStorageLsnPrivateData::new(index_pointer, node, gns, self, &mut lsr.prune_stats),
+            PlainStorageLsnPrivateData::new(
+                index_pointer,
+                heap_pointer,
+                node_neighbors,
+                gns,
+                self,
+                &mut lsr.prune_stats,
+            ),
             None,
         ))
     }
@@ -269,24 +288,33 @@ impl Storage for PlainStorage<'_> {
                 continue;
             }
 
-            let rn_neighbor =
-                unsafe { PlainNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
-            let node_neighbor = rn_neighbor.get_archived_node();
+            let (distance, heap_pointer, node_neighbors) = {
+                let rn_neighbor =
+                    unsafe { PlainNode::read(self.index, neighbor_index_pointer, &mut lsr.stats) };
+                let node_neighbor = rn_neighbor.get_archived_node();
 
-            let distance = match lsr.sdm.as_ref().unwrap() {
-                PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
-                    self.distance_fn,
-                    query.vec().to_index_slice(),
-                    node_neighbor.vector.as_slice(),
-                    &mut lsr.stats,
-                ),
+                let distance = match lsr.sdm.as_ref().unwrap() {
+                    PlainDistanceMeasure::Full(query) => PlainDistanceMeasure::calculate_distance(
+                        self.distance_fn,
+                        query.vec().to_index_slice(),
+                        node_neighbor.vector.as_slice(),
+                        &mut lsr.stats,
+                    ),
+                };
+
+                (
+                    distance,
+                    node_neighbor.heap_item_pointer.deserialize_item_pointer(),
+                    node_neighbor.get_index_pointer_to_neighbors(),
+                )
             };
             let lsn = ListSearchNeighbor::new(
                 neighbor_index_pointer,
                 lsr.create_distance_with_tie_break(distance, neighbor_index_pointer),
                 PlainStorageLsnPrivateData::new(
                     neighbor_index_pointer,
-                    node_neighbor,
+                    heap_pointer,
+                    node_neighbors,
                     gns,
                     self,
                     &mut lsr.prune_stats,
